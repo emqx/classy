@@ -91,7 +91,7 @@
          , post_vote => mfa()
          , sites := [classy:site()]
          , strategy => strategy()
-         , timeout => timeout()
+         , timeout => pos_integer()
          }.
 
 %% Persistent states:
@@ -157,32 +157,16 @@ fold_votes(TagMatch, Fun) ->
 %%
 %% Note: This function returns immediately.
 -spec create(options()) -> ok | {error, _}.
-create(UserOptions = #{tag := _, prepare := Prep, commit := Commit, sites := Sites0}) ->
-  DummyArg = [],
-  Defaults = #{ rollback  => {?MODULE, do_nothing, [DummyArg]}
-              , post_vote => {?MODULE, do_nothing, []}
-              },
-  Options = maps:merge(Defaults, UserOptions),
+create(UserOptions) ->
   maybe
-    true ?= is_mfa(Prep),
-    true ?= is_mfas(Commit),
-    true ?= is_mfa(maps:get(post_vote, Options)),
-    true ?= is_mfa(maps:get(rollback, Options)),
-    {ok, Sites} ?= verify_sites(Sites0),
+    {ok, Options} ?= with_defaults(UserOptions),
     ID = classy_uid:cluster_unique_seq_tuple(classy_vote_sequence),
     {ok, _} ?= classy_sup:ensure_vote(
                  #init_coordinator{ id = ID
-                                  , opts = Options#{sites := Sites}
+                                  , opts = Options
                                   }),
     ok
-  else
-    {error, _} = Err ->
-      Err;
-    _ ->
-      {error, badarg}
-  end;
-create(_) ->
-  {error, badarg}.
+  end.
 
 %% @doc Restore all previously scheduled actions
 -spec restore() -> ok.
@@ -272,15 +256,80 @@ do_fold_votes({Matches, Continuation}, Fun, Acc0) ->
           Matches),
   do_fold_votes(ets:select(Continuation), Fun, Acc).
 
-is_mfas(L) when is_list(L) ->
-  lists:all(fun is_mfa/1, L);
-is_mfas(_) ->
-  false.
+%%--------------------------------------------------------------------------------
+%% Input validation
+%%--------------------------------------------------------------------------------
 
-is_mfa({M, F, A}) when is_atom(M), is_atom(F), is_list(A) ->
-  true;
-is_mfa(_) ->
-  false.
+-spec with_defaults(options()) -> {ok, options()} | {error, _}.
+with_defaults(UserOpts) when is_map(UserOpts) ->
+  Defaults = #{ rollback => undefined
+              , post_vote => undefined
+              , strategy => quorum
+              , timeout => 5_000
+              },
+  Merged = maps:merge(Defaults, UserOpts),
+  case Merged of
+    #{ tag       := _
+     , prepare   := Prepare
+     , commit    := Commit
+     , rollback  := Rollback
+     , post_vote := PostVote
+     , sites     := Sites0
+     , strategy  := Strategy
+     , timeout   := Timeout
+     } ->
+      maybe
+        ok ?= verify_mfa(bad_prepare, 0, Prepare),
+        ok ?= verify_commit(Commit),
+        ok ?= verify_mfa(bad_rollback, 0, Rollback),
+        ok ?= verify_post_vote(PostVote),
+        {ok, Sites} ?= verify_sites(Sites0),
+        true ?= Strategy =:= quorum orelse
+          {error, {bad_strategy, Strategy}},
+        true ?= (is_integer(Timeout) andalso Timeout > 0) orelse
+          {error, {bad_timeout, Timeout}},
+        {ok, Merged#{sites := Sites}}
+      end;
+    _ ->
+      {error, badarg}
+  end.
+
+-spec verify_mfa(atom(), non_neg_integer(), term()) -> ok | {error, {atom(), term()}}.
+verify_mfa(Subject, ExtraArgs, {M, F, Args}) when is_atom(M), is_atom(F), is_list(Args) ->
+  NArgs = length(Args) + ExtraArgs,
+  Err = {error, {Subject, {M, F, NArgs}}},
+  try
+    Exports = M:module_info(exports),
+    case lists:member({F, NArgs}, Exports) of
+      true  -> ok;
+      false -> Err
+    end
+  catch
+    _:_ ->
+      Err
+  end;
+verify_mfa(Subject, _, Other) ->
+  {error, {Subject, Other}}.
+
+verify_post_vote(undefined) ->
+  ok;
+verify_post_vote(MFA) ->
+  verify_mfa(bad_post_vote, 1, MFA).
+
+verify_commit(Commits) when is_list(Commits) ->
+  try
+    [case verify_mfa(bad_commit, 0, I) of
+       ok ->
+         ok;
+       Err ->
+         throw(Err)
+     end || I <- Commits],
+    ok
+  catch
+    Err -> Err
+  end;
+verify_commit(Other) ->
+  {error, {bad_commit, Other}}.
 
 verify_sites(Participants0) when is_list(Participants0) ->
   Participants = lists:uniq(Participants0),
@@ -292,8 +341,8 @@ verify_sites(Participants0) when is_list(Participants0) ->
         [] ->
           {ok, Participants};
         Bad ->
-          {error, {unknown_sites, Bad}}
+          {error, {bad_sites, Bad}}
       end
   end;
-verify_sites(_) ->
-  {error, badarg}.
+verify_sites(Bad) ->
+  {error, {bad_sites, Bad}}.
