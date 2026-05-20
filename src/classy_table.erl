@@ -59,7 +59,7 @@
 %% internal exports:
 -export([start_link/2]).
 
--export_type([tab/0, rec/0, options/0, on_update_callback/0]).
+-export_type([tab/0, rec/0, options/0, on_update_op/0, on_update_callback/0]).
 
 -include("classy_internal.hrl").
 -include_lib("snabbkaffe/include/trace.hrl").
@@ -73,7 +73,12 @@
 
 -type tab() :: atom().
 
--type on_update_callback() :: fun((tab(), open | {w, _Key, _Val} | {d, _Key} | close) -> _).
+-type on_update_op() :: open
+                      | {w, _Key, _Val}
+                      | {d, _Key}
+                      | close.
+
+-type on_update_callback() :: fun((tab(), on_update_op()) -> _).
 
 -type options() ::
         #{ ets_options => list()
