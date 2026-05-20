@@ -24,9 +24,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([ hello/0
-        , cluster_info/0
-        ]).
+-export([hello/0]).
 
 -export_type([run_level_atom/0]).
 
@@ -206,7 +204,7 @@ init(_) ->
      , nodedown_reason => true
      }),
   ok = classy_table:open(?ptab, #{}),
-  ok = classy_table:open(?site_info, #{}),
+  ok = classy_table:open(?site_info, #{ets_options => [{read_concurrency, true}]}),
   classy:on_membership_change(fun on_membership_change/4, -100),
   increase_n_restarts(),
   classy_hook:foreach(?on_node_init, []),
@@ -296,7 +294,7 @@ terminate(Reason, S) ->
 %% Internal exports
 %%================================================================================
 
-%% @doc Called by remote node during `join'.
+%% @private RPC target, called by remote node during `join'.
 %% Returns information about the local site, used for bootstrapping the remote.
 hello() ->
   maybe
@@ -313,20 +311,6 @@ hello() ->
       {error, not_in_cluster};
     Err ->
       Err
-  end.
-
-%% @doc RPC target
--spec cluster_info() -> {ok, classy:cluster_id(), [{classy:site(), node()}]} | error.
-cluster_info() ->
-  maybe
-    {ok, Cluster} ?= the_cluster(),
-    {ok, Site} ?= the_site(),
-    Peers = classy_membership:members(Cluster, Site),
-    Nodes = classy_membership:node_of_site(Cluster, Site),
-    {ok, Cluster, [{I, maps:get(I, Nodes, undefined)} || I <- Peers]}
-  else
-    _ ->
-      error
   end.
 
 %%================================================================================

@@ -3,6 +3,9 @@
 %%--------------------------------------------------------------------
 
 %% @doc A gen_server that implements automatic peer discovery.
+%%
+%% Autocluster logic is active only on singleton sites.
+%% Sites that have peers (up or down) don't run it.
 -module(classy_autocluster).
 
 -behavior(gen_server).
@@ -11,7 +14,6 @@
 -export([ start_link/0
         , enable/0
         , disable/0
-        , decide_cluster/1
         , app_name/0
         ]).
 
@@ -39,6 +41,7 @@
 
 -define(SERVER, ?MODULE).
 
+%% @private
 -spec start_link() -> {ok, pid()}.
 start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
@@ -50,43 +53,6 @@ enable() ->
 -spec disable() -> ok.
 disable() ->
   gen_server:cast(?SERVER, #cast_enable{enable = false}).
-
-%% @doc Helper function that selects a cluster from `classy:cluster_info()' according to the following rules:
-%%
-%% <ol>
-%% <li>If there are partitioned clusters, do not join.</li>
-%% <li>Try to find a cluster with the largest number of peers</li>
-%% <li>If the number of peers is equal in all clusters, join the cluster with the smallest ID</li>
-%% </ol>
--spec decide_cluster(classy:cluster_info()) ->
-        {ok, classy:cluster_id(), [{classy:site(), node()}]} |
-        undefined.
-decide_cluster(#{clusters := Clusters}) ->
-  try
-    Ret = maps:fold(
-            fun(Cluster, [Sites], undefined) ->
-                {Cluster, length(Sites), Sites};
-               (Cluster, [Sites], {OldCluster, NOldSites, OldSites}) ->
-                NSites = length(Sites),
-                if NSites > NOldSites; (NSites =:= NOldSites andalso Cluster < OldCluster) ->
-                    {Cluster, NSites, Sites};
-                   true ->
-                    {OldCluster, NOldSites, OldSites}
-                end;
-               (_Cluster, _, _Acc) ->
-                throw(partition)
-            end,
-            undefined,
-            Clusters),
-    case Ret of
-      {Cluster, _, Sites} ->
-        {ok, Cluster, Sites};
-      undefined ->
-        undefined
-    end
-  catch
-    partition -> undefined
-  end.
 
 %% @doc Helper function that returns prefix of the local node name.
 -spec app_name() -> string().
@@ -102,11 +68,13 @@ app_name() ->
         { t :: classy_lib:wakeup_timer()
         }).
 
+%% @private
 init(_) ->
   process_flag(trap_exit, true),
   S = #s{},
   {ok, wakeup_if_single(0, S)}.
 
+%% @private
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => call
@@ -116,6 +84,7 @@ handle_call(Call, From, S) ->
        }),
   {reply, {error, unknown_call}, S}.
 
+%% @private
 handle_cast(#cast_enable{enable = Enable}, S0 = #s{t = T}) ->
   S = case Enable of
         true  -> wakeup(0, S0);
@@ -130,6 +99,7 @@ handle_cast(Cast, S) ->
        }),
   {noreply, S}.
 
+%% @private
 handle_info(#to_discover{}, S) ->
   {noreply, handle_discover(S)};
 handle_info({'EXIT', _, shutdown}, S) ->
@@ -142,6 +112,7 @@ handle_info(Info, S) ->
        }),
   {noreply, S}.
 
+%% @private
 terminate(Reason, _S) ->
   classy_lib:is_normal_exit(Reason) orelse
     ?tp(warning, ?classy_abnormal_exit,
@@ -171,8 +142,8 @@ discover_and_join() ->
           Mod, Options,
           fun() ->
               maybe
-                {ok, Cluster, Nodes} ?= discover(Mod, Options),
-                try_join(Cluster, Nodes)
+                {ok, Candidates} ?= discover(Mod, Options),
+                try_join(Candidates)
               else
                 ignore ->
                   ignore;
@@ -196,7 +167,7 @@ with_lock(Mod, Options, Fun) ->
       Other
   end.
 
--spec discover(module(), list()) -> {ok, classy:cluster_id(), [node()]} | undefined.
+-spec discover(module(), list()) -> {ok, [{classy:cluster_id(), node()}]} | ignore.
 discover(Mod, Options) ->
   Res = ?tp_span(debug, classy_autocluster_discover,
                  #{ mod => Mod
@@ -204,55 +175,53 @@ discover(Mod, Options) ->
                   },
                  classy_discovery_strategy:discover(Mod, Options)),
   case Res of
-    {ok, Candidates} ->
-      Clusters = #{bad_nodes := BadNodes} = classy:clusters(Candidates),
-      ?tp(warning, partitions_clusters, #{cl => Clusters}),
+    {ok, Candidates} when is_list(Candidates) ->
+      ClusterInfo = #{bad_nodes := BadNodesWithReason} = classy:info(Candidates),
+      BadNodes = maps:keys(BadNodesWithReason),
       BadNodes =/= [] andalso
-        logger:info("discovered nodes are not responding: ~p", [BadNodes]),
-      case classy_hook:first_match(?on_pre_autocluster, [Candidates, Clusters]) of
-        {ok, {Cluster, Nodes}} ->
-          {ok, Cluster, filter_discovered_nodes(Candidates, BadNodes, Nodes)};
-        _ ->
-          ignore
+        logger:info("classy_autocluster: discovered nodes are not responding: ~p", [BadNodes]),
+      case rank_nodes(Candidates, ClusterInfo) of
+        [] ->
+          ignore;
+        Ranked ->
+          {ok, Ranked}
       end;
     Other ->
       log_error("Discover", Other),
       ignore
   end.
 
-filter_discovered_nodes(Candidates, BadNodes, Nodes) ->
-  [Node || Node <- (Nodes -- BadNodes)
-         , lists:member(Node, Candidates)
-         ].
+-spec rank_nodes([node()], classy:cluster_info()) -> [{classy:cluster_id(), node()}].
+rank_nodes(Candidates, ClusterInfo = #{infos := SiteInfos}) ->
+  L0 = lists:foldl(
+         fun(Node, Acc) ->
+             case SiteInfos of
+               #{Node := #{site := S, cluster := C, peers := Peers}} when is_binary(S),
+                                                                          is_binary(C),
+                                                                          Node =/= node() ->
+                 [{-classy_lib:count_up_peers(Peers), S, C, Node} | Acc];
+               _ ->
+                 Acc
+             end
+         end,
+         [],
+         Candidates),
+  L1 = lists:sort(L0),
+  InitialRanking = [{Cluster, Node} || {_NPeers, _Site, Cluster, Node} <- L1],
+  classy_hook:fold(
+    ?on_pre_autocluster,
+    [ClusterInfo],
+    InitialRanking).
 
-try_join(_Cluster, []) ->
+try_join([]) ->
   ignore;
-try_join(Cluster, [Node | Rest]) ->
+try_join([{Cluster, Node} | Rest]) ->
   case classy_node:join_node(Node, autocluster, Cluster) of
     ok ->
       ok;
     _ ->
-      try_join(Cluster, Rest)
+      try_join(Rest)
   end.
-
-%% find_oldest_mria_node([Node]) ->
-%%   Node;
-%% find_oldest_mria_node(Nodes) ->
-%%   case rpc:multicall(Nodes, mria_membership, local_member, [], 30000) of
-%%     {ResL, []} ->
-%%       case [M || M <- ResL, is_record(M, member)] of
-%%         [] ->
-%%           logger:error("bad_members_found, all_nodes: ~p~n"
-%%                        "normal_rpc_results:~p", [Nodes, ResL]),
-%%           false;
-%%         Members ->
-%%           (mria_membership:oldest(Members))#member.node
-%%       end;
-%%     {ResL, BadNodes} ->
-%%       logger:error("bad_nodes_found, failed_nodes: ~p~n"
-%%                    "normal_rpc_results: ~p", [BadNodes, ResL]),
-%%       false
-%%   end.
 
 -spec wakeup_if_single(#s{}) -> #s{}.
 wakeup_if_single(S) ->
@@ -260,10 +229,10 @@ wakeup_if_single(S) ->
 
 -spec wakeup_if_single(non_neg_integer(), #s{}) -> #s{}.
 wakeup_if_single(Interval, S) ->
-  case classy:sites() of
-    [_, _ | _] ->
+  case is_singleton() of
+    false ->
       S#s{t = undefined};
-    _ ->
+    true ->
       wakeup(Interval, S)
   end.
 
@@ -296,3 +265,11 @@ log_error(Format, {error, Reason}) ->
   logger:error(Format ++ " error: ~p", [Reason]);
 log_error(_Format, _Ok) ->
   ok.
+
+is_singleton() ->
+  case classy:sites() of
+    [_, _ | _] ->
+      false;
+    _ ->
+      true
+  end.

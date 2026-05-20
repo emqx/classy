@@ -6,7 +6,9 @@
 -module(classy_lib).
 
 %% API:
--export([]).
+-export([ fold_per_cluster/3
+        , count_up_peers/1
+        ]).
 
 %% internal exports:
 -export([ rpc_timeout/0
@@ -38,6 +40,41 @@
 %%================================================================================
 %% API functions
 %%================================================================================
+
+-spec count_up_peers(#{classy:site() => classy:peer_info()}) -> non_neg_integer().
+count_up_peers(Peers) ->
+  maps:fold(
+    fun(_, #{up := Up}, Acc) ->
+        case Up of
+          true  -> Acc + 1;
+          false -> Acc
+        end
+    end,
+    0,
+    Peers).
+
+%% @doc Perform a fold over `classy:cluster_info()' result
+%% with accumulators are separated per cluster.
+%%
+%% `InitialAcc' parameter is used as the initial value of the accumulator for each cluster.
+%%
+%% Sites that are not part of any cluster or don't have a site ID are ignored.
+-spec fold_per_cluster(Fun, Acc, classy:cluster_info()) -> #{classy:cluster_id() => Acc}
+          when Fun :: fun((node(), classy:info(), Acc) -> Acc).
+fold_per_cluster(Fun, InitialAcc, #{infos := Infos}) ->
+  maps:fold(
+    fun(Node, Info, Acc) ->
+        case Info of
+          #{cluster := Cluster, site := Site} when is_binary(Cluster), is_binary(Site) ->
+            ClusterAcc0 = maps:get(Cluster, Acc, InitialAcc),
+            ClusterAcc = Fun(Node, Info, ClusterAcc0),
+            Acc#{Cluster => ClusterAcc};
+          _ ->
+            Acc
+        end
+    end,
+    #{},
+    Infos).
 
 %% @doc Read `rpc_timeout' environment variable (with default)
 rpc_timeout() ->

@@ -6,7 +6,6 @@
 %% API:
 -export([ gen_random_site_id/0
         , maybe_reinitialize_after_kick/3
-        , autocluster_select_site/2
         , log_create_site/1
         , log_create_cluster/2
         , log_pre_join/4
@@ -40,19 +39,6 @@ maybe_reinitialize_after_kick(OldCluster, Local, Intent) ->
   %% Re-initialize the local cluster upon getting kicked:
   Intent =/= join andalso
     classy_node:maybe_init_the_site(Local).
-
-%% @doc Default auto-cluster selection method.
--spec autocluster_select_site([node()], classy:cluster_info()) ->
-        {ok, {classy:cluster_id(), [node()]}} |
-        undefined.
-autocluster_select_site(_Candidates, Clusters) ->
-  case classy_autocluster:decide_cluster(Clusters) of
-    {ok, Cluster, Sites} ->
-      Nodes = [I || {_Site, I} <- lists:sort(Sites)],
-      {ok, {Cluster, Nodes}};
-    undefined ->
-      undefined
-  end.
 
 log_create_site(Site) ->
   ?tp(info, classy_create_new_site,

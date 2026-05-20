@@ -481,36 +481,51 @@ t_090_info(_Config) ->
        [?ON(I, classy:enrich_site_info(EnrichInfo, 0))
         || I <- Sites],
        %% Verify functions in singleton clusters:
-       {ok, Cluster1, [{S1, N1}]} = ?ON(S1, classy_node:cluster_info()),
-       {ok, Cluster2, [{S2, N2}]} = ?ON(S2, classy_node:cluster_info()),
+       #{ cluster     := Cluster1
+        , site        := S1
+        , peers       := Peers1_0
+        , last_update := _
+        , hello       := world
+        } = I1_0 = ?ON(S1, classy:info()),
+       #{ cluster     := Cluster2_0
+        , site        := S2
+        , peers       := Peers2_0
+        , last_update := _
+        , hello       := world
+        } = I2_0 = ?ON(S2, classy:info()),
+       ?assert(is_binary(Cluster1)),
+       ?assertNotEqual(Cluster1, Cluster2_0),
+       ?assertEqual(0, maps:size(Peers1_0)),
+       ?assertEqual(0, maps:size(Peers2_0)),
+       %%
        ?assertMatch(
-          #{ clusters  := #{ Cluster1 := [[{S1, N1}]]
-                           , Cluster2 := [[{S2, N2}]]
-                           }
-           , bad_nodes := ['fake@node.local']
+          #{ infos  :=
+               #{ N1 := I1_0
+                , N2 := I2_0
+                }
+           , bad_nodes :=
+               #{'fake@node.local' := {error, {erpc, noconnection}}}
            },
-          ?ON(S1, classy:clusters([N1, N2, 'fake@node.local']))),
+          ?ON(S1, classy:info([N1, N2, 'fake@node.local']))),
        %% Form cluster:
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
        wait_site_joined(Sites, Cluster1, S2),
-       %% Verify `classy:info':
+       %% Verify `classy:info/1':
        [?assertMatch(
-           #{ hello   := world
-            , site    := I
-            , cluster := Cluster1
-            , peers   := #{ S1 := #{node := _, up := true, last_update := _}
-                          , S2 := #{node := _, up := true, last_update := _}
+           #{ infos :=
+                #{ N1 := #{ cluster := Cluster1
+                          , site := S1
+                          , peers := #{S2 := #{node := N2, up := true, last_update := _}}
                           }
+                 , N2 := #{ cluster := Cluster1
+                          , site := S2
+                          , peers := #{S1 := #{node := N1, up := true, last_update := _}}
+                          }
+                 }
             },
-           ?ON(I, classy:info()))
-        || I <- Sites],
-       %% Verify cluster info:
-       #{ clusters  := #{Cluster1 := [Cluster1Peers]}
-        , bad_nodes := ['fake@node.local']
-        } = ?ON(S1, classy:clusters([N1, N2, 'fake@node.local'])),
-       ?assertSameSet(
-          [{S1, N1}, {S2, N2}],
-          Cluster1Peers)
+           ?ON(I, classy:info([N1, N2])))
+        || I <- [S1, S2]],
+       ok
      end,
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1
