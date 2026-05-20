@@ -8,6 +8,7 @@
 %% API:
 -export([ fold_per_cluster/3
         , count_up_peers/1
+        , sites_to_nodes/1
         ]).
 
 %% internal exports:
@@ -52,6 +53,23 @@ count_up_peers(Peers) ->
     end,
     0,
     Peers).
+
+%% @doc Translates site IDs to node names of running nodes.
+%%
+%% Return stopped nodes in the second element of the tuple.
+-spec sites_to_nodes([classy:site()]) -> {[node()], _BadSites :: [classy:site()]}.
+sites_to_nodes(Sites) ->
+  lists:foldl(
+    fun(Site, {AccNodes, AccBad}) ->
+        case classy_node:node_of_site(Site, true) of
+          {ok, Node} ->
+            {[Node | AccNodes], AccBad};
+          undefined ->
+            {AccNodes, [Site | AccBad]}
+        end
+    end,
+    {[], []},
+    Sites).
 
 %% @doc Perform a fold over `classy:cluster_info()' result
 %% with accumulators are separated per cluster.
