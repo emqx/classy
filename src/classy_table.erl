@@ -73,9 +73,14 @@
 
 -type tab() :: atom().
 
+%% WAL data:
+-define(w(K, V), {w, K, V}).
+-define(d(K), {d, K}).
+-define(clear, clear).
+
 -type on_update_op() :: open
-                      | {w, _Key, _Val}
-                      | {d, _Key}
+                      | ?w(_Key, _Val)
+                      | ?d(_Key)
                       | close.
 
 -type on_update_callback() :: fun((tab(), on_update_op()) -> _).
@@ -98,10 +103,6 @@
 -record(call_drop, {}).
 -record(call_clear, {}).
 
-%% WAL data:
--define(w(K, V), {w, K, V}).
--define(d(K), {d, K}).
--define(clear, clear).
 %%   Markers inserted at beginning and end of flush, meant to prevent restoration of aborted flush:
 -define(flush_begin(I), {f, 0, I}).
 -define(flush_end(I), {f, 1, I}).
@@ -476,36 +477,38 @@ log_name(#s{name = Name, dir = Dir}, Suffix) ->
   FN = atom_to_list(Name) ++ Suffix,
   filename:join(Dir, FN).
 
-handle_write(
-  #call_write{k = K, v = V, wal = true},
-  #s{ets = ETS, log = Log, dirty = D, log_size = LogSize} = S
- ) ->
-  ok = write_log(Log, [?w(K, V)]),
-  ets:insert(ETS, #classy_kv{k = K, v = V}),
-  exec_on_update({w, K, V}, S),
-  S#s{ dirty = maps:remove(K, D)
-     , log_size = LogSize + 1
-     };
+handle_write(#call_write{k = K, v = V, wal = true}, S) ->
+  commit([?w(K, V)], S);
 handle_write(#call_write{k = K, v = V, wal = false}, S = #s{ets = ETS, dirty = D}) ->
   ets:insert(ETS, #classy_kv{k = K, v = V}),
-  exec_on_update({w, K, V}, S),
+  exec_on_update(?w(K, V), S),
   S#s{ dirty = D#{K => true}
      }.
 
-handle_delete(
-  #call_delete{k = K, wal = true},
-  #s{ets = ETS, log = Log, dirty = D, log_size = LogSize} = S
- ) ->
-  ok = write_log(Log, [?d(K)]),
-  ets:delete(ETS, K),
-  exec_on_update({d, K}, S),
-  S#s{ dirty = maps:remove(K, D)
-     , log_size = LogSize + 1
-     };
+handle_delete(#call_delete{k = K, wal = true}, S) ->
+  commit([?d(K)], S);
 handle_delete(#call_delete{k = K, wal = false}, S = #s{ets = ETS, dirty = D}) ->
   ets:delete(ETS, K),
-  exec_on_update({d, K}, S),
+  exec_on_update(?d(K), S),
   S#s{dirty = D#{K => true}}.
+
+commit(Ops, S = #s{log = Log, log_size = LS}) ->
+  ok = do_write_log(Log, Ops),
+  lists:foldl(
+    fun log_effects/2,
+    S#s{log_size = LS + length(Ops)},
+    Ops).
+
+log_effects(Op = ?w(K, V), S = #s{ets = ETS, dirty = Dirty}) ->
+  ets:insert(ETS, #classy_kv{k = K, v = V}),
+  exec_on_update(Op, S),
+  S#s{ dirty = maps:remove(K, Dirty)
+     };
+log_effects(?d(K), S = #s{ets = ETS, dirty = Dirty}) ->
+  ets:delete(ETS, K),
+  exec_on_update(?d(K), S),
+  S#s{ dirty = maps:remove(K, Dirty)
+     }.
 
 handle_flush(S = #s{log = Log, dirty = Dirty}) when Log =:= undefined;
                                                     map_size(Dirty) =:= 0 ->
@@ -527,7 +530,7 @@ handle_flush(S = #s{ets = ETS, log = Log, dirty = Dirty, log_size = LogSize0}) -
       end,
       {LogSize0, [EndMarker]},
       Dirty),
-  ok = write_log(Log, [BeginMarker|Ops]),
+  ok = do_write_log(Log, [BeginMarker|Ops]),
   S#s{ dirty = #{}
      , log_size = LogSize + 2 %% account for the markers
      }.
@@ -538,7 +541,7 @@ exec_on_update_open(#s{on_update = undefined}) ->
 exec_on_update_open(S = #s{ets = ETS}) ->
   ets:foldl(
     fun(#classy_kv{k = K, v = V}, Acc) ->
-        exec_on_update({w, K, V}, S),
+        exec_on_update(?w(K, V), S),
         Acc
     end,
     undefined,
@@ -551,7 +554,7 @@ exec_on_update_clear(#s{on_update = undefined}) ->
 exec_on_update_clear(S = #s{ets = ETS}) ->
   ets:foldl(
     fun(#classy_kv{k = K}, Acc) ->
-        exec_on_update({d, K}, S),
+        exec_on_update(?d(K), S),
         Acc
     end,
     undefined,
@@ -607,14 +610,14 @@ dump_ets(Log, N, {Batch, Cont}) ->
                ?w(K, V)
            end,
            Batch),
-  ok = write_log(Log, Recs),
+  ok = do_write_log(Log, Recs),
   dump_ets(
     Log,
     N + length(Recs),
     ets:match(Cont)).
 
 handle_clear(S = #s{ets = Ets, log = Log, log_size = LogSize}) ->
-  ok = write_log(Log, [?clear]),
+  ok = do_write_log(Log, [?clear]),
   exec_on_update_clear(S),
   ets:match_delete(Ets, '_'),
   S#s{dirty = #{}, log_size = LogSize + 1}.
@@ -689,7 +692,7 @@ close_log(undefined) ->
 close_log(Log) ->
   disk_log:close(Log).
 
-write_log(Log, Terms) ->
+do_write_log(Log, Terms) ->
   maybe
     ok ?= disk_log:log_terms(Log, Terms),
     disk_log:sync(Log)
