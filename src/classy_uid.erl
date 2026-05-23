@@ -62,17 +62,22 @@ start_link() ->
 %%
 %% SeqTuple returned by this function consists of a number of node
 %% restarts followed by a `erlang:unique_integer'.
+%%
+%% Site-unique tuples can be used to order events within the site.
 -spec site_unique_tuple() -> su_tuple().
 site_unique_tuple() ->
   #{n_restarts := NRestarts} = get_pterm(),
-  {NRestarts, erlang:unique_integer([positive])}.
+  {NRestarts, erlang:unique_integer([positive, monotonic])}.
 
 %% @doc Return a tuple similar to `new_seq_tuple/0', but also
 %% including site id, which makes it unique within the cluster.
+%%
+%% Cluster-unique tuples can be used to order events on the originator site,
+%% but not globally.
 -spec cluster_unique_tuple() -> cu_tuple().
 cluster_unique_tuple() ->
   #{n_restarts := NRestarts, site := Site} = get_pterm(),
-  {Site, NRestarts, erlang:unique_integer([positive])}.
+  {Site, NRestarts, erlang:unique_integer([positive, monotonic])}.
 
 %% @doc Return a tuple that is guaranteed to be unique within
 %% sequence ID and site.

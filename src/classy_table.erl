@@ -39,6 +39,7 @@
         , clear/1
         , drop/1
         , write/3
+        , atomically/2
         , dirty_write/3
         , delete/2
         , dirty_delete/2
@@ -59,7 +60,7 @@
 %% internal exports:
 -export([start_link/2]).
 
--export_type([tab/0, rec/0, options/0, on_update_op/0, on_update_callback/0]).
+-export_type([tab/0, rec/0, options/0, on_update_op/0, on_update_callback/0, atomic_op/1]).
 
 -include("classy_internal.hrl").
 -include_lib("snabbkaffe/include/trace.hrl").
@@ -77,6 +78,8 @@
 -define(w(K, V), {w, K, V}).
 -define(d(K), {d, K}).
 -define(clear, clear).
+
+-type atomic_op(Effect) :: ?w(_, _) | ?d(_) | {then, Effect}.
 
 -type on_update_op() :: open
                       | ?w(_Key, _Val)
@@ -96,6 +99,7 @@
                          }.
 
 -record(call_ensure_open, {tab :: tab()}).
+-record(call_atomically, {ops :: [?w(_, _) | ?d(_)]}).
 -record(call_write, {k, v, wal = true :: boolean()}).
 -record(call_delete, {k, wal = true :: boolean()}).
 -record(call_flush, {}).
@@ -193,6 +197,33 @@ delete(Tab, Key) ->
     ?via(Tab),
     #call_delete{k = Key, wal = true},
     ?call_timeout).
+
+%% @doc Write a number of operations atomically
+-spec atomically(tab(), [atomic_op(Effect)]) -> {ok, [Effect]} | {error, _}.
+atomically(_Tab, []) ->
+  {ok, []};
+atomically(Tab, Ops) ->
+  try
+    {Writes, Effects} =
+      lists:foldl(
+        fun(?w(_, _) = W, {AccW, AccE}) -> {[W | AccW], AccE};
+           (?d(_) = W,    {AccW, AccE}) -> {[W | AccW], AccE};
+           ({then, E},    {AccW, AccE}) -> {AccW, [E | AccE]};
+           (_, _)                       -> throw(badarg)
+        end,
+        {[], []},
+        Ops),
+      maybe
+        ok ?= gen_server:call(
+                ?via(Tab),
+                #call_atomically{ops = Writes},
+                ?call_timeout),
+        {ok, lists:reverse(Effects)}
+      end
+  catch
+    badarg ->
+      {error, {badarg, Tab, Ops}}
+  end.
 
 %% @doc Persist all records that got dirtied prior to this call to WAL.
 %%
@@ -293,6 +324,8 @@ handle_continue(restore, S0 = #s{name = Name}) ->
 %% @private
 handle_call(#call_ensure_open{}, _From, S) ->
   {reply, ok, S};
+handle_call(#call_atomically{ops = Ops}, From, S) ->
+  maybe_compact(From, ok, handle_atomic(Ops, S));
 handle_call(#call_write{} = C, _From, S) ->
   {reply, ok, handle_write(C, S)};
 handle_call(#call_delete{} = C, _From, S) ->
@@ -477,6 +510,11 @@ log_name(#s{name = Name, dir = Dir}, Suffix) ->
   FN = atom_to_list(Name) ++ Suffix,
   filename:join(Dir, FN).
 
+handle_atomic(Ops, S = #s{log_size = LogSize}) ->
+  Marker = LogSize,
+  Log = [?flush_begin(Marker) | Ops] ++ [?flush_end(Marker)],
+  commit(Log, S).
+
 handle_write(#call_write{k = K, v = V, wal = true}, S) ->
   commit([?w(K, V)], S);
 handle_write(#call_write{k = K, v = V, wal = false}, S = #s{ets = ETS, dirty = D}) ->
@@ -499,6 +537,10 @@ commit(Ops, S = #s{log = Log, log_size = LS}) ->
     S#s{log_size = LS + length(Ops)},
     Ops).
 
+log_effects(?flush_begin(_), S) ->
+  S;
+log_effects(?flush_end(_), S) ->
+  S;
 log_effects(Op = ?w(K, V), S = #s{ets = ETS, dirty = Dirty}) ->
   ets:insert(ETS, #classy_kv{k = K, v = V}),
   exec_on_update(Op, S),

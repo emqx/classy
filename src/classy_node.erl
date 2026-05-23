@@ -12,6 +12,7 @@
         , kick_site/2
         , the_site/0
         , the_cluster/0
+        , parent_site/0
         , nodes/1
         , peer_info/0
         , node_of_site/2
@@ -42,6 +43,7 @@
 -define(ptab, classy_node).
 -define(the_site, the_site).
 -define(the_cluster, the_cluster).
+-define(parent_site, parent_site).
 
 -record(call_join,
         { node :: node()
@@ -73,8 +75,14 @@
 %% Any `undefined' argument is replaced with a sufficiently unique random string.
 -spec maybe_init_the_site(classy:site() | undefined) -> ok.
 maybe_init_the_site(MaybeSite) ->
-  {_, Site} = ensure_the_id(?the_site, ?on_create_site, [], MaybeSite),
-  _ = ensure_the_id(?the_cluster, ?on_create_cluster, [Site], undefined),
+  {_IsNewSite, Site, Ops1} = ensure_the_id(?the_site, ?on_create_site, [], MaybeSite),
+  {IsNewCluster, _Cluster, Ops2} = ensure_the_id(?the_cluster, ?on_create_cluster, [Site], undefined),
+  Ops3 = case IsNewCluster of
+           true  -> [{w, ?parent_site, Site}];
+           false -> []
+         end,
+  {ok, Effects} = classy_table:atomically(?ptab, Ops1 ++ Ops2 ++ Ops3),
+  [Fun() || Fun <- Effects],
   ok.
 
 %% @private
@@ -94,6 +102,17 @@ the_cluster() ->
 -spec the_site() -> {ok, classy:site()} | undefined.
 the_site() ->
   case classy_table:lookup(?ptab, ?the_site) of
+    [V] -> {ok, V};
+    []  -> undefined
+  end.
+
+%% @doc Return ID of the site that invited us to `the_cluster'.
+%%
+%% The return value could be equal to `{ok, the_site()}' for the site that originally created the cluster.
+%% `undefined' return value means the local site is not initialized.
+-spec parent_site() -> {ok, classy:site()} | undefined.
+parent_site() ->
+  case classy_table:lookup(?ptab, ?parent_site) of
     [V] -> {ok, V};
     []  -> undefined
   end.
@@ -429,7 +448,7 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
       end;
     undefined ->
       %% Site is not in any cluster:
-      {ok, S} = join_cluster(Cluster, Node, Local, S0),
+      {ok, S} = join_cluster(Cluster, Node, Local, Remote, S0),
       do_join_node(Node, Cluster, Remote, MemData, S)
   end.
 
@@ -445,10 +464,13 @@ on_leave(S0 = #s{cluster = Cluster, site = Local}, Intent) ->
       init_cluster()
   end.
 
-join_cluster(Cluster, JoinToNode, Local, S = #s{run_level = 0}) ->
+-spec join_cluster(classy:cluster_id(), node(), classy:site(), classy:site(), #s{}) -> {ok, #s{}}.
+join_cluster(Cluster, JoinToNode, Local, Remote, S = #s{run_level = 0}) ->
   {ok, _} = classy_sup:ensure_membership(Cluster, Local),
   classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode]),
-  classy_table:write(?ptab, ?the_cluster, Cluster),
+  classy_table:dirty_write(?ptab, ?the_cluster, Cluster),
+  classy_table:dirty_write(?ptab, ?parent_site, Remote),
+  classy_table:flush(?ptab),
   {ok, S#s{cluster = Cluster, peer_state = #{}}}.
 
 %% Update node tracking information
@@ -538,11 +560,14 @@ init_cluster() ->
   end.
 
 -spec ensure_the_id(?the_cluster | ?the_site, ?on_create_cluster | ?on_create_site, list(), binary() | undefined) ->
-        {boolean(), binary()}.
+        { boolean()
+        , binary()
+        , [classy_table:atomic_op(fun(() -> _))]
+        }.
 ensure_the_id(Key, OnCreateHook, HookArgs, Default) ->
   case classy_table:lookup(?ptab, Key) of
     [Bin] when is_binary(Bin) ->
-      {false, Bin};
+      {false, Bin, []};
     [] ->
       case Default of
         undefined ->
@@ -550,9 +575,14 @@ ensure_the_id(Key, OnCreateHook, HookArgs, Default) ->
         Val when is_binary(Val) ->
           ok
       end,
-      classy_hook:foreach(OnCreateHook, [Val | HookArgs]),
-      classy_table:write(?ptab, Key, Val),
-      {true, Val}
+      { true
+      , Val
+      , [ {w, Key, Val}
+        , {then, fun() ->
+                     classy_hook:foreach(OnCreateHook, [Val | HookArgs])
+                 end}
+        ]
+      }
   end.
 
 -spec adjust_run_level(#s{}) -> #s{}.
