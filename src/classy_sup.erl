@@ -95,7 +95,7 @@ start_link_vote_sup() ->
   case supervisor:start_link({local, ?VOTE_SUP}, ?MODULE, #vote_sup{}) of
     {ok, _} = Ok ->
       ok = classy_vote:create_table(),
-      classy_vote:restore(),
+      %% classy_vote:restore(),
       Ok;
     Other ->
       Other
