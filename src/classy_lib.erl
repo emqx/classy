@@ -9,6 +9,7 @@
 -export([ fold_per_cluster/3
         , count_up_peers/1
         , sites_to_nodes/1
+        , multicall/4
         ]).
 
 %% internal exports:
@@ -28,11 +29,23 @@
         , map_deep_insert/3
         ]).
 
--export_type([unix_time_s/0, wakeup_timer/0]).
+-export_type([ unix_time_s/0
+             , wakeup_timer/0
+             , multicall_target/0
+             , multicall_args/0
+             , multicall_result/1
+             ]).
 
 %%================================================================================
 %% Type declarations
 %%================================================================================
+
+-type multicall_target() :: classy:site() |
+                            {classy:site(), _Token}.
+
+-type multicall_args() :: #{multicall_target() => list()}.
+
+-type multicall_result(Result) :: #{multicall_target() => {ok, Result} | {error, _}}.
 
 -type unix_time_s() :: integer().
 
@@ -41,6 +54,50 @@
 %%================================================================================
 %% API functions
 %%================================================================================
+
+%% @doc Call a function on multiple sites in parallel.
+%%
+%% @param Function
+%% Function name
+%%
+%% @param Args
+%% Map of multicall targets and their function arguments.
+%% Multicall target could be a site ID that is automatically translated to node name by `multicall',
+%% or a tuple containing site ID and an arbitrary term.
+%% The latter form allows to make multiple requests towards the same site.
+%% Each multicall target can have a distinct set of function argements.
+-spec multicall(module(), atom(), multicall_args(), timeout()) -> multicall_result(term()).
+multicall(Module, Function, SitesWithArgs, Timeout) ->
+  {ReqIdCollection, Sent, NotSent} =
+    maps:fold(
+      fun(SiteOrTuple, Args, {AccWait, AccSent, AccNotSent}) ->
+          case SiteOrTuple of
+            Site when is_binary(Site) -> ok;
+            {Site, _}                 -> ok
+          end,
+          case classy_node:node_of_site(Site, true) of
+            {ok, Node} ->
+              ReqId = erpc:send_request(Node, Module, Function, Args),
+              { erpc:reqids_add(ReqId, SiteOrTuple, AccWait)
+              , [SiteOrTuple | AccSent]
+              , AccNotSent
+              };
+            undefined ->
+              { AccWait
+              , AccSent
+              , AccNotSent#{SiteOrTuple => {error, site_is_down}}
+              }
+          end
+      end,
+      {erpc:reqids_new(), [], #{}},
+      SitesWithArgs),
+  WaitTime = case Timeout of
+               infinity ->
+                 infinity;
+               T when is_integer(T) ->
+                 {abs, erlang:monotonic_time(millisecond) + Timeout}
+             end,
+  multicall_receive_replies(ReqIdCollection, WaitTime, NotSent, Sent).
 
 -spec count_up_peers(#{classy:site() => classy:peer_info()}) -> non_neg_integer().
 count_up_peers(Peers) ->
@@ -196,3 +253,28 @@ map_deep_insert([K | Rest], Val, Outer) ->
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+-spec multicall_receive_replies(
+        erpc:request_id_collection(),
+        erpc:timeout_time(),
+        multicall_result(A),
+        [multicall_target()]
+       ) -> multicall_result(A).
+multicall_receive_replies(Collection0, WaitTime, Acc, RemainingSites) ->
+  case erpc:wait_response(Collection0, WaitTime, true) of
+    {{response, Resp}, Site, Collection} ->
+      multicall_receive_replies(
+        Collection,
+        WaitTime,
+        Acc#{Site => Resp},
+        RemainingSites -- [Site]);
+    no_response ->
+      lists:foldl(
+        fun(Site, Acc1) ->
+            Acc1#{Site => {error, timeout}}
+        end,
+        Acc,
+        RemainingSites);
+    no_request ->
+      Acc
+  end.
