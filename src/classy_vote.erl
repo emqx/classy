@@ -60,6 +60,9 @@
         , start_participant/1
         , receive_vote/1
         , receive_outcome/1
+
+        , do_nothing/1
+        , do_nothing/0
         ]).
 
 -export_type([id/0]).
@@ -102,10 +105,7 @@
 %% Warning: MFA's are persistently stored!
 -type options() ::
         #{ tag       := tag()
-         , prepare   := mfa()
-         , commit    := [mfa()]
-         , sites     := [classy:site()]
-         , rollback  => mfa()
+         , actions   := #{classy:site() => actions()}
          , post_vote => mfa()
          , strategy  => strategy()
          , lock      => lock()
@@ -113,15 +113,16 @@
 
 %% Protocol:
 %%   Coordinator -> Participant
--type prepare() ::
-        #{ id          := id()
-         , tag         := tag()
-         , lock        := lock()
-         , prepare     := mfa()
-         , commit      := [mfa()]
-         , rollback    := mfa()
-         , coordinator := classy:site()
-         }.
+-record(prepare,
+        { id            :: id()
+        , tag           :: tag()
+        , lock          :: lock()
+        , prepare       :: mfa()
+        , commit        :: [mfa()]
+        , rollback      :: mfa()
+        , coordinator   :: classy:site()
+        , reserved = [] :: term()
+        }).
 %%   Coordinator <- Participant
 -record(c_vote,
         { id            :: id()
@@ -259,6 +260,13 @@ create(UserOptions) ->
 %%================================================================================
 %% Internal exports
 %%================================================================================
+
+%% @private
+do_nothing() ->
+  ok.
+
+do_nothing(_) ->
+  ok.
 
 %% @private
 -spec create_table() -> ok.
@@ -412,18 +420,13 @@ init_coordinator(#init_coordinator{tag = Tag, id = Id, opts = Opts}) ->
 -spec coordinator_pre_vote(d_coord()) -> {ok, #ps_c{}, d_coord()} | {error, false}.
 coordinator_pre_vote(#d_coord{id = Id, opts = Opts} = D) ->
   %% Perform a preliminary check:
-  #{ sites    := Sites
+  #{ actions  := Actions
    , strategy := {all, Timeout}
    } = Opts,
-  NonOk = case classy_lib:sites_to_nodes(Sites) of
-            {Nodes, []} ->
-              Results = lists:zip(
-                          Sites,
-                          erpc:multicall(Nodes, ?MODULE, participant_pre_vote, [Opts], Timeout)),
-              lists:filtermap(fun is_pre_vote_failure/1, Results);
-            {_Nodes, BadSites} ->
-              [{I, {error, site_unavailable}} || I <- BadSites]
-          end,
+  Args = #{Site := [prepare(Id, Opts, Act)] || Site := Act <- Actions},
+  Results = classy_lib:multicall(
+              ?MODULE, participant_pre_vote, Args, Timeout),
+
   case NonOk of
     [] ->
       %% Now persist options:
@@ -456,9 +459,7 @@ coordinator_perform_vote(#d_coord{id = Id, opts = Options} = D0) ->
   #{ tag      := Tag
    , lock     := Lock
    , prepare  := Prepare
-   , commit   := Commit
-   , rollback := Rollback
-   , sites    := Sites
+   , actions  := Sites
    , strategy := {all, Timeout}
    } = Options,
   {ok, Self} = classy_node:the_site(),
@@ -514,6 +515,50 @@ coordinator_perform_commit(_, _) ->
 
 coordinator_perform_rollback(_, _) ->
   {keep_state_and_data, []}.
+
+-spec prepare(id(), options(), actions()) -> #prepare{}.
+prepare(
+  Id,
+  #{tag := Tag, lock := Lock},
+  #{prepare := Prep, commit := Commit, rollback := Rollback}
+ ) ->
+  {ok, Self} = classy_node:the_site(),
+  #prepare{ id = Id
+          , tag = Tag
+          , lock = Lock
+          , prepare = Prep
+          , commit = Commit
+          , rollback = Rollback
+          , coordinator = Self
+          }.
+
+-spec coord_receive_replies(
+        erpc:request_id_collection(),
+        integer(),
+        #{classy:site() => Result}
+        [classy:site()]
+       ) ->
+        #{classy:site() => Result}.
+coord_receive_replies(Collection0, WaitTime, Acc, RemainingSites) ->
+  T0 = erlang:monotonic_time(millisecond),
+  case erpc:wait_response(Collection0, WaitTime, true) of
+    {{response, Resp}, Site, Collection} ->
+        T1 = erlang:monotonic_time(millisecond),
+      coord_receive_replies(
+        Collection,
+        max(0, WaitTime - (T1 - T0)),
+        Acc#{Site => Resp},
+        RemainingSites -- [Site]);
+    no_response ->
+      lists:foldl(
+        fun(Site, Acc1) ->
+            Acc1#{Site => {error, timeout}}
+        end,
+        Acc,
+        RemainingSites);
+    no_request ->
+      Acc
+  end.
 
 is_pre_vote_failure({Site, Result}) ->
   case Result of
@@ -664,37 +709,84 @@ db_get_options(IsCoordinator, Tag, VoteId) ->
 
 -spec with_defaults(options()) -> {ok, tag(), options()} | {error, _}.
 with_defaults(UserOpts) when is_map(UserOpts) ->
-  Defaults = #{ rollback  => undefined
-              , post_vote => undefined
-              , strategy  => all
-              , timeout   => 5_000
+  Defaults = #{ post_vote => {?MODULE, do_nothing, []}
+              , strategy  => {all, classy_lib:rpc_timeout()}
               , lock      => []
               },
   Merged = maps:merge(Defaults, UserOpts),
   case Merged of
     #{ tag       := Tag
-     , prepare   := Prepare
-     , commit    := Commit
-     , rollback  := Rollback
      , post_vote := PostVote
-     , sites     := Sites0
+     , actions   := Actions0
      , strategy  := Strategy0
      , lock      := _
      } ->
       maybe
-        ok ?= verify_prepare(Prepare),
-        ok ?= verify_commit(Commit),
-        ok ?= verify_rollback(Rollback),
         ok ?= verify_post_vote(PostVote),
-        {ok, Sites} ?= verify_sites(Sites0),
+        {ok, Actions} ?= verify_actions(Actions0),
         {ok, Strategy} ?= verify_strategy(Strategy0),
-        {ok, Tag, Merged#{ sites    := Sites
+        {ok, Tag, Merged#{ actions  := Actions
                          , strategy := Strategy
                          }}
       end;
     _ ->
       {error, badarg}
   end.
+
+verify_post_vote(undefined) ->
+  ok;
+verify_post_vote(MFA) ->
+  verify_mfa(bad_post_vote, 1, MFA).
+
+verify_strategy(all) ->
+  {ok, {all, classy_lib:rpc_timeout()}};
+verify_strategy({all, Timeout}) when is_integer(Timeout), Timeout > 0 ->
+  {ok, {all, Timeout}};
+verify_strategy(Strategy) ->
+  {error, {bad_strategy, Strategy}}.
+
+verify_actions(Actions0) when is_map(Actions0) ->
+  try
+    maps:size(Actions0) =:= 0 andalso throw({error, no_actions}),
+    {ok, maps:map(fun enrich_action/2, Actions0)}
+  catch
+    Err -> Err
+  end;
+verify_actions(Bad) ->
+  {error, {bad_actions, Bad}}.
+
+enrich_action(Site, SiteActions) when is_binary(Site), is_map(SiteActions) ->
+  ActionDefaults = #{rollback => {?MODULE, do_nothing, []}},
+  case maps:merge(ActionDefaults, SiteActions) of
+    #{prepare := Prep, commit := Commit, rollback := Rollback} = Result ->
+      maybe
+        ok ?= verify_prepare(Prep),
+        ok ?= verify_commit(Commit),
+        ok ?= verify_rollback(Rollback),
+        Result
+      else
+        Err -> throw(Err)
+      end;
+    _ ->
+      throw({error, {bad_action, Site, SiteActions}})
+  end;
+enrich_action(BadSite, BadAction) ->
+  throw({error, {bad_action, BadSite, BadAction}}).
+
+verify_commit(Commits) when is_list(Commits) ->
+  try
+    [case verify_mfa(bad_commit, 0, I) of
+       ok ->
+         ok;
+       Err ->
+         throw(Err)
+     end || I <- Commits],
+    ok
+  catch
+    Err -> Err
+  end;
+verify_commit(Other) ->
+  {error, {bad_commit, Other}}.
 
 verify_prepare(Prepare) ->
   verify_mfa(bad_prepare, 0, Prepare).
@@ -722,48 +814,3 @@ verify_mfa(Subject, NExtraArgs, {M, F, Args}) when is_atom(M),
   end;
 verify_mfa(Subject, _, Other) ->
   {error, {Subject, Other}}.
-
-verify_post_vote(undefined) ->
-  ok;
-verify_post_vote(MFA) ->
-  verify_mfa(bad_post_vote, 1, MFA).
-
-verify_commit(Commits) when is_list(Commits) ->
-  try
-    [case verify_mfa(bad_commit, 0, I) of
-       ok ->
-         ok;
-       Err ->
-         throw(Err)
-     end || I <- Commits],
-    ok
-  catch
-    Err -> Err
-  end;
-verify_commit(Other) ->
-  {error, {bad_commit, Other}}.
-
-verify_sites([]) ->
-  {error, empty_participant_list};
-verify_sites(Participants0) when is_list(Participants0) ->
-  Participants = lists:uniq(Participants0),
-  case classy:sites() of
-    [] ->
-      {error, site_is_not_running};
-    Peers ->
-      case Participants -- Peers of
-        [] ->
-          {ok, Participants};
-        Bad ->
-          {error, {bad_sites, Bad}}
-      end
-  end;
-verify_sites(Bad) ->
-  {error, {bad_sites, Bad}}.
-
-verify_strategy(all) ->
-  {ok, {all, classy_lib:rpc_timeout()}};
-verify_strategy({all, Timeout}) when is_integer(Timeout), Timeout > 0 ->
-  {ok, {all, Timeout}};
-verify_strategy(Strategy) ->
-  {error, {bad_strategy, Strategy}}.
