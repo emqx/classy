@@ -656,6 +656,59 @@ t_200_n_restarts(_Config) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies normal operation and error handling in `classy_lib:multicall' API.
+t_300_rpc(_Config) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  SB = <<"sbad">>,
+  ?check_trace(
+     #{timetrap => 15_000},
+     begin
+       %% Prepare
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       wait_site_joined([S1, S2], Cluster, S2),
+       %% Tests:
+       ?assertEqual(
+          #{ S1 => {ok, N1}
+           , S2 => {ok, N2}
+           , SB => {error, site_is_down}
+           },
+          ?ON(S1,
+              classy_lib:multicall(
+                #{S => {erlang, node, []} || S <- [S1, S2, SB]}, 5_000))),
+       %% Handling of throw:
+       ?assertEqual(
+          #{ S1 => {error, {throw, {foo, S1}}}
+           , S2 => {error, {throw, {foo, S2}}}
+           , SB => {error, site_is_down}
+           },
+          ?ON(S1,
+              classy_lib:multicall(
+                #{S => {erlang, throw, [{foo, S}]} || S <- [S1, S2, SB]}, 5_000))),
+       %% Handling of errors:
+       ?assertMatch(
+          #{ S1 := {error, {error, {foo, S1}, _}}
+           , S2 := {error, {error, {foo, S2}, _}}
+           , SB := {error, site_is_down}
+           },
+          ?ON(S1,
+              classy_lib:multicall(
+                #{S => {erlang, error, [{foo, S}]} || S <- [S1, S2, SB]}, 5_000))),
+       ?assertEqual(
+          #{ S1 => {error, {exit, {foo, S1}}}
+           , S2 => {error, {exit, {foo, S2}}}
+           , SB => {error, site_is_down}
+           },
+          ?ON(S1,
+              classy_lib:multicall(
+                #{S => {erlang, exit, [{foo, S}]} || S <- [S1, S2, SB]}, 5_000))),
+       ok
+     end,
+     []).
+
 t_999_fuzz(_Config) ->
   %% NOTE: we set timeout at the lowest level to capture the trace
   %% and have a nicer error message.

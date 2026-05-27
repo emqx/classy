@@ -9,7 +9,7 @@
 -export([ fold_per_cluster/3
         , count_up_peers/1
         , sites_to_nodes/1
-        , multicall/4
+        , multicall/2
         ]).
 
 %% internal exports:
@@ -43,9 +43,17 @@
 -type multicall_target() :: classy:site() |
                             {classy:site(), _Token}.
 
--type multicall_args() :: #{multicall_target() => list()}.
+-type multicall_args() :: #{multicall_target() => {module(), atom(), list()}}.
 
--type multicall_result(Result) :: #{multicall_target() => {ok, Result} | {error, _}}.
+-type multicall_error() ::
+        {error, site_is_down} |
+        {error, {throw, _Reason}} |
+        {error, {error, _Reason, _Stacktrace :: list()}} |
+        {error, {exit, _Reason}}.
+
+-type multicall_result(Result) ::
+        #{multicall_target() => {ok, Result} |
+                                {error, multicall_error()}}.
 
 -type unix_time_s() :: integer().
 
@@ -66,11 +74,14 @@
 %% or a tuple containing site ID and an arbitrary term.
 %% The latter form allows to make multiple requests towards the same site.
 %% Each multicall target can have a distinct set of function argements.
--spec multicall(module(), atom(), multicall_args(), timeout()) -> multicall_result(term()).
-multicall(Module, Function, SitesWithArgs, Timeout) ->
+-spec multicall(multicall_args(), timeout()) -> multicall_result(term()).
+multicall(SitesWithArgs, Timeout) ->
   {ReqIdCollection, Sent, NotSent} =
     maps:fold(
-      fun(SiteOrTuple, Args, {AccWait, AccSent, AccNotSent}) ->
+      fun(SiteOrTuple, {Module, Function, Args}, {AccWait, AccSent, AccNotSent}) when
+            is_atom(Module),
+            is_atom(Function),
+            is_list(Args) ->
           case SiteOrTuple of
             Site when is_binary(Site) -> ok;
             {Site, _}                 -> ok
@@ -260,21 +271,41 @@ map_deep_insert([K | Rest], Val, Outer) ->
         multicall_result(A),
         [multicall_target()]
        ) -> multicall_result(A).
-multicall_receive_replies(Collection0, WaitTime, Acc, RemainingSites) ->
-  case erpc:wait_response(Collection0, WaitTime, true) of
-    {{response, Resp}, Site, Collection} ->
+multicall_receive_replies(Collection0, WaitTime, Acc, RemainingTargets) ->
+  try erpc:wait_response(Collection0, WaitTime, true) of
+    {{response, Resp}, Target, Collection} ->
       multicall_receive_replies(
         Collection,
         WaitTime,
-        Acc#{Site => Resp},
-        RemainingSites -- [Site]);
+        Acc#{Target => {ok, Resp}},
+        RemainingTargets -- [Target]);
     no_response ->
       lists:foldl(
-        fun(Site, Acc1) ->
-            Acc1#{Site => {error, timeout}}
+        fun(Target, Acc1) ->
+            Acc1#{Target => {error, timeout}}
         end,
         Acc,
-        RemainingSites);
+        RemainingTargets);
     no_request ->
       Acc
+  catch
+    throw:{Throw, Target, Collection} ->
+      multicall_receive_replies(
+        Collection,
+        WaitTime,
+        Acc#{Target => {error, {throw, Throw}}},
+        RemainingTargets -- [Target]);
+    exit:{{exception, Exit}, Target, Collection} ->
+      multicall_receive_replies(
+        Collection,
+        WaitTime,
+        Acc#{Target => {error, {exit, Exit}}},
+        RemainingTargets -- [Target]);
+    error:{Err, Target, Collection} ->
+      {exception, Reason, Stack} = Err,
+      multicall_receive_replies(
+        Collection,
+        WaitTime,
+        Acc#{Target => {error, {error, Reason, Stack}}},
+        RemainingTargets -- [Target])
   end.
