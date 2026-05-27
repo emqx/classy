@@ -69,6 +69,7 @@
 %% Type declarations
 %%================================================================================
 
+-define(optvar(TAB), {classy_table_is_ready, TAB}).
 -define(name(TAB), {n, l, {?MODULE, TAB}}).
 -define(via(TAB), {via, gproc, ?name(TAB)}).
 
@@ -254,9 +255,19 @@ drop(Tab) ->
     ?call_timeout).
 
 %% @doc Lookup a value from the table.
+%%
+%% WARNING: this function can block the caller until the table is fully restored.
 -spec lookup(tab(), _Key) -> [_Val].
 lookup(Tab, Key) ->
-  [V || #classy_kv{v = V} <- ets:lookup(Tab, Key)].
+  case ets:whereis(Tab) of
+    undefined ->
+      %% Protection against typos and such:
+      error({badtable, Tab});
+    _ ->
+      %% Avoid reads while table is not fully restored:
+      optvar:read(?optvar(Tab)),
+      [V || #classy_kv{v = V} <- ets:lookup(Tab, Key)]
+  end.
 
 %% @doc Delete all data in the table.
 -spec clear(tab()) -> ok.
@@ -295,6 +306,7 @@ start_link(Tab, Options) ->
 %% @private
 init([TabName, Options]) ->
   process_flag(trap_exit, true),
+  optvar:unset(?optvar(TabName)),
   ETSOpts = maps:get(ets_options, Options, [set]),
   BadnessThreshold = maps:get(badness_threshold, Options, 100),
   S = #s{ name = TabName
@@ -319,6 +331,7 @@ handle_continue(restore, S0 = #s{name = Name}) ->
       #{ table => Name
        , time  => Elapsed
        }),
+  optvar:set(?optvar(Name), true),
   {noreply, S}.
 
 %% @private
@@ -384,7 +397,8 @@ terminate(Reason, S) ->
   case S of
     undefined ->
       ok;
-    #s{log = Log} ->
+    #s{name = Name, log = Log} ->
+      optvar:unset(?optvar(Name)),
       handle_flush(S),
       disk_log:close(Log),
       exec_on_update(close, S)
