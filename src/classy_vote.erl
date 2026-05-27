@@ -101,6 +101,7 @@
         #{ prepare   := mfargs()
          , commit    := [mfargs()]
          , rollback  => mfargs()
+         , site_nr   => non_neg_integer()
          }.
 
 %% Warning: MFA's are persistently stored!
@@ -144,7 +145,8 @@
 -define(s_vote, 0).
 -define(s_commit, 10).
 -define(s_rollback, 20).
--type commit_stage() :: ?s_vote | ?s_commit | ?s_rollback.
+-define(s_done, 30).
+-type commit_stage() :: ?s_vote | ?s_commit | ?s_rollback | ?s_done.
 
 %% Persistent states:
 %%   Keys:
@@ -174,6 +176,10 @@
 %%     Coordinator:
 -record(ps_c,
         { stage :: commit_stage()
+          %% Bit field where 1s represent sites have to ack commit or rollback.
+          %% Bit position is determined by `site_nr' field of `action()'
+          %% (set automatically).
+        , remaining = 0 :: non_neg_integer()
         , reserved = []
         }).
 %%     Participant:
@@ -315,9 +321,24 @@ receive_vote(#c_vote{id = Id} = Vote) ->
 %% @private Coordinator -> Participant
 -spec receive_outcome(outcome()) -> ok.
 receive_outcome(#c_outcome{id = Id, tag = Tag} = Outcome) ->
-  gen_statem:call(
-    ?via(?participant(#pk_p{id = Id, tag = Tag})),
-    Outcome).
+  case db_get_options(false, Tag, Id) of
+    {ok, _} ->
+      %% Table contains record of the vote. It means the participant
+      %% flow is ongoing on the site.
+      gen_statem:call(
+        ?via(?participant(#pk_p{id = Id, tag = Tag})),
+        Outcome);
+    undefined ->
+      %% Table doesn't contain any traces of the vote. Depending on the outcome, it means:
+      %%
+      %% Commit:
+      %% All commit actions finished (`ps_p_vote_yes' record has been deleted).
+      %%
+      %% Rollback:
+      %% 1. Rollback action finished.
+      %% 2. Node never received vote request. There's nothing to rollback.
+      ok
+  end.
 
 %%================================================================================
 %% behavior callbacks
@@ -403,8 +424,7 @@ init_coordinator(#init_coordinator{tag = Tag, id = Id, opts = Opts}) ->
   case db_get_coord_stage(Id) of
     {ok, ?s_vote} ->
       %% If coordinator itself restarts during voting stage,
-      %% it considers election failed, and votes are ignored.
-      %% (something, something, social commentary)
+      %% it considers election failed, and all votes are ignored.
       {next_state, #ps_c{stage = ?s_rollback}, D};
     {ok, Stage} ->
       {next_state, #ps_c{stage = Stage}, D};
@@ -422,9 +442,9 @@ init_coordinator(#init_coordinator{tag = Tag, id = Id, opts = Opts}) ->
 coordinator_pre_vote(#d_coord{id = Id, opts = Opts} = D) ->
   %% Perform a preliminary check:
   #{strategy := Strategy = {all, Timeout}} = Opts,
-  Args = prepare_multi(Id, Opts),
-  Results = classy_lib:multicall(?MODULE, participant_pre_vote, Args, Timeout),
-  ?tp(debug, classy_pre_vote_results,
+  Args = prepare_multi(participant_pre_vote, Id, Opts),
+  Results = classy_lib:multicall(Args, Timeout),
+  ?tp(debug, ?classy_vote_pre_results,
       Opts#{ id => Id
            , results => Results
            }),
@@ -438,20 +458,21 @@ coordinator_pre_vote(#d_coord{id = Id, opts = Opts} = D) ->
   end.
 
 -spec coordinator_enter(#ps_c{}, d_coord()) ->
-        {keep_state_and_data, [gen_statem:action()]} |
-        {keep_state, d_coord(), [gen_statem:action()]}.
+        {keep_state_and_data, gen_statem:action()} |
+        {keep_state, d_coord(), gen_statem:action()}.
 coordinator_enter(
   State = #ps_c{stage = Stage},
-  #d_coord{id = Id, opts = Opts} = D
+  #d_coord{id = Id} = D
  ) ->
   ok = db_set_coord_state(Id, State),
+  ?tp(debug, ?classy_vote_coord_stage, #{id => Id, stage => Stage}),
   case Stage of
     ?s_vote ->
       coordinator_perform_vote(D);
     ?s_commit ->
-      coordinator_perform_commit(Id, Opts);
+      {keep_state_and_data, {state_timeout, 0, ?state_timeout}};
     ?s_rollback ->
-      coordinator_perform_rollback(Id, Opts)
+      {keep_state_and_data, {state_timeout, 0, ?state_timeout}}
   end.
 
 -spec coordinator_perform_vote(d_coord()) -> {keep_state, d_coord(), [gen_statem:action()]}.
@@ -459,8 +480,8 @@ coordinator_perform_vote(#d_coord{id = Id, opts = Options} = D0) ->
   #{ actions := Actions
    , strategy := {all, Timeout}
    } = Options,
-  Args = prepare_multi(Id, Options),
-  _ = classy_lib:multicall(?MODULE, start_participant, Args, Timeout),
+  Args = prepare_multi(start_participant, Id, Options),
+  _ = classy_lib:multicall(Args, Timeout),
   D = D0#d_coord{remaining_votes = maps:keys(Actions)},
   {keep_state, D, [{state_timeout, ?state_timeout, Timeout}]}.
 
@@ -470,43 +491,86 @@ coordinator_perform_vote(#d_coord{id = Id, opts = Options} = D0) ->
 coordinator_handle_vote(
   From,
   Vote,
-  #ps_c{stage = ?s_vote},
-  #d_coord{remaining_votes = Remaining0} = D0
+  #ps_c{stage = Stage},
+  #d_coord{id = Id, remaining_votes = Remaining0} = D0
  ) ->
-  case Vote of
-    true ->
-      Remaining = Remaining0 -- [From],
-      D = D0#d_coord{remaining_votes = Remaining},
-      case Remaining of
-        [] ->
-          {next_state, #ps_c{stage = ?s_commit}, D};
-        _ ->
-          {keep_state, D}
+  ?tp(debug, ?classy_vote_coord_recv,
+      #{ id => Id
+       , from => From
+       , vote => Vote
+       , stage => Stage
+       }),
+  case Stage of
+    ?s_vote ->
+      case Vote of
+        true ->
+          Remaining = Remaining0 -- [From],
+          D = D0#d_coord{remaining_votes = Remaining},
+          case Remaining of
+            [] ->
+              {next_state, #ps_c{stage = ?s_commit}, D};
+            _ ->
+              {keep_state, D}
+          end;
+        false ->
+          D = D0#d_coord{remaining_votes = []},
+          {next_state, #ps_c{stage = ?s_rollback}, D}
       end;
-    false ->
-      D = D0#d_coord{remaining_votes = []},
-      {next_state, #ps_c{stage = ?s_rollback}, D}
-  end;
-coordinator_handle_vote(_From, _Vote, #ps_c{}, D) ->
-  %% Late vote; irrelevant
-  {keep_state, D}.
+    _ ->
+      %% Late vote; irrelevant
+      {keep_state, D0}
+  end.
 
+-spec coordinator_state_timeout(#ps_c{}, d_coord()) ->
+        {next_state, #ps_c{}, d_coord()} |
+        {keep_state, d_coord(), gen_statem:action()}.
 coordinator_state_timeout(#ps_c{stage = ?s_vote}, D) ->
+  %% Vote timed out, move to rollback:
   {next_state, #ps_c{stage = ?s_rollback}, D#d_coord{remaining_votes = []}};
-coordinator_state_timeout(#ps_c{stage = _}, _D) ->
-  keep_state_and_data.
+coordinator_state_timeout(#ps_c{stage = ?s_commit, remaining = Remaining}, D) ->
+  coordinator_perform_commit(Remaining, D);
+coordinator_state_timeout(#ps_c{stage = ?s_rollback}, D) ->
+  coordinator_perform_rollback(D).
 
-coordinator_perform_commit(_, _) ->
+coordinator_perform_commit(Remaining, D = #d_coord{}) ->
+  %% case coordinator_broadcast_outcome(D, true) of
+  %%   ok ->
   {keep_state_and_data, []}.
 
-coordinator_perform_rollback(_, _) ->
+coordinator_perform_rollback(_) ->
   {keep_state_and_data, []}.
 
--spec prepare_multi(id(), options()) -> map().
-prepare_multi(Id, Options) ->
+-spec coordinator_broadcast_outcome(d_coord(), boolean()) -> ok | {error, [classy:site()]}.
+coordinator_broadcast_outcome(#d_coord{tag = Tag, id = Id, opts = Opts}, IsCommit) ->
+  #{actions := Actions} = Opts,
+  Outcome = #c_outcome{ id = Id
+                      , tag = Tag
+                      , result = IsCommit
+                      },
+  Args = #{Site => {?MODULE, receive_outcome, [Outcome]} || Site := _ <- Actions},
+  Results = classy_lib:multicall(Args, classy_lib:rpc_timeout()),
+  BadSites = maps:fold(
+               fun(Site, Result, Acc) ->
+                   case Result of
+                     {ok, ok} -> Acc;
+                     _ -> [Site | Acc]
+                   end
+               end,
+               [],
+               Results),
+  case BadSites of
+    [] ->
+      ok;
+    _ ->
+      {error, BadSites}
+  end.
+
+-spec prepare_multi(atom(), id(), options()) -> map().
+prepare_multi(Function, Id, Options) ->
   #{ actions := Actions
    } = Options,
-  #{Site => [prepare(Id, Options, Act)] || Site := Act <- Actions}.
+  #{Site => {?MODULE, Function, [prepare(Id, Options, Act)]} ||
+    Site := Act <- Actions}.
 
 -spec prepare(id(), options(), actions()) -> #prepare{}.
 prepare(
@@ -677,6 +741,7 @@ db_get_options(IsCoordinator, Tag, VoteId) ->
     [#ps{options = Options}] ->
       {ok, Options};
     [] ->
+      %% Note this could race with table restoration
       undefined
   end.
 
@@ -725,14 +790,15 @@ verify_strategy(Strategy) ->
 verify_actions(Actions0) when is_map(Actions0) ->
   try
     maps:size(Actions0) =:= 0 andalso throw({error, no_actions}),
-    {ok, maps:map(fun enrich_action/2, Actions0)}
+    {Actions, _} = maps:fold(fun enrich_action/3, {#{}, 0}, Actions0),
+    {ok, Actions}
   catch
     Err -> Err
   end;
 verify_actions(Bad) ->
   {error, {bad_actions, Bad}}.
 
-enrich_action(Site, SiteActions) when is_binary(Site), is_map(SiteActions) ->
+enrich_action(Site, {Acc, SiteNr}, SiteActions) when is_binary(Site), is_map(SiteActions) ->
   ActionDefaults = #{rollback => {?MODULE, do_nothing, []}},
   case maps:merge(ActionDefaults, SiteActions) of
     #{prepare := Prep, commit := Commit, rollback := Rollback} = Result ->
@@ -740,14 +806,16 @@ enrich_action(Site, SiteActions) when is_binary(Site), is_map(SiteActions) ->
         ok ?= verify_prepare(Prep),
         ok ?= verify_commit(Commit),
         ok ?= verify_rollback(Rollback),
-        Result
+        { Acc#{Site => Result#{site_nr => SiteNr}}
+        , SiteNr + 1
+        }
       else
         Err -> throw(Err)
       end;
     _ ->
       throw({error, {bad_action, Site, SiteActions}})
   end;
-enrich_action(BadSite, BadAction) ->
+enrich_action(BadSite, _, BadAction) ->
   throw({error, {bad_action, BadSite, BadAction}}).
 
 verify_commit(Commits) when is_list(Commits) ->

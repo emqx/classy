@@ -45,6 +45,10 @@
 -define(classy_table_anomaly, classy_table_anomaly).
 -define(classy_bad_data, classy_bad_data).
 
+-define(classy_vote_pre_results, classy_vote_pre_results).
+-define(classy_vote_coord_stage, classy_vote_coord_stage).
+-define(classy_vote_coord_recv, classy_vote_coord_recv).
+
 %% Site information:
 -define(site_info, classy_site_status_tab).
 -record(site_info, {isup, node, last_update}).
