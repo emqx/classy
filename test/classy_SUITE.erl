@@ -814,7 +814,7 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
       }),
   %% Verify list of all nodes:
   ?assertSameSet(
-     [fuzz_node_name(I) || I <- ExpectedSites],
+     [Node || I <- ExpectedSites, {ok, Node} <- [fuzz_node_name(I)]],
      classy_test_fuzzer:call(Site, classy, nodes, [all]),
      #{ on            => Site
       , msg           => "View of all nodes"
@@ -823,8 +823,9 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
       }),
   %% Check running nodes:
   ?assertSameSet(
-     [fuzz_node_name(I)
+     [Node
       || I <- ExpectedSites,
+         {ok, Node} <- [fuzz_node_name(I)],
          classy_test_fuzzer:is_running(I, S)],
      classy_test_fuzzer:call(Site, classy, nodes, [running]),
      #{ on            => Site
@@ -840,7 +841,11 @@ no_stopped_nodes_reported_as_running(Site, #{sites := Sites}) ->
   StoppedNodes = maps:fold(
                    fun(Peer, #{running := Running}, Acc) ->
                        case Running of
-                         false -> [fuzz_node_name(Peer) | Acc];
+                         false ->
+                           case fuzz_node_name(Peer) of
+                             {ok, Node} -> [Node | Acc];
+                             undefined  -> Acc
+                           end;
                          true  -> Acc
                        end
                    end,
@@ -1042,7 +1047,7 @@ end_per_testcase(TC, Cfg) ->
               ok -> true;
               _  -> false
             end,
-  ok = familiar:stop_cluster(TC, Success),
+  _ = familiar:stop_cluster(TC, Success),
   snabbkaffe:stop().
 
 all() ->
@@ -1110,4 +1115,4 @@ proper_printout(Fmt, Args) ->
   ct:pal(Fmt, Args).
 
 fuzz_node_name(Site) ->
-  familiar_site:which_node({classy_test_fuzzer:familiar_cluster(), Site}).
+  familiar_site:last_node({classy_test_fuzzer:familiar_cluster(), Site}).

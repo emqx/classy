@@ -37,6 +37,7 @@
         , join_node/4
         , kick_site/4
         , start_site/2
+        , stop_site/1
         , familiar_cluster/0
         ]).
 
@@ -128,7 +129,7 @@ setup_hooks(Site) ->
     0).
 
 join_node(Origin, Target, Intent, S) ->
-  TargetNode = classy_test_site:which_node(Target),
+  TargetNode = familiar_site:which_node({familiar_cluster(), Target}),
   ?tp(info, classy_test_fuzzer_join_node,
       #{ site        => Origin
        , target      => Target
@@ -182,6 +183,9 @@ kick_site(Origin, Target, Intent, S) ->
     end,
     ?match_event(#{?snk_kind := classy_member_leave, remote := Target}),
     S).
+
+stop_site(Site) ->
+  familiar_site:stop({familiar_cluster(), Site}).
 
 start_site(Site, S) ->
   %% Note: since in non-singleton clusters we don't stop all sites,
@@ -362,7 +366,7 @@ running_site_command_(Site, S = #{sites := Sites}) ->
   frequency(
     [ {7, {call, ?MODULE, kick_site, [Site, oneof(OtherMembers), kick, S]}} || length(OtherMembers) > 0] ++
     [ {10, {call, ?MODULE, join_node, [Site, oneof(OtherRunning), join, S]}} || length(OtherRunning) > 0] ++
-    [ {5, {call, classy_test_site, stop, [Site]}}
+    [ {5, {call, ?MODULE, stop_site, [Site]}}
     | optcall(S, running_site_command, [Site, S], [])
     ]).
 
@@ -425,7 +429,7 @@ next_state(S, _Ret, {call, ?MODULE, start_site, [Site | _]}) ->
     Site,
     fun(SiteS) -> SiteS#{running := true} end,
     S);
-next_state(S, _Ret, {call, classy_test_site, stop, [Site]}) ->
+next_state(S, _Ret, {call, ?MODULE, stop_site, [Site]}) ->
   update_site(
     Site,
     fun(SiteS) -> SiteS#{running := false} end,
