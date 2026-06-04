@@ -68,7 +68,7 @@
 
 -type test_conf() ::
         #{ module := module()
-         , sites => [{classy:site(), classy_test_site:conf()}]
+         , sites => [{classy:site(), familiar:site_conf()}]
          , quorum => pos_integer()
          , n_sites => pos_integer()
          , _ => _
@@ -78,7 +78,7 @@
         #{ %% Current symbolic cluster ID of the site:
            cluster := cluster()
          , running := boolean()
-         , conf := classy_test_site:conf()
+         , conf := familiar:site_conf()
          }.
 
 -type s() ::
@@ -129,7 +129,7 @@ setup_hooks(Site) ->
     0).
 
 join_node(Origin, Target, Intent, S) ->
-  TargetNode = familiar_site:which_node({familiar_cluster(), Target}),
+  TargetNode = familiar:which_node({familiar_cluster(), Target}),
   ?tp(info, classy_test_fuzzer_join_node,
       #{ site        => Origin
        , target      => Target
@@ -185,7 +185,7 @@ kick_site(Origin, Target, Intent, S) ->
     S).
 
 stop_site(Site) ->
-  familiar_site:stop({familiar_cluster(), Site}).
+  familiar:stop_site(familiar_cluster(), Site).
 
 start_site(Site, S) ->
   %% Note: since in non-singleton clusters we don't stop all sites,
@@ -331,15 +331,15 @@ diagnostic(SelectedSites, #{sites := Sites}) ->
 
 -spec call(classy:site(), module(), atom(), list(), timeout()) -> _.
 call(Site, M, F, A, Timeout) ->
-  familiar_site:call({familiar_cluster(), Site}, M, F, A, Timeout).
+  familiar:call({familiar_cluster(), Site}, M, F, A, Timeout).
 
 -spec call(classy:site(), module(), atom(), list()) -> _.
 call(Site, M, F, A) ->
-  familiar_site:call({familiar_cluster(), Site}, M, F, A).
+  familiar:call({familiar_cluster(), Site}, M, F, A).
 
 -spec call(classy:site(), function(), timeout()) -> _.
 call(Site, Fun, Timeout) ->
-  familiar_site:call({familiar_cluster(), Site}, Fun, Timeout).
+  familiar:call({familiar_cluster(), Site}, Fun, Timeout).
 
 %%================================================================================
 %% Proper generators

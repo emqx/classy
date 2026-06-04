@@ -7,7 +7,7 @@
 -compile(export_all).
 
 -define(ON(SITE, BODY),
-        familiar_site:call(
+        familiar:call(
           {get_cluster(), SITE},
           fun() ->
               BODY
@@ -35,29 +35,29 @@ t_010_cluster(_) ->
        %% Check that error message is legible when calling a stopped site:
        ?assertError(
           {site_is_not_running, S1},
-          familiar_site:call(S1,
-                             fun() ->
-                                 ok
-                             end)),
+          familiar:call(S1,
+                        fun() ->
+                            ok
+                        end)),
        %% Start site:
        ?assertEqual(
           {ok, 'foo@127.22.0.0'},
           familiar:start_site(S1)),
-       ?assertMatch({error, already_started}, familiar_site:start(S1)),
+       ?assertMatch({error, already_started}, familiar:start_site(S1)),
        %% Test calls and log forwarding:
        ?assertEqual(
           'foo@127.22.0.0',
-          familiar_site:call(S1, erlang, node, [])),
+          familiar:call(S1, erlang, node, [])),
        ?assertMatch(
           ok,
-          familiar_site:call(S1,
-                                fun() ->
-                                    ?tp(test_msg_from_foo, #{})
-                                end)),
+          familiar:call(S1,
+                        fun() ->
+                            ?tp(test_msg_from_foo, #{})
+                        end)),
        ?block_until(#{?snk_kind := test_msg_from_foo}),
        %% Test stopping idempotency:
-       ?assertMatch(ok, familiar_site:stop(S1)),
-       ?assertMatch(ok, familiar_site:stop(S1))
+       ?assertMatch(ok, familiar:stop_site(S1)),
+       ?assertMatch(ok, familiar:stop_site(S1))
      end,
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1
@@ -1002,7 +1002,7 @@ init_per_testcase(TC, Cfg) ->
              ],
   ok = familiar:start_link_cluster(
          #{ id => TC
-          , fixtures => familiar_fixture:defaults() ++ Fixtures
+          , fixtures => familiar:default_fixtures() ++ Fixtures
           }),
   put(classy_SUITE_cluster, {ok, TC}),
   Cfg.
@@ -1035,7 +1035,7 @@ create_start_site(Cluster, Site, CustomConf) ->
   end.
 
 stop_site(Site) ->
-  familiar_site:stop(get_cluster(), Site).
+  familiar:stop_site(get_cluster(), Site).
 
 restart_site(Site) ->
   ?assertMatch(
@@ -1115,4 +1115,4 @@ proper_printout(Fmt, Args) ->
   ct:pal(Fmt, Args).
 
 fuzz_node_name(Site) ->
-  familiar_site:last_node({classy_test_fuzzer:familiar_cluster(), Site}).
+  familiar:last_node({classy_test_fuzzer:familiar_cluster(), Site}).
