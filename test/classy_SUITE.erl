@@ -713,6 +713,17 @@ t_300_rpc(_) ->
           ?ON(S1,
               classy_lib:multicall(
                 #{S => {erlang, exit, [{foo, S}]} || S <- [S1, S2, SB]}, 5_000))),
+       %% Multiple calls to the same site with tags:
+       ?assertEqual(
+          #{ {S2, 1} => {ok, N2}
+           , {S2, 2} => {ok, N2}
+           },
+          ?ON(S1,
+              classy_lib:multicall(
+                #{ {S2, 1} => {erlang, node, []}
+                 , {S2, 2} => {erlang, node, []}
+                 },
+                5_000))),
        ok
      end,
      []).
