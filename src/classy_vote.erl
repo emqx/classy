@@ -101,8 +101,15 @@
         #{ prepare   := mfargs()
          , commit    := [mfargs()]
          , rollback  => mfargs()
-         , site_nr   => non_neg_integer()
          }.
+
+-record(act,
+        { site_bit :: non_neg_integer()
+        , prepare  :: mfargs()
+        , commit   :: [mfargs()]
+        , rollback :: [mfargs()]
+        , reserved :: []
+        }).
 
 %% Warning: MFA's are persistently stored!
 -type options() ::
@@ -177,9 +184,9 @@
 -record(ps_c,
         { stage :: commit_stage()
           %% Bit field where 1s represent sites have to ack commit or rollback.
-          %% Bit position is determined by `site_nr' field of `action()'
+          %% Bit position is determined by `n' field of `action()'
           %% (set automatically).
-        , remaining = 0 :: non_neg_integer()
+        , remaining :: non_neg_integer()
         , reserved = []
         }).
 %%     Participant:
@@ -202,7 +209,6 @@
 -record(d_coord,
         { tag :: tag()
         , id :: id()
-        , remaining_votes = [] :: [classy:site()]
         , opts :: options()
         }).
 -type d_coord() :: #d_coord{}.
@@ -421,13 +427,7 @@ terminate(Reason, State, _Data) ->
 -spec init_coordinator(#init_coordinator{}) -> {next_state, #ps_c{}, d_coord()} | {error, _}.
 init_coordinator(#init_coordinator{tag = Tag, id = Id, opts = Opts}) ->
   D = #d_coord{tag = Tag, id = Id, opts = Opts},
-  case db_get_coord_stage(Id) of
-    {ok, ?s_vote} ->
-      %% If coordinator itself restarts during voting stage,
-      %% it considers election failed, and all votes are ignored.
-      {next_state, #ps_c{stage = ?s_rollback}, D};
-    {ok, Stage} ->
-      {next_state, #ps_c{stage = Stage}, D};
+  case db_get_coord_state(Id) of
     undefined ->
       %% This is a new election.
       %% Perform a pre-vote immediately,
@@ -435,7 +435,19 @@ init_coordinator(#init_coordinator{tag = Tag, id = Id, opts = Opts}) ->
       %% This way the fail path doesn't need to write anything on disk,
       %% as the caller is blocked before it makes any changes that should be rolled back,
       %% should the coordinator fail or node restart during pre-vote.
-      coordinator_pre_vote(D)
+      coordinator_pre_vote(D);
+    {ok, Restored = #ps_c{stage = Stage0}} ->
+      %% Coordinator restarted:
+      Stage = case Stage0 of
+                ?s_vote ->
+                  %% If coordinator itself restarts during voting stage,
+                  %% it considers election failed,
+                  %% and all votes are ignored.
+                  ?s_rollback;
+                _ ->
+                  Stage0
+              end,
+      {next_state, Restored#ps_c{stage = Stage}, D}
   end.
 
 -spec coordinator_pre_vote(d_coord()) -> {ok, #ps_c{}, d_coord()} | {error, false}.
@@ -452,7 +464,12 @@ coordinator_pre_vote(#d_coord{id = Id, opts = Opts} = D) ->
     true ->
       %% Now persist options (todo: do it atomically with creating the state?):
       ok = db_set_options(true, Id, Opts),
-      {ok, #ps_c{stage = ?s_vote}, D};
+      { ok
+      , #ps_c{ stage = ?s_vote
+             , remaining = ones(maps:size(Results))
+             }
+      , D
+      };
     false ->
       {error, false}
   end.
@@ -491,8 +508,8 @@ coordinator_perform_vote(#d_coord{id = Id, opts = Options} = D0) ->
 coordinator_handle_vote(
   From,
   Vote,
-  #ps_c{stage = Stage},
-  #d_coord{id = Id, remaining_votes = Remaining0} = D0
+  #ps_c{stage = Stage, remaining = Rem},
+  #d_coord{id = Id} = D0
  ) ->
   ?tp(debug, ?classy_vote_coord_recv,
       #{ id => Id
@@ -505,10 +522,10 @@ coordinator_handle_vote(
       case Vote of
         true ->
           Remaining = Remaining0 -- [From],
-          D = D0#d_coord{remaining_votes = Remaining},
+          D = D0#d_coord{},
           case Remaining of
             [] ->
-              {next_state, #ps_c{stage = ?s_commit}, D};
+              {next_state, #ps_c{stage = ?s_commit, remaining = Rem}, D};
             _ ->
               {keep_state, D}
           end;
@@ -694,11 +711,11 @@ do_prepare(
 db_set_coord_state(Id, State) when is_record(State, ps_c) ->
   classy_table:write(?ptab, #pk_c{id = Id}, State).
 
--spec db_get_coord_stage(id()) -> {ok, commit_stage()} | undefined.
-db_get_coord_stage(Id) ->
+-spec db_get_coord_state(id()) -> {ok, #ps_c{}} | undefined.
+db_get_coord_state(Id) ->
   case classy_table:lookup(?ptab, #pk_c{id = Id}) of
-    [#ps_c{stage = Stage}] ->
-      {ok, Stage};
+    [#ps_c{} = State] ->
+      {ok, State};
     [] ->
       undefined
   end.
@@ -799,14 +816,14 @@ verify_actions(Bad) ->
   {error, {bad_actions, Bad}}.
 
 enrich_action(Site, {Acc, SiteNr}, SiteActions) when is_binary(Site), is_map(SiteActions) ->
-  ActionDefaults = #{rollback => {?MODULE, do_nothing, []}},
+  ActionDefaults = #{rollback => []},
   case maps:merge(ActionDefaults, SiteActions) of
     #{prepare := Prep, commit := Commit, rollback := Rollback} = Result ->
       maybe
         ok ?= verify_prepare(Prep),
         ok ?= verify_commit(Commit),
         ok ?= verify_rollback(Rollback),
-        { Acc#{Site => Result#{site_nr => SiteNr}}
+        { Acc#{Site => Result#{n => SiteNr}}
         , SiteNr + 1
         }
       else
@@ -818,9 +835,26 @@ enrich_action(Site, {Acc, SiteNr}, SiteActions) when is_binary(Site), is_map(Sit
 enrich_action(BadSite, _, BadAction) ->
   throw({error, {bad_action, BadSite, BadAction}}).
 
-verify_commit(Commits) when is_list(Commits) ->
+verify_prepare(Prepare) ->
+  verify_mfa(bad_prepare, 0, Prepare).
+
+verify_commit(Commit) ->
+  verify_mfas(bad_commit, Commit).
+
+verify_rollback(Rollback) ->
+  verify_mfas(bad_rollback, Rollback).
+
+verify_coordinator(Coordinator) ->
+  case classy_node:node_of_site(Coordinator, true) of
+    {ok, _} ->
+      ok;
+    _ ->
+      {errror, coordinator_unreachable}
+  end.
+
+verify_mfas(Reason, Commits) when is_list(Commits) ->
   try
-    [case verify_mfa(bad_commit, 0, I) of
+    [case verify_mfa(Reason, 0, I) of
        ok ->
          ok;
        Err ->
@@ -830,22 +864,8 @@ verify_commit(Commits) when is_list(Commits) ->
   catch
     Err -> Err
   end;
-verify_commit(Other) ->
-  {error, {bad_commit, Other}}.
-
-verify_prepare(Prepare) ->
-  verify_mfa(bad_prepare, 0, Prepare).
-
-verify_rollback(Rollback) ->
-  verify_mfa(bad_rollback, 0, Rollback).
-
-verify_coordinator(Coordinator) ->
-  case classy_node:node_of_site(Coordinator, true) of
-    {ok, _} ->
-      ok;
-    _ ->
-      {errror, coordinator_unreachable}
-  end.
+verify_mfas(Reason, Other) ->
+  {error, {Reason, Other}}.
 
 -spec verify_mfa(atom(), non_neg_integer(), term()) -> ok | {error, {atom(), term()}}.
 verify_mfa(Subject, NExtraArgs, {M, F, Args}) when is_atom(M),
@@ -859,3 +879,16 @@ verify_mfa(Subject, NExtraArgs, {M, F, Args}) when is_atom(M),
   end;
 verify_mfa(Subject, _, Other) ->
   {error, {Subject, Other}}.
+
+-spec ones(pos_integer()) -> pos_integer().
+ones(N) ->
+  1 bsl N - 1.
+
+-spec unset_bit(non_neg_integer(), non_neg_integer()) -> non_neg_integer().
+unset_bit(Bit, Bitfield) ->
+  %% FIXME: wrong
+  Bitfield bxor Bit.
+
+-spec need_more_replies(non_neg_integer()) -> boolean().
+need_more_replies(N) ->
+  N > 0.
