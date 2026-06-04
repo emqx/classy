@@ -18,6 +18,9 @@
         , clusters/1
         , diagnostic/1
         , diagnostic/2
+        , call/5
+        , call/4
+        , call/3
         ]).
 
 %% behavior callbacks:
@@ -34,6 +37,7 @@
         , join_node/4
         , kick_site/4
         , start_site/2
+        , familiar_cluster/0
         ]).
 
 -export_type([test_conf/0]).
@@ -93,12 +97,15 @@
 %% Internal exports
 %%================================================================================
 
+familiar_cluster() ->
+  classy_fuzz_cluster.
+
 -spec init_cluster(test_conf()) -> ok.
 init_cluster(#{sites := Sites, quorum := Quorum, n_sites := NSites}) ->
   lists:foreach(
     fun({Site, Conf0}) ->
         Fixtures = maps:get(fixtures, Conf0, []),
-        ClassyFixture = {classy_test_app,
+        ClassyFixture = {familiar_app,
                          #{ app => classy
                           , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site]}
                                     , quorum => Quorum
@@ -108,8 +115,8 @@ init_cluster(#{sites := Sites, quorum := Quorum, n_sites := NSites}) ->
                           }},
         Conf = Conf0#{fixtures => [ClassyFixture] ++ Fixtures},
         ?assertMatch(
-           ok,
-           classy_test_cluster:ensure_site(Site, Conf))
+           {ok, _},
+           familiar:create_site(familiar_cluster(), Site, Conf))
     end,
     Sites).
 
@@ -134,7 +141,7 @@ join_node(Origin, Target, Intent, S) ->
   case OriginCluster of
     TargetCluster ->
       %% If already in the same cluster, no join event expected
-      Result = classy_test_site:call(
+      Result = call(
                  Origin,
                  fun() ->
                      classy:join_node(TargetNode, Intent)
@@ -146,7 +153,7 @@ join_node(Origin, Target, Intent, S) ->
         [Origin | sites_of_cluster(TargetCluster, S)],
         fun() ->
             ?retry(100, 10,
-                   ok = classy_test_site:call(
+                   ok = call(
                           Origin,
                           fun() ->
                               classy:join_node(TargetNode, Intent)
@@ -166,7 +173,7 @@ kick_site(Origin, Target, Intent, S) ->
   exec_and_wait_sync(
     sites_of_cluster(cluster_of(Origin, S), S),
     fun() ->
-        classy_test_site:call(
+        call(
           Origin,
           fun() ->
               classy:kick_site(Target, Intent)
@@ -198,7 +205,7 @@ start_site(Site, S) ->
                 end,
                 NEvents,
                 ?sync_timeout),
-  Ret = classy_test_site:start(Site),
+  Ret = familiar:start_site({familiar_cluster(), Site}),
   {Ret, snabbkaffe:receive_events(Sub)}.
 
 %%================================================================================
@@ -274,7 +281,7 @@ real_cluster_of(Site) ->
      100,
      begin
        #{cluster := Cluster} =
-         classy_test_site:call(
+         call(
            Site,
            classy_node, hello, [],
            ?rpc_timeout),
@@ -304,18 +311,31 @@ diagnostic(SelectedSites, #{sites := Sites}) ->
     fun(Site, #{running := R}) ->
         case R of
           true ->
-            catch classy_test_site:call(
+            catch call(
                     Site,
                     fun() ->
                         #{ members => classy_membership:dump()
                          , node => catch ets:tab2list(classy_node)
                          }
-                    end);
+                    end,
+                    5_000);
           false ->
             stopped
         end
     end,
     maps:with(SelectedSites, Sites)).
+
+-spec call(classy:site(), module(), atom(), list(), timeout()) -> _.
+call(Site, M, F, A, Timeout) ->
+  familiar_site:call({familiar_cluster(), Site}, M, F, A, Timeout).
+
+-spec call(classy:site(), module(), atom(), list()) -> _.
+call(Site, M, F, A) ->
+  familiar_site:call({familiar_cluster(), Site}, M, F, A).
+
+-spec call(classy:site(), function(), timeout()) -> _.
+call(Site, Fun, Timeout) ->
+  familiar_site:call({familiar_cluster(), Site}, Fun, Timeout).
 
 %%================================================================================
 %% Proper generators
@@ -487,7 +507,7 @@ postcondition(PrevState, Call, Result) ->
           });
     {call, ?MODULE, start_site, Args} ->
       ?assertMatch(
-         {ok, {ok, _Event}},
+         {{ok, _Node}, {ok, _Event}},
          Result,
          #{ msg => "Start failed"
           , args => Args
@@ -519,7 +539,7 @@ verify_cluster_converged(Cluster, Sites, S) ->
   %% Verify that all running sites in the cluster have the same view of the cluster:
   Running = [I || I <- Sites, classy_test_fuzzer:is_running(I, S)],
   Views = [{ I
-           , classy_test_site:call(I, classy, sites, [])
+           , call(I, classy, sites, [])
            }
            || I <- Running],
   case Views of

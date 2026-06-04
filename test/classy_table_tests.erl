@@ -316,10 +316,11 @@ setup(TC) ->
   application:set_env(classy, table_dir, Dir),
   application:set_env(classy, table_batch_size, 2),
   ok = filelib:ensure_path(Dir),
-  {ok, Apps} = application:ensure_all_started(gproc),
+  {ok, Apps1} = application:ensure_all_started(gproc),
+  {ok, Apps2} = application:ensure_all_started(optvar),
   {ok, Sup} = classy_sup:start_link_table_sup(),
   #cleanup{ dir = Dir
-          , apps = Apps
+          , apps = Apps2 ++ Apps1
           , sup = Sup
           }.
 
