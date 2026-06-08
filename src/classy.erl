@@ -28,7 +28,7 @@
 -export([ on_node_init/2
         , on_create_cluster/2
         , on_create_site/2
-        , on_site_status_change/2
+        , on_peer_connection_status_change/2
         , on_membership_change/2
         , pre_join/2
         , post_join/2
@@ -289,16 +289,19 @@ on_create_site(Hook, Prio) ->
   classy_hook:insert(?on_create_site, Hook, Prio).
 
 %% @doc Register a hook that is executed when a site changes
-%% status from up to down and vice versa.
+%% status from connected (`true') to disconnected (`false') and vice versa.
 %%
 %% Note: this hook runs in the classy main process.
 %% Hence it should avoid blocking it.
--spec on_site_status_change(Fun, classy_hook:prio()) -> classy_hook:hook()
-   when Fun :: fun((cluster_id(), Local, Remote, node(), _IsUp :: boolean()) -> _),
+%%
+%% Note: status change to `false' it not indicative of the remote node
+%% being actually down. This can happen during a network partition.
+-spec on_peer_connection_status_change(Fun, classy_hook:prio()) -> classy_hook:hook()
+   when Fun :: fun((cluster_id(), Local, Remote, node(), _IsConnected :: boolean()) -> _),
         Local :: site(),
         Remote :: site().
-on_site_status_change(Hook, Prio) ->
-  classy_hook:insert(?on_site_status_change, Hook, Prio).
+on_peer_connection_status_change(Hook, Prio) ->
+  classy_hook:insert(?on_peer_connection_status_change, Hook, Prio).
 
 %% @doc Register a hook that is executed when a site joins or leaves a cluster.
 -spec on_membership_change(membership_change_hook(), classy_hook:prio()) -> classy_hook:hook().

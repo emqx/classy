@@ -185,9 +185,9 @@ peer_info() ->
     ?site_info).
 
 -spec node_of_site(classy:site(), boolean()) -> {ok, node()} | undefined.
-node_of_site(Site, OnlyLive) ->
+node_of_site(Site, OnlyConnected) ->
   case classy_table:lookup(?site_info, Site) of
-    [#site_info{isup = IsUp, node = Node}] when IsUp; not OnlyLive ->
+    [#site_info{isup = IsConnected, node = Node}] when IsConnected; not OnlyConnected ->
       {ok, Node};
     _ ->
       undefined
@@ -503,7 +503,7 @@ update_sites_status(S0 = #s{cluster = Cluster, site = Local}) ->
                              , last_update = classy_lib:time_s()
                              })
              end,
-             maybe_on_site_status_change(Acc, Site, Node, IsUp, true)
+             maybe_on_peer_connection_status_change(Acc, Site, Node, IsUp, true)
         end,
         S0,
         Members),
@@ -515,7 +515,7 @@ update_sites_status(S0 = #s{cluster = Cluster, site = Local}) ->
                 Acc;
               false ->
                 classy_table:dirty_delete(?site_info, Site),
-                maybe_on_site_status_change(Acc, Site, Node, false, false)
+                maybe_on_peer_connection_status_change(Acc, Site, Node, false, false)
             end
         end,
         S1,
@@ -523,13 +523,13 @@ update_sites_status(S0 = #s{cluster = Cluster, site = Local}) ->
   classy_table:flush(?site_info),
   S.
 
--spec maybe_on_site_status_change(#s{}, classy:site(), node() | undefined, boolean(), boolean()) -> #s{}.
-maybe_on_site_status_change(S = #s{cluster = Cluster, site = Local, peer_state = PS0}, Site, Node, IsUp, Keep) ->
+-spec maybe_on_peer_connection_status_change(#s{}, classy:site(), node() | undefined, boolean(), boolean()) -> #s{}.
+maybe_on_peer_connection_status_change(S = #s{cluster = Cluster, site = Local, peer_state = PS0}, Site, Node, IsUp, Keep) ->
   Changed = case PS0 of
               #{Site := {Node, IsUp}} ->
                 false;
               #{} ->
-                classy_hook:foreach(?on_site_status_change, [Cluster, Local, Site, Node, IsUp]),
+                classy_hook:foreach(?on_peer_connection_status_change, [Cluster, Local, Site, Node, IsUp]),
                 true
             end,
   PS = if Changed andalso Keep ->

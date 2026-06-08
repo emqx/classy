@@ -41,7 +41,7 @@
 %% This callback can be retried on node restart.
 %% </li>
 %% </itemize>
--module(classy_vote).
+-module(classy_vote_coordinator).
 
 -behavior(gen_statem).
 
@@ -54,6 +54,7 @@
 
 %% internal exports:
 -export([ create_table/0
+        , start_link/1
 
         , receive_vote/1
         , receive_outcome/1
@@ -248,21 +249,7 @@ start_link(#init_coordinator{id = ID} = Arg) ->
     ?via(?coordinator(#pk_c{id = ID})),
     ?MODULE,
     Arg,
-    []);
-start_link(#init_participant{name = Name} = Arg) ->
-  gen_statem:start_link(
-    ?via(?coordinator(Name)),
-    ?MODULE,
-    Arg,
     []).
-
-%% @private Coordinator -> Participant
--spec start_participant(#prepare{}) -> {ok, pid()}.
-start_participant(#prepare{id = Id, tag = Tag} = Prepare) ->
-  classy_sup:ensure_vote(
-    #init_participant{ name = #pk_p{id = Id, tag = Tag}
-                     , opts = Prepare
-                     }).
 
 %% @private Coordinator <- Participant
 -spec receive_vote(vote()) -> ok | {error, _}.
@@ -383,6 +370,7 @@ init_coordinator(#init_coordinator{tag = Tag, id = Id, opts = Opts}) ->
               , id = Id
               , strategy = Strategy
               , post_vote = PostVote
+              ,
               },
   case db_get_coord_state(Id) of
     undefined ->
@@ -631,6 +619,38 @@ participant_prepare(
   send_vote(Coordiantor, Id, Outcome),
   {next_state, State, Data}.
 
+-spec send_vote(classy:site(), id(), boolean()) -> ok | {error, _}.
+send_vote(Coordinator, Id, Vote) ->
+  maybe
+    {ok, Node} ?= classy_node:node_of_site(Coordinator, true),
+    {ok, From} ?= classy_node:the_site(),
+    Rec = #c_vote{ id = Id
+                 , from = From
+                 , vote = Vote
+                 },
+    erpc:call(Node, ?MODULE, receive_vote, [Rec])
+  end.
+
+-spec do_prepare(#prepare{}, boolean()) -> {ok, boolean()} | {error, _}.
+do_prepare(
+  #prepare{ prepare     = Prep
+          , commit      = Commit
+          , rollback    = Rollback
+          , coordinator = Coordinator
+          },
+  ForReal
+ ) ->
+  maybe
+    ok ?= verify_prepare(Prep),
+    ok ?= verify_commit(Commit),
+    ok ?= verify_rollback(Rollback),
+    ok ?= verify_coordinator(Coordinator),
+    {M, F, Args} = Prep,
+    Vote = apply(M, F, [ForReal | Args]),
+    true ?= is_boolean(Vote) orelse {error, bad_result},
+    {ok, Vote}
+  end.
+
 %%--------------------------------------------------------------------------------
 %% Database access
 %%--------------------------------------------------------------------------------
@@ -771,6 +791,14 @@ verify_commit(Commit) ->
 
 verify_rollback(Rollback) ->
   verify_mfas(bad_rollback, Rollback).
+
+verify_coordinator(Coordinator) ->
+  case classy_node:node_of_site(Coordinator, true) of
+    {ok, _} ->
+      ok;
+    _ ->
+      {errror, coordinator_unreachable}
+  end.
 
 verify_mfas(Reason, Commits) when is_list(Commits) ->
   try
