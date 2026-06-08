@@ -524,11 +524,11 @@ t_090_info(_) ->
            #{ infos :=
                 #{ N1 := #{ cluster := Cluster1
                           , site := S1
-                          , peers := #{S2 := #{node := N2, up := true, last_update := _}}
+                          , peers := #{S2 := #{node := N2, connected := true, last_update := _}}
                           }
                  , N2 := #{ cluster := Cluster1
                           , site := S2
-                          , peers := #{S1 := #{node := N1, up := true, last_update := _}}
+                          , peers := #{S1 := #{node := N1, connected := true, last_update := _}}
                           }
                  }
             },

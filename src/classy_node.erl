@@ -161,7 +161,7 @@ nodes(Query) ->
              stopped -> [{'=:=', '$2', false}]
            end,
   MS = { #classy_kv{ v = #site_info{ node = '$1'
-                                   , isup = '$2'
+                                   , isconn = '$2'
                                    , _ = '_'
                                    }
                    , _ = '_'
@@ -174,9 +174,9 @@ nodes(Query) ->
 -spec peer_info() -> #{classy:site() => classy:peer_info()}.
 peer_info() ->
   ets:foldl(
-    fun(#classy_kv{k = Site, v = #site_info{node = Node, isup = IsUp, last_update = LU}}, Acc) ->
+    fun(#classy_kv{k = Site, v = #site_info{node = Node, isconn = IsConn, last_update = LU}}, Acc) ->
         Info = #{ node        => Node
-                , up          => IsUp
+                , connected   => IsConn
                 , last_update => LU
                 },
         Acc#{Site => Info}
@@ -187,7 +187,7 @@ peer_info() ->
 -spec node_of_site(classy:site(), boolean()) -> {ok, node()} | undefined.
 node_of_site(Site, OnlyConnected) ->
   case classy_table:lookup(?site_info, Site) of
-    [#site_info{isup = IsConnected, node = Node}] when IsConnected; not OnlyConnected ->
+    [#site_info{isconn = IsConnected, node = Node}] when IsConnected; not OnlyConnected ->
       {ok, Node};
     _ ->
       undefined
@@ -485,25 +485,25 @@ update_sites_status(S0 = #s{cluster = Cluster, site = Local}) ->
          fun(Site, Acc) ->
              case NodesOfSite of
                #{Site := Node} ->
-                 IsUp = lists:member(Node, Nodes);
+                 IsConn = lists:member(Node, Nodes);
                #{} ->
                  Node = undefined,
-                 IsUp = false
+                 IsConn = false
              end,
              case classy_table:lookup(?site_info, Site) of
-               [#site_info{isup = IsUp, node = Node}] ->
+               [#site_info{isconn = IsConn, node = Node}] ->
                  %% No changes:
                  ok;
                _ ->
                  classy_table:dirty_write(
                    ?site_info,
                    Site,
-                   #site_info{ isup = IsUp
+                   #site_info{ isconn = IsConn
                              , node = Node
                              , last_update = classy_lib:time_s()
                              })
              end,
-             maybe_on_peer_connection_status_change(Acc, Site, Node, IsUp, true)
+             maybe_on_peer_connection_status_change(Acc, Site, Node, IsConn, true)
         end,
         S0,
         Members),
@@ -524,16 +524,16 @@ update_sites_status(S0 = #s{cluster = Cluster, site = Local}) ->
   S.
 
 -spec maybe_on_peer_connection_status_change(#s{}, classy:site(), node() | undefined, boolean(), boolean()) -> #s{}.
-maybe_on_peer_connection_status_change(S = #s{cluster = Cluster, site = Local, peer_state = PS0}, Site, Node, IsUp, Keep) ->
+maybe_on_peer_connection_status_change(S = #s{cluster = Cluster, site = Local, peer_state = PS0}, Site, Node, IsConn, Keep) ->
   Changed = case PS0 of
-              #{Site := {Node, IsUp}} ->
+              #{Site := {Node, IsConn}} ->
                 false;
               #{} ->
-                classy_hook:foreach(?on_peer_connection_status_change, [Cluster, Local, Site, Node, IsUp]),
+                classy_hook:foreach(?on_peer_connection_status_change, [Cluster, Local, Site, Node, IsConn]),
                 true
             end,
   PS = if Changed andalso Keep ->
-           PS0#{Site => {Node, IsUp}};
+           PS0#{Site => {Node, IsConn}};
           not Keep ->
            maps:remove(Site, PS0);
           true ->
