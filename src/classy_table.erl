@@ -125,6 +125,8 @@
 -type restore_state() :: none %% No atomicity marker is active
                        | #restore_state{}.
 
+-define(to_auto_flush, to_auto_flush).
+
 -define(call_timeout, infinity).
 
 %%================================================================================
@@ -298,6 +300,8 @@ start_link(Tab, Options) ->
         , log :: _
         , log_size = 0 :: non_neg_integer()
         , badness_threshold :: pos_integer()
+        , buffer = [] :: [{gen_server:from(), ?w(_, _) | ?d(_)}]
+        , auto_flush_timer :: classy_lib:wakeup_timer()
         , on_update :: on_update_callback() | undefined
         }).
 
@@ -338,13 +342,13 @@ handle_continue(restore, S0 = #s{name = Name}) ->
 handle_call(#call_ensure_open{}, _From, S) ->
   {reply, ok, S};
 handle_call(#call_atomically{ops = Ops}, From, S) ->
-  maybe_compact(From, ok, handle_atomic(Ops, S));
-handle_call(#call_write{} = C, _From, S) ->
-  {reply, ok, handle_write(C, S)};
-handle_call(#call_delete{} = C, _From, S) ->
-  {reply, ok, handle_delete(C, S)};
+  with_compaction(From, ok, handle_atomic(Ops, S));
+handle_call(#call_write{} = C, From, S) ->
+  handle_write(From, C, S);
+handle_call(#call_delete{} = C, From, S) ->
+  handle_delete(From, C, S);
 handle_call(#call_flush{}, From, S) ->
-  maybe_compact(From, ok, handle_flush(S));
+  with_compaction(From, ok, handle_flush(S));
 handle_call(#call_force_compaction{}, From, S0) ->
   case do_compaction(S0) of
     {ok, S} ->
@@ -355,7 +359,7 @@ handle_call(#call_force_compaction{}, From, S0) ->
   end;
 handle_call(#call_clear{}, From, S0) ->
   S = handle_clear(S0),
-  maybe_compact(From, ok, handle_flush(S));
+  with_compaction(From, ok, handle_flush(S));
 handle_call(#call_drop{}, From, S) ->
   {stop, normal, handle_drop(From, S)};
 handle_call(Call, From, S) ->
@@ -379,6 +383,8 @@ handle_cast(Cast, S) ->
 %% @private
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
+handle_info(?to_auto_flush, S0) ->
+  commit_buffered(S0#s{auto_flush_timer = undefined});
 handle_info(Info, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => info
@@ -529,20 +535,21 @@ handle_atomic(Ops, S = #s{log_size = LogSize}) ->
   Log = [?flush_begin(Marker) | Ops] ++ [?flush_end(Marker)],
   commit(Log, S).
 
-handle_write(#call_write{k = K, v = V, wal = true}, S) ->
-  commit([?w(K, V)], S);
-handle_write(#call_write{k = K, v = V, wal = false}, S = #s{ets = ETS, dirty = D}) ->
+handle_write(From, #call_write{k = K, v = V, wal = true}, S) ->
+  {noreply, add_to_buffer(From, ?w(K, V), S)};
+handle_write(_From, #call_write{k = K, v = V, wal = false}, S0 = #s{ets = ETS, dirty = D}) ->
   ets:insert(ETS, #classy_kv{k = K, v = V}),
+  S = S0#s{dirty = D#{K => true}},
   exec_on_update(?w(K, V), S),
-  S#s{ dirty = D#{K => true}
-     }.
+  {reply, ok, S}.
 
-handle_delete(#call_delete{k = K, wal = true}, S) ->
-  commit([?d(K)], S);
-handle_delete(#call_delete{k = K, wal = false}, S = #s{ets = ETS, dirty = D}) ->
+handle_delete(From, #call_delete{k = K, wal = true}, S) ->
+  {noreply, add_to_buffer(From, ?d(K), S)};
+handle_delete(_From, #call_delete{k = K, wal = false}, S0 = #s{ets = ETS, dirty = D}) ->
+  S = S0#s{dirty = D#{K => true}},
   ets:delete(ETS, K),
   exec_on_update(?d(K), S),
-  S#s{dirty = D#{K => true}}.
+  {reply, ok, S}.
 
 commit(Ops, S = #s{log = Log, log_size = LS}) ->
   ok = do_write_log(Log, Ops),
@@ -565,6 +572,25 @@ log_effects(?d(K), S = #s{ets = ETS, dirty = Dirty}) ->
   exec_on_update(?d(K), S),
   S#s{ dirty = maps:remove(K, Dirty)
      }.
+
+commit_buffered(S0 = #s{buffer = Buffer}) ->
+  %% TODO: add markers?
+  ToFlush = lists:foldl(
+              fun({_From, Op}, Acc) ->
+                  %% This combines reversal and filtering:
+                  [Op | Acc]
+              end,
+              [],
+              Buffer),
+  S1 = commit(ToFlush, S0#s{buffer = []}),
+  case maybe_compact(S1) of
+    {ok, S} ->
+      send_buffered_replies(Buffer, ok),
+      {noreply, S};
+    {error, Reason, S} ->
+      send_buffered_replies(Buffer, {error, Reason}),
+      {stop, Reason, S}
+  end.
 
 handle_flush(S = #s{log = Log, dirty = Dirty}) when Log =:= undefined;
                                                     map_size(Dirty) =:= 0 ->
@@ -672,11 +698,25 @@ dump_ets(Log, N, {Batch, Cont}) ->
     N + length(Recs),
     ets:match(Cont)).
 
-handle_clear(S = #s{ets = Ets, log = Log, log_size = LogSize}) ->
+add_to_buffer(From, Op, S = #s{buffer = Buf0, auto_flush_timer = Timer}) ->
+  Buf = [{From, Op} | Buf0],
+  S#s{ buffer = Buf
+     , auto_flush_timer = classy_lib:wakeup_after(?to_auto_flush, 0, Timer)
+     }.
+
+send_buffered_replies(Buffer, Reply) ->
+  [gen_server:reply(From, Reply) || {From, _} <- Buffer],
+  ok.
+
+handle_clear(S = #s{ets = Ets, log = Log, log_size = LogSize, buffer = Buffer}) ->
+  send_buffered_replies(Buffer, ok),
   ok = do_write_log(Log, [?clear]),
   exec_on_update_clear(S),
   ets:match_delete(Ets, '_'),
-  S#s{dirty = #{}, log_size = LogSize + 1}.
+  S#s{ dirty = #{}
+     , buffer = []
+     , log_size = LogSize + 1
+     }.
 
 handle_drop(From, S = #s{ets = Ets, log = Log}) ->
   exec_on_update_clear(S),
@@ -688,18 +728,22 @@ handle_drop(From, S = #s{ets = Ets, log = Log}) ->
   gen_server:reply(From, ok),
   undefined.
 
-maybe_compact(From, Reply, S0 = #s{badness_threshold = Threshold}) ->
-  case log_badness(S0) >= Threshold of
+with_compaction(From, Reply, S0) ->
+  case maybe_compact(S0) of
+    {ok, S} ->
+      {reply, Reply, S};
+    {error, Reason, S} ->
+      gen_server:reply(From, {error, Reason}),
+      {stop, Reason, S}
+  end.
+
+-spec maybe_compact(#s{}) -> {ok, #s{}} | {error, _Reason, #s{}}.
+maybe_compact(S = #s{badness_threshold = Threshold}) ->
+  case log_badness(S) >= Threshold of
     true ->
-      case do_compaction(S0) of
-        {ok, S} ->
-          {reply, Reply, S};
-        {error, Reason, S} ->
-          gen_server:reply(From, {error, Reason}),
-          {stop, Reason, S}
-      end;
+      do_compaction(S);
     false ->
-      {reply, Reply, S0}
+      {ok, S}
   end.
 
 log_badness(#s{ets = ETS, log_size = LogSize}) ->

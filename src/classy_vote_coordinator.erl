@@ -188,29 +188,6 @@ terminate(Reason, State, _Data) ->
 %% Internal functions
 %%================================================================================
 
-%% do_fold_votes('$end_of_table', _Fun, Acc) ->
-%%   Acc;
-%% do_fold_votes({Matches, Continuation}, Fun, Acc0) ->
-%%   Acc = lists:foldl(
-%%           fun(#classy_kv{k = #pk_p{id = ID}, v = Status}, Acc1) ->
-%%               Val = case Status of
-%%                       #pv_p_vote{vote = Vote} ->
-%%                         {voted, #{vote => Vote}};
-%%                       #pv_p_comm{actions = Actions} ->
-%%                         {committing, #{actions => Actions}};
-%%                       #pv_p_rollback{} ->
-%%                         {rollback, #{}}
-%%                     end,
-%%               Fun(ID, Val, Acc1)
-%%           end,
-%%           Acc0,
-%%           Matches),
-%%   do_fold_votes(ets:select(Continuation), Fun, Acc).
-
-%%--------------------------------------------------------------------------------
-%% Coordinator
-%%--------------------------------------------------------------------------------
-
 -spec init_new_coordinator(classy_vote:id(), map()) ->
         {ok, commit_stage(), d_coord()} | {error, _}.
 init_new_coordinator(ID, Options) ->
@@ -249,7 +226,7 @@ init_new_coordinator(ID, Options) ->
   %% should the coordinator fail or node restart during pre-vote.
   %% Perform a preliminary check:
   {all, Timeout} = Strategy,
-  Args = prepare_multi(participant_pre_vote, D),
+  Args = prepare_multi(pre_vote, D),
   PreVoteResults = classy_lib:multicall(Args, Timeout),
   ?tp(debug, ?classy_vote_pre_results,
       #{ id      => ID

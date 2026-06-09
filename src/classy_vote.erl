@@ -91,14 +91,6 @@
          , rollback  => mfargs()
          }.
 
--record(act,
-        { site_bit :: non_neg_integer()
-        , prepare  :: mfargs()
-        , commit   :: [mfargs()]
-        , rollback :: [mfargs()]
-        , reserved :: []
-        }).
-
 %% Warning: MFA's are persistently stored!
 -type options() ::
         #{ tag       := tag()

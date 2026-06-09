@@ -3,7 +3,6 @@
 %%--------------------------------------------------------------------
 -module(classy_vote_participant).
 
-
 -behavior(gen_statem).
 
 %% API:
@@ -13,7 +12,7 @@
 -export([]).
 
 %% internal exports:
--export([ participant_pre_vote/1
+-export([ pre_vote/1
         , receive_outcome/1
         , start_participant/1
         ]).
@@ -26,34 +25,34 @@
 %% Type declarations
 %%================================================================================
 
-%% Participant's persistent state key:
--record(pk_p,
-        { tag :: tag()
-        , id :: id() | '_'
-        }).
+-define(s_wait_outcome, 0).
+-define(s_commit, 1).
+-define(s_rollback, 2).
 
--record(init_participant,
-        { name :: #pk_p{}
-        , opts :: #prepare{}
-        }).
+-type stage() :: ?s_wait_outcome | ?s_commit | ?s_rollback.
 
--record(ps_p_vote_yes,
-        { reserved = []
+
+%% Persistent state key:
+-record(pk_ps,
+        { id :: classy_vote:id()
         }).
--record(ps_p_rollback,
-        { vote :: boolean()
+-record(ps_ps,
+        { stage :: stage()
+        , vote :: boolean()
+        , completed_actions :: non_neg_integer()
         , reserved = []
         }).
--record(ps_p_comm,
-        { completed_actions :: non_neg_integer()
-        , reserved = []
+%% Persistent data key:
+-record(pk_pd,
+        { tag :: classy_vote:tag()
+        , id :: classy_vote:id() | atom()
         }).
 
--type participant_state() :: #ps_p_vote_yes{} | #ps_p_rollback{} | #ps_p_comm{}.
+-record(d,
+        { prepare = #prepare{}
+        }).
 
-%%  Participant:
--record(d_part, {}).
--type d_part() :: #d_part{}.
+-type data() :: #d{}.
 
 %%================================================================================
 %% API functions
@@ -68,30 +67,32 @@
 %%================================================================================
 
 %% @private Coordinator -> Participant
--spec participant_pre_vote(#prepare{}) -> {ok, boolean()} | {error, _}.
-participant_pre_vote(Prepare) ->
+-spec pre_vote(#prepare{}) -> {ok, boolean()} | {error, _}.
+pre_vote(Prepare) ->
   do_prepare(Prepare, false).
 
 %% @private Coordinator -> Participant
--spec receive_outcome(classy_vote:outcome()) -> ok.
-receive_outcome(#c_outcome{id = Id, tag = Tag} = Outcome) ->
-  case db_get_options(false, Tag, Id) of
+-spec receive_outcome(classy_vote:outcome()) -> ack.
+receive_outcome(#c_outcome{id = ID, tag = Tag} = Outcome) ->
+  case get_prepare(Tag, ID) of
     {ok, _} ->
       %% Table contains record of the vote. It means the participant
-      %% flow is ongoing on the site.
+      %% flow is ongoing on the site. Intermediate state when table is
+      %% open but processes are not started yet are handled by the
+      %% coordinator retry.
       gen_statem:call(
-        ?via(?participant(#pk_p{id = Id, tag = Tag})),
+        ?via(?participant(ID)),
         Outcome);
     undefined ->
       %% Table doesn't contain any traces of the vote. Depending on the outcome, it means:
       %%
       %% Commit:
-      %% All commit actions finished (`ps_p_vote_yes' record has been deleted).
+      %% All commit actions finished and state was deleted
       %%
       %% Rollback:
       %% 1. Rollback action finished.
       %% 2. Node never received vote request. There's nothing to rollback.
-      ok
+      ack
   end.
 
 %%================================================================================
@@ -118,19 +119,6 @@ do_prepare(
     {ok, Vote}
   end.
 
-
--spec send_vote(classy:site(), id(), boolean()) -> ok | {error, _}.
-send_vote(Coordinator, Id, Vote) ->
-  maybe
-    {ok, Node} ?= classy_node:node_of_site(Coordinator, true),
-    {ok, From} ?= classy_node:the_site(),
-    Rec = #c_vote{ id = Id
-                 , from = From
-                 , vote = Vote
-                 },
-    erpc:call(Node, ?MODULE, receive_vote, [Rec])
-  end.
-
 verify_coordinator(Coordinator) ->
   case classy_node:node_of_site(Coordinator, true) of
     {ok, _} ->
@@ -139,28 +127,11 @@ verify_coordinator(Coordinator) ->
       {errror, coordinator_unreachable}
   end.
 
--spec db_set_participant_state(tag(), id(), participant_state()) -> ok.
-db_set_participant_state(Tag, Id, State) ->
-  classy_table:write(
-    ?ptab,
-    #pk_p{tag = Tag, id = Id},
-    State).
-
--spec db_get_participant_state(tag(), id()) -> {ok, participant_state()} | undefined.
-db_get_participant_state(Tag, Id) ->
-  case classy_table:lookup(?ptab, #pk_p{tag = Tag, id = Id}) of
-    [State] ->
-      {ok, State};
-    [] ->
-      undefined
-  end.
-
-
 %%--------------------------------------------------------------------------------
 %% Participant
 %%--------------------------------------------------------------------------------
 
-init_participant(#init_participant{name = Name, opts = Opts}) when is_record(Name, pk_p) ->
+init_participant(#init_participant{name = Name, opts = Opts}) ->
   #pk_p{tag = Tag, id = Id} = Name,
   case db_get_participant_state(Tag, Id) of
     {ok, State} ->
@@ -216,7 +187,7 @@ send_vote(Coordinator, Id, Vote) ->
                  , from = From
                  , vote = Vote
                  },
-    erpc:call(Node, ?MODULE, receive_vote, [Rec])
+    erpc:call(Node, classy_vote_coodinator, receive_vote, [Rec])
   end.
 
 -spec do_prepare(#prepare{}, boolean()) -> {ok, boolean()} | {error, _}.
@@ -237,4 +208,13 @@ do_prepare(
     Vote = apply(M, F, [ForReal | Args]),
     true ?= is_boolean(Vote) orelse {error, bad_result},
     {ok, Vote}
+  end.
+
+-spec get_prepare(classy_vote:tag(), classy_vote:id()) -> {ok, #prepare{}} | undefined.
+get_prepare(Tag, Id) ->
+  case classy_table:lookup(?ptab, #pk_pd{tag = Tag, id = Id}) of
+    [Prepare] when is_record(Prepare, prepare) ->
+      {ok, Prepare};
+    [] ->
+      undefined
   end.
