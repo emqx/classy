@@ -2,68 +2,23 @@
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
 
-%% @doc This module implements a variation of 2-phase commit.
-%%
-%% Note: vote is rather heavy operation.
-%% Do not use it when frequent coordination is needed.
-%%
-%% Each voting action uses the following following callbacks:
-%%
-%% <itemize>
-%% <li>
-%% <b>prepare</b>: Executed on the participant sites.
-%% Classy prepends an additional arugment indicating whether the prepare action can have side effects.
-%% Return value is a boolean indicating the participant's vote (`true' = `yes').
-%% </li>
-%%
-%% <li>
-%% <b>commit</b>: List of actions executed on the participant sites
-%% when the coordinator decides to go ahead with the commit.
-%% Classy doesn't add additional arguments.
-%% Return value is ignored.
-%%
-%% Un-executed actions are retried in case of node restart.
-%% </li>
-%%
-%% <li>
-%% <b>rollback</b>: Executed on the participant sites
-%% when the coordinator decides to abort the commit.
-%% Classy doesn't add additional arguments.
-%% Return value is ignored.
-%% This callback can be retried on node restart.
-%% </li>
-%%
-%% <li>
-%% <b>post_vote</b>: Executed on the coordinator.
-%% Classy prepends a boolean indicating result of the vote to the argument list.
-%% Return value is ignored.
-%% It's NOT guaranteed that all commit actions on the participants are finished by this time.
-%% This callback can be retried on node restart.
-%% </li>
-%% </itemize>
+%% @private
 -module(classy_vote_coordinator).
 
 -behavior(gen_statem).
 
 %% API:
--export([ create/1
+-export([ new/1
         ]).
 
 %% Behavior callbacks:
 -export([callback_mode/0, init/1, terminate/3, handle_event/4]).
 
 %% internal exports:
--export([ create_table/0
-        , start_link/1
+-export([ start_link/2
 
         , receive_vote/1
-        , receive_outcome/1
-
-        , do_nothing/1
-        , do_nothing/0
         ]).
-
--export_type([id/0]).
 
 -include_lib("snabbkaffe/include/trace.hrl").
 -include("classy.hrl").
@@ -77,53 +32,13 @@
 %% Type declarations
 %%================================================================================
 
--define(ptab, classy_vote_table).
-
--define(coordinator(ID), {n, l, {classy_vote_coordinator, ID}}).
--define(participant(ID), {n, l, {classy_vote_participant, ID}}).
--define(via(NAME), {via, gproc, NAME}).
-
--define(state_timeout, state_timeout).
-
--type mfargs() :: {module(), atom(), list()}.
-%% Lock tag associated with the operation.
-%% It allows business logic to quickly enumerate ongoing votes of certain kind.
--type tag() :: term().
-%% Unique ID of the vote.
--type id() :: classy_uid:cu_tuple().
-%% Arbitrary lock information that business logic can use to detect conflicts.
--type lock() :: term().
-
-%% Strategy used to decide when to commit
-%%
-%% `all': All participant must vote `true' within the timeout
--type strategy() :: {all, timeout()}.
-
--type actions() ::
-        #{ prepare   := mfargs()
-         , commit    := [mfargs()]
-         , rollback  => mfargs()
-         }.
-
 -record(act,
         { site_bit :: non_neg_integer()
-        , prepare  :: mfargs()
-        , commit   :: [mfargs()]
-        , rollback :: [mfargs()]
-        , reserved :: []
+        , prepare  :: classy_vote:mfargs()
+        , commit   :: [classy_vote:mfargs()]
+        , rollback :: [classy_vote:mfargs()]
+        , reserved = []
         }).
-
-%% Warning: MFA's are persistently stored!
--type options() ::
-        #{ tag       := tag()
-         , actions   := #{classy:site() => actions()}
-         , post_vote => mfargs()
-         , strategy  => strategy()
-         , lock      => lock()
-         }.
-
--type vote() :: #c_vote{}.
--type outcome() :: #c_outcome{}.
 
 -define(s_vote, 0).
 -define(s_commit, 10).
@@ -131,154 +46,76 @@
 -define(s_done, 30).
 -type commit_stage() :: ?s_vote | ?s_commit | ?s_rollback | ?s_done.
 
-%% Persistent states:
+-type remaining() :: non_neg_integer().
+
+%% Persistent state:
 %%   Keys:
-%%     Common:
--record(pk,
-        { is_coordinator :: boolean()
-        , tag :: tag()
-        , id :: id() | '_'
+%%     Data key (opts):
+-record(pk_cd,
+        { tag :: classy_vote:tag()
+        , id :: classy_vote:id() | '_'
         }).
-%%     Coordinator:
-%%         Coordinator's own state:
--record(pk_c,
-        { id :: id() | '_'
+%%     State key (stage + remaining replies):
+-record(pk_cs,
+        { id :: classy_vote:id() | '_'
         }).
-%%   Values:
-%%     Common:
--record(ps,
-        { lock :: lock()
-        , options :: options() | #prepare{}
-        , reserved = []
-        }).
-%%     Coordinator:
+%% Coordinator dynamic state:
 -record(ps_c,
         { stage :: commit_stage()
           %% Bit field where 1s represent sites have to ack commit or rollback.
           %% Bit position is determined by `n' field of `action()'
           %% (set automatically).
-        , remaining :: non_neg_integer()
+        , remaining :: remaining()
         , reserved = []
         }).
 
-%% FSM states:
-%%  Coordinator:
--record(d_coord,
-        { tag  :: tag()
-        , lock :: lock()
-        , id   :: id()
-        , strategy :: strategy()
-        , actions :: [#act{}]
-        , post_vote :: [mfargs()]
+%% This data is stored persistently:
+-record(opts,
+        { tag           :: classy_vote:tag()
+        , lock          :: classy_vote:lock()
+        , id            :: classy_vote:id()
+        , strategy      :: classy_vote:strategy()
+        , actions       :: #{classy:site() => #act{}}
+        , post_vote     :: [classy_vote:mfargs()]
+        , start_time    :: integer()
         , reserved = []
+        }).
+-record(d_coord,
+        { opts :: #opts{}
+        , remaining :: remaining()
         }).
 -type d_coord() :: #d_coord{}.
-
-%% Init args:
--record(init_coordinator,
-        { id   :: classy_uid:cu_tuple()
-        , tag  :: tag()
-        , opts :: options()
-        }).
--type init_args() :: #init_coordinator{}.
 
 %%================================================================================
 %% API functions
 %%================================================================================
 
-%% %% @doc List ongoing commit actions.
-%% %%
-%% %% Argument: match specification for the tag.
-%% -spec ls_votes(_TagMatch) -> #{id() => vote_info()}.
-%% ls_votes(TagMatch) ->
-%%   fold_votes(
-%%     TagMatch,
-%%     fun(ID, Action, Acc) -> Acc#{ID => Action} end).
-
-%% @doc Fold over ongoing commit actions.
-%%
-%% Argument: match specification for the tag.
-%% -spec fold_votes(_TagMatch, fun((id(), vote_info(), Acc) -> Acc)) -> Acc.
-%% fold_votes(TagMatch, Fun) ->
-%%   BatchSize = 100,
-%%   MS = { #classy_kv{k = #pk_p{tag = TagMatch, _ = '_'}, _ = '_'}
-%%        , []
-%%        , ['$_']
-%%        },
-%%   do_fold_votes(ets:select(?ptab, [MS], BatchSize), Fun, #{}).
-
-%% @doc Initiate a new vote.
-%%
-%% Note: This function returns immediately.
--spec create(options()) -> ok | {error, _}.
-create(UserOptions) ->
-  maybe
-    {ok, Tag, Options} ?= with_defaults(UserOptions),
-    ID = classy_uid:cluster_unique_seq_tuple(classy_vote_sequence),
-    {ok, _} ?= classy_sup:ensure_vote(
-                 #init_coordinator{ id   = ID
-                                  , tag  = Tag
-                                  , opts = Options
-                                  }),
-    ok
-  end.
+-spec new(classy_vote:options()) -> {ok, pid()} | {error, _}.
+new(Options) ->
+  classy_sup:ensure_vote_coordinator([true, Options]).
 
 %%================================================================================
 %% Internal exports
 %%================================================================================
 
 %% @private
-do_nothing() ->
-  ok.
-
-do_nothing(_) ->
-  ok.
-
-%% @private
--spec create_table() -> ok.
-create_table() ->
-  classy_table:open(
-    ?ptab,
-    #{ ets_options => [ordered_set, {read_concurrency, true}]
-     }).
-
-%% @private
--spec start_link(init_args()) -> gen_statem:start_ret().
-start_link(#init_coordinator{id = ID} = Arg) ->
+-spec start_link(true, map()) -> gen_statem:start_ret();
+                (false, #d_coord{}) -> gen_statem:start_ret().
+start_link(true, Options) ->
+  %% Create a new vote:
+  ID = classy_uid:cluster_unique_seq_tuple(classy_vote_sequence),
   gen_statem:start_link(
-    ?via(?coordinator(#pk_c{id = ID})),
+    ?via(?coordinator(#pk_cs{id = ID})),
     ?MODULE,
-    Arg,
+    [true, ID, Options],
     []).
 
 %% @private Coordinator <- Participant
--spec receive_vote(vote()) -> ok | {error, _}.
+-spec receive_vote(classy_vote:vote()) -> ok | {error, _}.
 receive_vote(#c_vote{id = Id} = Vote) ->
   gen_statem:call(
-    ?via(?coordinator(#pk_c{id = Id})),
+    ?via(?coordinator(#pk_cs{id = Id})),
     Vote).
-
-%% @private Coordinator -> Participant
--spec receive_outcome(outcome()) -> ok.
-receive_outcome(#c_outcome{id = Id, tag = Tag} = Outcome) ->
-  case db_get_options(false, Tag, Id) of
-    {ok, _} ->
-      %% Table contains record of the vote. It means the participant
-      %% flow is ongoing on the site.
-      gen_statem:call(
-        ?via(?participant(#pk_p{id = Id, tag = Tag})),
-        Outcome);
-    undefined ->
-      %% Table doesn't contain any traces of the vote. Depending on the outcome, it means:
-      %%
-      %% Commit:
-      %% All commit actions finished (`ps_p_vote_yes' record has been deleted).
-      %%
-      %% Rollback:
-      %% 1. Rollback action finished.
-      %% 2. Node never received vote request. There's nothing to rollback.
-      ok
-  end.
 
 %%================================================================================
 %% behavior callbacks
@@ -289,21 +126,18 @@ callback_mode() ->
   [handle_event_function, state_enter].
 
 %% @private
-init(InitOpts) ->
+init([true, ID, Options]) ->
   process_flag(trap_exit, true),
-  case InitOpts of
-    #init_coordinator{} -> init_coordinator(InitOpts);
-    #init_participant{} -> init_participant(InitOpts)
-  end.
+  init_new_coordinator(ID, Options).
 
 %% @private
 %% Coodinator:
-handle_event(enter, OldState, #ps_c{} = S, D) ->
-  coordinator_enter(OldState, S, D);
-handle_event(call, #c_vote{from = From, vote = Vote}, #ps_c{} = S, D) ->
-  coordinator_handle_vote(From, Vote, S, D);
-handle_event(state_timeout, ?state_timeout, #ps_c{} = S, D) ->
-  coordinator_state_timeout(S, D);
+handle_event(enter, OldStage, Stage, D) ->
+  enter(OldStage, Stage, D);
+handle_event(call, #c_vote{from = From, vote = Vote}, Stage, D) ->
+  handle_vote(From, Vote, Stage, D);
+handle_event(state_timeout, ?state_timeout, Stage, D) ->
+  state_timeout(Stage, D);
 %% Common:
 handle_event(info, {'EXIT', _, Reason}, _, _) ->
   case Reason of
@@ -329,7 +163,7 @@ terminate(Reason, State, _Data) ->
          , reason => Reason
          , state  => State
          }),
-    ok.
+  ok.
 
 %%================================================================================
 %% Internal functions
@@ -358,103 +192,95 @@ terminate(Reason, State, _Data) ->
 %% Coordinator
 %%--------------------------------------------------------------------------------
 
--spec init_coordinator(#init_coordinator{}) -> {next_state, #ps_c{}, d_coord()} | {error, _}.
-init_coordinator(#init_coordinator{tag = Tag, id = Id, opts = Opts}) ->
-  #{ lock := Lock
+-spec init_new_coordinator(classy_vote:id(), map()) ->
+        {ok, commit_stage(), d_coord()} | {error, _}.
+init_new_coordinator(ID, Options) ->
+  #{ tag := Tag
+   , actions := Actions0
    , strategy := Strategy
-   , actions := Actions
    , post_vote := PostVote
-   } = Opts,
-  D = #d_coord{ tag = Tag
+   , lock := Lock
+   } = Options,
+  Actions = maps:fold(
+              fun(Site, Action, {SiteBitAcc, Acc}) ->
+                  #{prepare := Prep, commit := Comm, rollback := Rollback} = Action,
+                  Rec = #act{ site_bit = SiteBitAcc
+                            , prepare = Prep
+                            , commit = Comm
+                            , rollback = Rollback
+                            },
+                  {SiteBitAcc + 1, Acc#{Site => Rec}}
+              end,
+              {0, #{}},
+              Actions0),
+  Opts = #opts{ tag = Tag
               , lock = Lock
-              , id = Id
+              , id = ID
               , strategy = Strategy
               , post_vote = PostVote
-              ,
+              , actions = Actions
+              , start_time = os:system_time(millisecond)
               },
-  case db_get_coord_state(Id) of
-    undefined ->
-      %% This is a new election.
-      %% Perform a pre-vote immediately,
-      %% and return pre-vote result to the requester synchronously.
-      %% This way the fail path doesn't need to write anything on disk,
-      %% as the caller is blocked before it makes any changes that should be rolled back,
-      %% should the coordinator fail or node restart during pre-vote.
-      coordinator_pre_vote(D);
-    {ok, Restored = #ps_c{stage = Stage0}} ->
-      %% Coordinator restarted:
-      Stage = case Stage0 of
-                ?s_vote ->
-                  %% If coordinator itself restarts during voting stage,
-                  %% it considers election failed,
-                  %% and all votes are ignored.
-                  ?s_rollback;
-                _ ->
-                  Stage0
-              end,
-      {next_state, Restored#ps_c{stage = Stage}, D}
-  end.
-
--spec coordinator_pre_vote(d_coord()) -> {ok, #ps_c{}, d_coord()} | {error, false}.
-coordinator_pre_vote(#d_coord{id = Id, opts = Opts} = D) ->
+  D = #d_coord{opts = Opts, remaining = 0},
+  %% This is a new election.
+  %% Perform a pre-vote immediately,
+  %% and return pre-vote result to the requester synchronously.
+  %% This way the fail path doesn't need to write anything on disk,
+  %% as the caller is blocked before it makes any changes that should be rolled back,
+  %% should the coordinator fail or node restart during pre-vote.
   %% Perform a preliminary check:
-  #{strategy := Strategy = {all, Timeout}} = Opts,
-  Args = prepare_multi(participant_pre_vote, Id, Opts),
-  Results = classy_lib:multicall(Args, Timeout),
+  {all, Timeout} = Strategy,
+  Args = prepare_multi(participant_pre_vote, D),
+  PreVoteResults = classy_lib:multicall(Args, Timeout),
   ?tp(debug, ?classy_vote_pre_results,
-      Opts#{ id => Id
-           , results => Results
-           }),
-  case decide_pre_vote_result(Strategy, maps:iterator(Results)) of
+      #{ id      => ID
+       , tag     => Tag
+       , lock    => Lock
+       , results => PreVoteResults
+       }),
+  case decide_pre_vote_result(Strategy, maps:iterator(PreVoteResults)) of
     true ->
       %% Now persist options (todo: do it atomically with creating the state?):
-      ok = db_set_options(true, Id, Opts),
-      { ok
-      , #ps_c{ stage = ?s_vote
-             , remaining = ones(maps:size(Results))
-             }
-      , D
-      };
+      Remaining = ones(n_participants(D)),
+      ok = db_establish(?s_vote, Remaining, D),
+      {ok, ?s_vote, D#d_coord{remaining = Remaining}};
     false ->
       {error, false}
   end.
 
--spec coordinator_enter(#ps_c{}, #ps_c{}, d_coord()) ->
+-spec enter(commit_stage(), commit_stage(), d_coord()) ->
         {keep_state_and_data, gen_statem:action()} |
         {keep_state, d_coord(), gen_statem:action()}.
-coordinator_enter(#ps_c{stage = Stage}, #ps_c{stage = Stage}, _D) ->
-  keep_state_and_data;
-coordinator_enter(#ps_c{stage = OldStage}, #ps_c{stage = Stage} = State, #d_coord{id = Id} = D) ->
-  ok = db_set_coord_state(Id, State),
-  ?tp(debug, ?classy_vote_coord_stage, #{id => Id, to => Stage, from => OldStage}),
+enter(OldStage, Stage, D) ->
+  #d_coord{opts = #opts{id = ID}} = D,
+  ?tp(debug, ?classy_vote_coord_stage, #{id => ID, to => Stage, from => OldStage}),
   case Stage of
     ?s_vote ->
-      coordinator_perform_vote(D);
-    ?s_commit ->
-      {keep_state_and_data, {state_timeout, 0, ?state_timeout}};
-    ?s_rollback ->
-      {keep_state_and_data, {state_timeout, 0, ?state_timeout}}
+      perform_vote(D);
+    _ when Stage =:= ?s_commit; Stage =:= ?s_rollback ->
+      Remaining = ones(n_participants(D)),
+      db_set_coord_state(Stage, Remaining, D),
+      {keep_state, D#d_coord{remaining = Remaining}, mk_timeout(0)}
   end.
 
--spec coordinator_perform_vote(d_coord()) -> {keep_state, d_coord(), [gen_statem:action()]}.
-coordinator_perform_vote(#d_coord{id = Id, opts = Options} = D0) ->
-  #{ actions := Actions
-   , strategy := {all, Timeout}
-   } = Options,
-  Args = prepare_multi(start_participant, Id, Options),
+-spec perform_vote(d_coord()) -> {keep_state_and_data, gen_statem:action()}.
+perform_vote(D = #d_coord{opts = Opts}) ->
+  #opts{strategy = Strategy} = Opts,
+  {all, Timeout} = Strategy,
+  Args = prepare_multi(start_participant, D),
   _ = classy_lib:multicall(Args, Timeout),
-  D = D0#d_coord{},
-  {keep_state, D, [{state_timeout, ?state_timeout, Timeout}]}.
+  {keep_state_and_data, mk_timeout(Timeout)}.
 
--spec coordinator_handle_vote(classy:site(), boolean(), #ps_c{}, d_coord()) ->
+-spec handle_vote(classy:site(), boolean(), #ps_c{}, d_coord()) ->
         {next_state, #ps_c{}, d_coord()} |
         {keep_state, d_coord()}.
-coordinator_handle_vote(
+handle_vote(
   From,
   Vote,
-  #ps_c{stage = Stage, remaining = Rem0} = S0,
-  #d_coord{id = Id} = D
+  Stage,
+  #d_coord{opts = Opts, remaining = Rem0} = D0
  ) ->
+  #opts{id = Id} = Opts,
   ?tp(debug, ?classy_vote_coord_recv,
       #{ id => Id
        , from => From
@@ -463,7 +289,7 @@ coordinator_handle_vote(
        }),
   %% FIXME:
   SiteNr = 0,
-  NParticipants = n_participants(D),
+  NParticipants = n_participants(D0),
   Rem = unset_bit(SiteNr, Rem0),
   case Stage of
     ?s_vote ->
@@ -471,77 +297,115 @@ coordinator_handle_vote(
         true ->
           case Rem of
             0 ->
-              {next_state, S0#ps_c{stage = ?s_commit, remaining = ones(NParticipants)}, D};
+              D = db_set_coord_state(?s_commit, ones(NParticipants), D0),
+              {next_state, ?s_commit, D};
             _ ->
-              {next_state, S0#ps_c{remaining = Rem}, D}
+              D = db_set_coord_state(?s_vote, ones(NParticipants), D0),
+              {keep_state, D}
           end;
         false ->
-          {next_state, #ps_c{stage = ?s_rollback, remaining = ones(NParticipants)}, D}
+          D = db_set_coord_state(?s_rollback, ones(NParticipants), D0),
+          {next_state, ?s_rollback, D}
       end;
     _ ->
       %% Late vote; irrelevant
-      {keep_state, D}
+      {keep_state, D0}
   end.
 
--spec coordinator_state_timeout(#ps_c{}, d_coord()) ->
-        {next_state, #ps_c{}, d_coord()} |
+-spec state_timeout(commit_stage(), d_coord()) ->
+        {next_state, commit_stage(), d_coord()} |
         {keep_state, d_coord(), gen_statem:action()}.
-coordinator_state_timeout(#ps_c{stage = ?s_vote}, D) ->
+state_timeout(?s_vote, D0) ->
   %% Vote timed out, move to rollback:
-  { next_state
-  , #ps_c{stage = ?s_rollback, remaining = ones(n_participants(D))}
-  , D
-  };
-coordinator_state_timeout(#ps_c{stage = ?s_commit, remaining = Remaining}, D) ->
-  coordinator_perform_commit(Remaining, D);
-coordinator_state_timeout(#ps_c{stage = ?s_rollback}, D) ->
-  coordinator_perform_rollback(D).
-
-coordinator_perform_commit(Remaining, D = #d_coord{}) ->
-  %% case coordinator_broadcast_outcome(D, true) of
-  %%   ok ->
-  {keep_state_and_data, []}.
-
-coordinator_perform_rollback(_) ->
-  {keep_state_and_data, []}.
-
--spec coordinator_broadcast_outcome(d_coord(), boolean()) -> ok | {error, [classy:site()]}.
-coordinator_broadcast_outcome(#d_coord{tag = Tag, id = Id, opts = Opts}, IsCommit) ->
-  #{actions := Actions} = Opts,
-  Outcome = #c_outcome{ id = Id
-                      , tag = Tag
-                      , result = IsCommit
-                      },
-  Args = #{Site => {?MODULE, receive_outcome, [Outcome]} || Site := _ <- Actions},
-  Results = classy_lib:multicall(Args, classy_lib:rpc_timeout()),
-  BadSites = maps:fold(
-               fun(Site, Result, Acc) ->
-                   case Result of
-                     {ok, ok} -> Acc;
-                     _ -> [Site | Acc]
-                   end
-               end,
-               [],
-               Results),
-  case BadSites of
-    [] ->
-      ok;
-    _ ->
-      {error, BadSites}
+  D = db_set_coord_state(?s_rollback, ones(n_participants(D0)), D0),
+  {next_state, ?s_rollback, D};
+state_timeout(Stage, D0) ->
+  Outcome = case Stage of
+              ?s_commit -> true;
+              ?s_rollback -> false
+            end,
+  Remaining = broadcast_outcome(Outcome, D0),
+  D = db_set_coord_state(?s_commit, Remaining, D0),
+  case Remaining > 0 of
+    true ->
+      {keep_state, D, mk_timeout(classy_vote:retry_interval())};
+    false ->
+      perform_post_commit(Outcome, D)
   end.
 
--spec prepare_multi(atom(), id(), options()) -> map().
-prepare_multi(Function, Id, Options) ->
-  #{ actions := Actions
-   } = Options,
-  #{Site => {?MODULE, Function, [prepare(Id, Options, Act)]} ||
-    Site := Act <- Actions}.
+-spec perform_post_commit(boolean(), d_coord()) -> {stop, normal}.
+perform_post_commit(Outcome, D = #d_coord{opts = Opts}) ->
+  #opts{post_vote = PostActions} = Opts,
+  lists:foreach(
+    fun({M, F, Args}) ->
+        try apply(M, F, [Outcome | Args])
+        catch
+          EC:Err:Stack ->
+            ?tp(error, classy_vote_post_vote_callback_error,
+                #{ EC => Err
+                 , mfa => {M, F, length(Args) + 1}
+                 , stack => Stack
+                 })
+        end
+    end,
+    PostActions),
+  ok = db_teardown(D),
+  {stop, normal}.
 
--spec prepare(id(), options(), actions()) -> #prepare{}.
+broadcast_outcome(Result, #d_coord{remaining = Remaining0, opts = Options}) ->
+  #opts{id = Id, tag = Tag, actions = Acts} = Options,
+  Sites = classy:sites(),
+  Call = {classy_vote_participant, receive_outcome,
+          [ #c_outcome{ id = Id
+                      , tag = Tag
+                      , result = Result
+                      }
+          ]},
+  %% Collect target sites:
+  {Remaining, Multicall} =
+    maps:fold(
+      fun(Site, #act{site_bit = Bit}, {Remaining1, Acc}) ->
+          case is_bit_set(Bit, Remaining1) andalso lists:member(Site, Sites) of
+            false ->
+              %% Either we've already collected reply from the site,
+              %% or the site got kicked:
+              {unset_bit(Bit, Remaining1), Acc};
+            true ->
+              %% Site needs reply:
+              {Remaining1, Acc#{{Site, Bit} => Call}}
+            end
+      end,
+      {Remaining0, #{}},
+      Acts),
+  %% Broadcast:
+  Results = classy_lib:multicall(Multicall, classy_lib:rpc_timeout()),
+  ?tp(debug, classy_vote_broadcast_outcome,
+      #{ id => Id
+       , tag => Tag
+       , result => Results
+       }),
+  %% Remove sites that acked the result:
+  maps:fold(
+    fun({_Site, Bit}, Reply, Remaining3) ->
+        case Reply of
+          {ok, ack} ->
+            unset_bit(Bit, Remaining3);
+          _ ->
+            Remaining3
+        end
+    end,
+    Remaining,
+    Results).
+
+-spec prepare_multi(atom(), d_coord()) -> map().
+prepare_multi(Function, D = #d_coord{opts = #opts{actions = Acts}}) ->
+  #{Site => {classy_vote_participant, Function, [prepare(D, Act)]} ||
+    Site := Act <- Acts}.
+
+-spec prepare(d_coord(), #act{}) -> #prepare{}.
 prepare(
-  Id,
-  #{tag := Tag, lock := Lock},
-  #{prepare := Prep, commit := Commit, rollback := Rollback}
+  #d_coord{opts = #opts{id = Id, tag = Tag, lock = Lock}},
+  #act{prepare = Prep, commit = Commit, rollback = Rollback}
  ) ->
   {ok, Self} = classy_node:the_site(),
   #prepare{ id = Id
@@ -553,7 +417,7 @@ prepare(
           , coordinator = Self
           }.
 
--spec decide_pre_vote_result(strategy(), maps:iterator()) -> boolean().
+-spec decide_pre_vote_result(classy_vote:strategy(), maps:iterator()) -> boolean().
 decide_pre_vote_result(Strategy, Iter0) ->
   {all, _} = Strategy,
   case maps:next(Iter0) of
@@ -569,264 +433,51 @@ decide_pre_vote_result(Strategy, Iter0) ->
   end.
 
 %%--------------------------------------------------------------------------------
-%% Participant
-%%--------------------------------------------------------------------------------
-
-init_participant(#init_participant{name = Name, opts = Opts}) when is_record(Name, pk_p) ->
-  #pk_p{tag = Tag, id = Id} = Name,
-  case db_get_participant_state(Tag, Id) of
-    {ok, State} ->
-      {ok, State, #d_part{}};
-    undefined ->
-      ok = db_set_options(false, Id, Opts),
-      {next_state, State, D} = participant_prepare(Opts, #d_part{}),
-      {ok, State, D}
-  end.
-
--spec participant_prepare(#prepare{}, d_part()) -> {next_state, participant_state(), d_part()}.
-participant_prepare(
-  #prepare{ id = Id
-          , tag = Tag
-          , coordinator = Coordiantor
-          , lock = Lock
-          } = Prepare,
-   Data
- ) ->
-  Outcome =
-    case do_prepare(Prepare, true) of
-      {ok, true} ->
-        State = #ps_p_vote_yes{},
-        ok = db_set_participant_state(Tag, Id, State),
-        true;
-      No ->
-        case No of
-          {ok, false} ->
-            ok;
-          _ ->
-            ?tp(warning, classy_vote_error,
-                #{ id => Id
-                 , tag => Tag
-                 , lock => Lock
-                 , role => participant
-                 , stage => vote
-                 , reason => No
-                 })
-        end,
-        State = #ps_p_rollback{vote = false},
-        ok = db_set_participant_state(Id, Tag, State),
-        false
-    end,
-  send_vote(Coordiantor, Id, Outcome),
-  {next_state, State, Data}.
-
--spec send_vote(classy:site(), id(), boolean()) -> ok | {error, _}.
-send_vote(Coordinator, Id, Vote) ->
-  maybe
-    {ok, Node} ?= classy_node:node_of_site(Coordinator, true),
-    {ok, From} ?= classy_node:the_site(),
-    Rec = #c_vote{ id = Id
-                 , from = From
-                 , vote = Vote
-                 },
-    erpc:call(Node, ?MODULE, receive_vote, [Rec])
-  end.
-
--spec do_prepare(#prepare{}, boolean()) -> {ok, boolean()} | {error, _}.
-do_prepare(
-  #prepare{ prepare     = Prep
-          , commit      = Commit
-          , rollback    = Rollback
-          , coordinator = Coordinator
-          },
-  ForReal
- ) ->
-  maybe
-    ok ?= verify_prepare(Prep),
-    ok ?= verify_commit(Commit),
-    ok ?= verify_rollback(Rollback),
-    ok ?= verify_coordinator(Coordinator),
-    {M, F, Args} = Prep,
-    Vote = apply(M, F, [ForReal | Args]),
-    true ?= is_boolean(Vote) orelse {error, bad_result},
-    {ok, Vote}
-  end.
-
-%%--------------------------------------------------------------------------------
 %% Database access
 %%--------------------------------------------------------------------------------
 
--spec db_set_coord_state(id(), #ps_c{}) -> ok.
-db_set_coord_state(Id, State) when is_record(State, ps_c) ->
-  classy_table:write(?ptab, #pk_c{id = Id}, State).
-
--spec db_get_coord_state(id()) -> {ok, #ps_c{}} | undefined.
+-spec db_get_coord_state(classy_vote:id()) -> {ok, #ps_c{}} | undefined.
 db_get_coord_state(Id) ->
-  case classy_table:lookup(?ptab, #pk_c{id = Id}) of
+  case classy_table:lookup(?ptab, #pk_cs{id = Id}) of
     [#ps_c{} = State] ->
       {ok, State};
     [] ->
       undefined
   end.
 
--spec db_set_participant_state(tag(), id(), participant_state()) -> ok.
-db_set_participant_state(Tag, Id, State) ->
-  classy_table:write(
-    ?ptab,
-    #pk_p{tag = Tag, id = Id},
-    State).
-
--spec db_get_participant_state(tag(), id()) -> {ok, participant_state()} | undefined.
-db_get_participant_state(Tag, Id) ->
-  case classy_table:lookup(?ptab, #pk_p{tag = Tag, id = Id}) of
-    [State] ->
-      {ok, State};
-    [] ->
-      undefined
-  end.
-
--spec db_set_options(true, id(), options()) -> ok;
-                    (false, id(), #prepare{}) -> ok.
-db_set_options(IsCoordinator, VoteId, Options) ->
-  case IsCoordinator of
-    true ->
-      #{tag := Tag, lock := Lock} = Options;
-    false ->
-      #prepare{tag = Tag, lock = Lock} = Options
-  end,
-  classy_table:write(
-    ?ptab,
-    #pk{is_coordinator = IsCoordinator, tag = Tag, id = VoteId},
-    #ps{lock = Lock, options = Options}).
-
--spec db_get_options(boolean(), tag(), id()) -> {ok, options()} | undefined.
-db_get_options(IsCoordinator, Tag, VoteId) ->
-  case classy_table:lookup(
+-spec db_set_coord_state(commit_stage(), remaining(), #d_coord{}) -> #d_coord{}.
+db_set_coord_state(Stage, Remaining, D = #d_coord{opts = Opts}) ->
+  #opts{id = Id} = Opts,
+  ok = classy_table:write(
          ?ptab,
-         #pk{is_coordinator = IsCoordinator, tag = Tag, id = VoteId}) of
-    [#ps{options = Options}] ->
-      {ok, Options};
-    [] ->
-      %% Note this could race with table restoration
-      undefined
-  end.
+         #pk_cs{id = Id},
+         #ps_c{stage = Stage, remaining = Remaining}),
+  D#d_coord{remaining = Remaining}.
 
-%%--------------------------------------------------------------------------------
-%% Input validation
-%%--------------------------------------------------------------------------------
+%% Write information about the vote to the DB atomically.
+-spec db_establish(commit_stage(), remaining(), #d_coord{}) -> ok.
+db_establish(Stage, Remaining, #d_coord{opts = Opts}) ->
+  #opts{tag = Tag, id = Id} = Opts,
+  StateKey = #pk_cs{id = Id},
+  StaticDataKey = #pk_cd{tag = Tag, id = Id},
+  {ok, _} = classy_table:atomically(
+              ?ptab,
+              [ {w, StateKey, #ps_c{stage = Stage, remaining = Remaining}}
+              , {w, StaticDataKey, Opts}
+              ]),
+  ok.
 
--spec with_defaults(options()) -> {ok, tag(), options()} | {error, _}.
-with_defaults(UserOpts) when is_map(UserOpts) ->
-  Defaults = #{ post_vote => {?MODULE, do_nothing, []}
-              , strategy  => {all, classy_lib:rpc_timeout()}
-              , lock      => []
-              },
-  Merged = maps:merge(Defaults, UserOpts),
-  case Merged of
-    #{ tag       := Tag
-     , post_vote := PostVote
-     , actions   := Actions0
-     , strategy  := Strategy0
-     , lock      := _
-     } ->
-      maybe
-        ok ?= verify_post_vote(PostVote),
-        {ok, Actions} ?= verify_actions(Actions0),
-        {ok, Strategy} ?= verify_strategy(Strategy0),
-        {ok, Tag, Merged#{ actions  := Actions
-                         , strategy := Strategy
-                         }}
-      end;
-    _ ->
-      {error, badarg}
-  end.
-
-verify_post_vote(undefined) ->
-  ok;
-verify_post_vote(MFA) ->
-  verify_mfa(bad_post_vote, 1, MFA).
-
-verify_strategy(all) ->
-  {ok, {all, classy_lib:rpc_timeout()}};
-verify_strategy({all, Timeout}) when is_integer(Timeout), Timeout > 0 ->
-  {ok, {all, Timeout}};
-verify_strategy(Strategy) ->
-  {error, {bad_strategy, Strategy}}.
-
-verify_actions(Actions0) when is_map(Actions0) ->
-  try
-    maps:size(Actions0) =:= 0 andalso throw({error, no_actions}),
-    {Actions, _} = maps:fold(fun enrich_action/3, {#{}, 0}, Actions0),
-    {ok, Actions}
-  catch
-    Err -> Err
-  end;
-verify_actions(Bad) ->
-  {error, {bad_actions, Bad}}.
-
-enrich_action(Site, {Acc, SiteNr}, SiteActions) when is_binary(Site), is_map(SiteActions) ->
-  ActionDefaults = #{rollback => []},
-  case maps:merge(ActionDefaults, SiteActions) of
-    #{prepare := Prep, commit := Commit, rollback := Rollback} = Result ->
-      maybe
-        ok ?= verify_prepare(Prep),
-        ok ?= verify_commit(Commit),
-        ok ?= verify_rollback(Rollback),
-        { Acc#{Site => Result#{n => SiteNr}}
-        , SiteNr + 1
-        }
-      else
-        Err -> throw(Err)
-      end;
-    _ ->
-      throw({error, {bad_action, Site, SiteActions}})
-  end;
-enrich_action(BadSite, _, BadAction) ->
-  throw({error, {bad_action, BadSite, BadAction}}).
-
-verify_prepare(Prepare) ->
-  verify_mfa(bad_prepare, 0, Prepare).
-
-verify_commit(Commit) ->
-  verify_mfas(bad_commit, Commit).
-
-verify_rollback(Rollback) ->
-  verify_mfas(bad_rollback, Rollback).
-
-verify_coordinator(Coordinator) ->
-  case classy_node:node_of_site(Coordinator, true) of
-    {ok, _} ->
-      ok;
-    _ ->
-      {errror, coordinator_unreachable}
-  end.
-
-verify_mfas(Reason, Commits) when is_list(Commits) ->
-  try
-    [case verify_mfa(Reason, 0, I) of
-       ok ->
-         ok;
-       Err ->
-         throw(Err)
-     end || I <- Commits],
-    ok
-  catch
-    Err -> Err
-  end;
-verify_mfas(Reason, Other) ->
-  {error, {Reason, Other}}.
-
--spec verify_mfa(atom(), non_neg_integer(), term()) -> ok | {error, {atom(), term()}}.
-verify_mfa(Subject, NExtraArgs, {M, F, Args}) when is_atom(M),
-                                                   is_atom(F),
-                                                   is_list(Args) ->
-  NArgs = length(Args) + NExtraArgs,
-  Err = {error, {Subject, {M, F, NArgs}}},
-  case erlang:function_exported(M, F, NArgs) of
-    true  -> ok;
-    false -> Err
-  end;
-verify_mfa(Subject, _, Other) ->
-  {error, {Subject, Other}}.
+%% Atomically delete information about the vote from the DB.
+-spec db_teardown(d_coord()) -> ok.
+db_teardown(#d_coord{opts = #opts{id = Id, tag = Tag}}) ->
+  StateKey = #pk_cs{id = Id},
+  StaticDataKey = #pk_cd{tag = Tag, id = Id},
+  {ok, _} = classy_table:atomically(
+              ?ptab,
+              [ {d, StateKey}
+              , {d, StaticDataKey}
+              ]),
+  ok.
 
 -spec ones(pos_integer()) -> pos_integer().
 ones(N) ->
@@ -840,10 +491,12 @@ unset_bit(Bit, Bitfield) ->
 is_bit_set(Bit, Bitfield) ->
   (Bitfield band (1 bsl Bit)) > 0.
 
--spec n_participants(#d_coord{}) -> ok.
-n_participants(D) ->
-  %% FIXME:
-  0.
+-spec n_participants(d_coord()) -> pos_integer().
+n_participants(#d_coord{opts = Opts}) ->
+  maps:size(Opts#opts.actions).
+
+mk_timeout(N) ->
+  {state_timeout, N, ?state_timeout}.
 
 -ifdef(TEST).
 
@@ -865,5 +518,11 @@ unset_bit_test() ->
   ?assertEqual(2#11011, unset_bit(2, N2)),
   ?assertEqual(2#10111, unset_bit(3, N2)),
   ?assertEqual(2#01111, unset_bit(4, N2)).
+
+is_bit_set_test() ->
+  N1 = ones(2),
+  ?assert(is_bit_set(0, N1)),
+  ?assert(is_bit_set(1, N1)),
+  ?assertNot(is_bit_set(2, N1)).
 
 -endif.

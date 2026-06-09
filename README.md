@@ -72,6 +72,14 @@ Unit: ms.
 
 Maximum interval of time that can pass between the membership CRDT server receiving an update and the moment it propagates it to the peers.
 
+## `classy.vote_retry_interval`
+
+Type: `pos_integer()`.
+
+Unit: ms.
+
+Retry interval for two-phase commit.
+
 ## `classy.rpc_timeout`
 
 Type: `timeout()`.

@@ -12,7 +12,7 @@
         , stop/1
         , start_table/2
         , ensure_membership/2
-        , ensure_vote/1
+        , ensure_vote_coordinator/1
         ]).
 
 %% behavior callbacks:
@@ -21,7 +21,7 @@
 %% internal exports:
 -export([ start_link_table_sup/0
         , start_link_membership_sup/0
-        , start_link_vote_sup/0
+        , start_link_vote_coordinator_sup/0
         ]).
 
 -export_type([]).
@@ -33,12 +33,12 @@
 -record(top, {}).
 -record(table_sup, {}).
 -record(membership_sup, {}).
--record(vote_sup, {}).
 
 -define(SUP, ?MODULE).
 -define(TABLE_SUP, classy_table_sup).
 -define(MEMBERSHIP_SUP, classy_membership_sup).
--define(VOTE_SUP, classy_vote_sup).
+-define(VOTE_COORDINATOR_SUP, classy_vote_coordinator_sup).
+-define(VOTE_PARTICIPANT_SUP, classy_vote_participant_sup).
 
 %%================================================================================
 %% API functions
@@ -67,9 +67,9 @@ ensure_membership(Cluster, Site) ->
       Err
   end.
 
--spec ensure_vote(_) -> {ok, pid()} | {error, _}.
-ensure_vote(Args) ->
-  case supervisor:start_child(?VOTE_SUP, [Args]) of
+-spec ensure_vote_coordinator(_) -> {ok, pid()} | {error, _}.
+ensure_vote_coordinator(Args) ->
+  case supervisor:start_child(?VOTE_COORDINATOR_SUP, Args) of
     {ok, _} = Ok ->
       Ok;
     {error, {already_started, Pid}} ->
@@ -90,9 +90,9 @@ start_link_table_sup() ->
 start_link_membership_sup() ->
   supervisor:start_link({local, ?MEMBERSHIP_SUP}, ?MODULE, #membership_sup{}).
 
--spec start_link_vote_sup() -> supervisor:startlink_ret().
-start_link_vote_sup() ->
-  case supervisor:start_link({local, ?VOTE_SUP}, ?MODULE, #vote_sup{}) of
+-spec start_link_vote_coordinator_sup() -> supervisor:startlink_ret().
+start_link_vote_coordinator_sup() ->
+  case supervisor:start_link({local, ?VOTE_COORDINATOR_SUP}, ?MODULE, ?VOTE_COORDINATOR_SUP) of
     {ok, _} = Ok ->
       %%ok = classy_vote:create_table(),
       %% classy_vote:restore(),
@@ -135,7 +135,7 @@ init(#top{}) ->
              , sup_spec(#{id => ?MEMBERSHIP_SUP, start => {?MODULE, start_link_membership_sup, []}})
              , Node
              , UIDGen
-             , sup_spec(#{id => ?VOTE_SUP, start => {?MODULE, start_link_vote_sup, []}})
+             , sup_spec(#{id => ?VOTE_COORDINATOR_SUP, start => {?MODULE, start_link_vote_coordinator_sup, []}})
              , Autoclean
              , Autocluster
              ],
@@ -171,9 +171,9 @@ init(#membership_sup{}) ->
               , auto_shutdown => never
               },
   {ok, {SupFlags, [Children]}};
-init(#vote_sup{}) ->
+init(?VOTE_COORDINATOR_SUP) ->
   Children = #{ id       => worker
-              , start    => {classy_vote, start_link, []}
+              , start    => {classy_vote_coodinator, start_link, []}
               , shutdown => 5_000
               , type     => worker
               , restart  => transient

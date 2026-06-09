@@ -9,28 +9,36 @@
 %% Protocol:
 %%   Coordinator -> Participant
 -record(prepare,
-        { id            :: id()
-        , tag           :: tag()
-        , lock          :: lock()
-        , prepare       :: mfargs()
-        , commit        :: [mfargs()]
-        , rollback      :: mfargs()
+        { id            :: classy_vote:id()
+        , tag           :: classy_vote:tag()
+        , lock          :: classy_vote:lock()
+        , prepare       :: classy_vote:mfargs()
+        , commit        :: [classy_vote:mfargs()]
+        , rollback      :: [classy_vote:mfargs()]
         , coordinator   :: classy:site()
         , reserved = [] :: term()
         }).
 %%   Coordinator <- Participant
 -record(c_vote,
-        { id            :: id()
+        { id            :: classy_vote:id()
         , vote          :: boolean()
         , from          :: classy:site()
         , reserved = [] :: term()
         }).
 %%   Coordiantor -> Participant
 -record(c_outcome,
-        { id       :: id()
-        , tag      :: tag()
-        , result   :: boolean() % true = commit, false = rollback
-        , reserved :: []
+        { id            :: classy_vote:id()
+        , tag           :: classy_vote:tag()
+        , result        :: boolean() % true = commit, false = rollback
+        , reserved = [] :: term()
         }).
+
+-define(ptab, classy_vote_table).
+
+-define(coordinator(ID), {n, l, {classy_vote_coordinator, ID}}).
+-define(participant(ID), {n, l, {classy_vote_participant, ID}}).
+-define(via(NAME), {via, gproc, NAME}).
+
+-define(state_timeout, state_timeout).
 
 -endif.
