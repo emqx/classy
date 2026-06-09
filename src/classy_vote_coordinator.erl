@@ -9,6 +9,7 @@
 
 %% API:
 -export([ new/1
+        , restore/0
         ]).
 
 %% Behavior callbacks:
@@ -16,7 +17,6 @@
 
 %% internal exports:
 -export([ start_link/2
-
         , receive_vote/1
         ]).
 
@@ -53,7 +53,7 @@
 %%     Data key (opts):
 -record(pk_cd,
         { tag :: classy_vote:tag()
-        , id :: classy_vote:id() | '_'
+        , id :: classy_vote:id() | atom()
         }).
 %%     State key (stage + remaining replies):
 -record(pk_cs,
@@ -71,7 +71,7 @@
 
 %% This data is stored persistently:
 -record(opts,
-        { tag           :: classy_vote:tag()
+        { tag           :: classy_vote:tag() %% TODO: don't duplicate the tag?
         , lock          :: classy_vote:lock()
         , id            :: classy_vote:id()
         , strategy      :: classy_vote:strategy()
@@ -100,14 +100,20 @@ new(Options) ->
 
 %% @private
 -spec start_link(true, map()) -> gen_statem:start_ret();
-                (false, #d_coord{}) -> gen_statem:start_ret().
+                (false, {classy_vote:tag(), classy_vote:id(), #opts{}}) -> gen_statem:start_ret().
 start_link(true, Options) ->
   %% Create a new vote:
   ID = classy_uid:cluster_unique_seq_tuple(classy_vote_sequence),
   gen_statem:start_link(
-    ?via(?coordinator(#pk_cs{id = ID})),
+    ?via(?coordinator(ID)),
     ?MODULE,
     [true, ID, Options],
+    []);
+start_link(false, {_Tag, ID, _Opts} = StartOpts) ->
+  gen_statem:start_link(
+    ?via(?coordinator(ID)),
+    ?MODULE,
+    [false, StartOpts],
     []).
 
 %% @private Coordinator <- Participant
@@ -116,6 +122,16 @@ receive_vote(#c_vote{id = Id} = Vote) ->
   gen_statem:call(
     ?via(?coordinator(#pk_cs{id = Id})),
     Vote).
+
+%% @private Restore votes that were ongoing before the node shut down
+restore() ->
+  MS = {#classy_kv{k = #pk_cd{tag = '$1', id = '$1'}, v = '$3'}, [], [{{'$1', '$2', '$3'}}]},
+  Ongoing = ets:select(?ptab, [MS]),
+  lists:foreach(
+    fun({_, _, _} = StartArgs) ->
+        classy_sup:ensure_vote_coordinator([false, StartArgs])
+    end,
+    Ongoing).
 
 %%================================================================================
 %% behavior callbacks
@@ -128,7 +144,10 @@ callback_mode() ->
 %% @private
 init([true, ID, Options]) ->
   process_flag(trap_exit, true),
-  init_new_coordinator(ID, Options).
+  init_new_coordinator(ID, Options);
+init([false, {Tag, ID, Options}]) ->
+  process_flag(trap_exit, true),
+  restore_coordinator(Tag, ID, Options).
 
 %% @private
 %% Coodinator:
@@ -246,6 +265,19 @@ init_new_coordinator(ID, Options) ->
       {ok, ?s_vote, D#d_coord{remaining = Remaining}};
     false ->
       {error, false}
+  end.
+
+-spec restore_coordinator(classy_vote:tag(), classy_vote:id(), #opts{}) -> {ok, commit_stage(), d_coord()}.
+restore_coordinator(_Tag, Id, Opts) ->
+  [#ps_c{stage = Stage, remaining = Remaining}] = classy_table:lookup(?ptab, #pk_cs{id = Id}),
+  D0 = #d_coord{opts = Opts, remaining = Remaining},
+  case Stage of
+    ?s_vote ->
+      %% If voting was aborted, we just rollback:
+      D = db_set_coord_state(?s_rollback, ones(n_participants(D0)), D0),
+      {ok, ?s_rollback, D};
+    Other ->
+      {ok, Other, D0}
   end.
 
 -spec enter(commit_stage(), commit_stage(), d_coord()) ->
@@ -435,15 +467,6 @@ decide_pre_vote_result(Strategy, Iter0) ->
 %%--------------------------------------------------------------------------------
 %% Database access
 %%--------------------------------------------------------------------------------
-
--spec db_get_coord_state(classy_vote:id()) -> {ok, #ps_c{}} | undefined.
-db_get_coord_state(Id) ->
-  case classy_table:lookup(?ptab, #pk_cs{id = Id}) of
-    [#ps_c{} = State] ->
-      {ok, State};
-    [] ->
-      undefined
-  end.
 
 -spec db_set_coord_state(commit_stage(), remaining(), #d_coord{}) -> #d_coord{}.
 db_set_coord_state(Stage, Remaining, D = #d_coord{opts = Opts}) ->
