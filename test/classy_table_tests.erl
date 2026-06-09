@@ -60,6 +60,36 @@ smoke_write_delete_test() ->
         end}
      ]).
 
+%% This test verifies that dirty writes don't overwrite normal writes during flush
+smoke_write_vs_dirty_test() ->
+  Clean = setup(?FUNCTION_NAME),
+  T = ?FUNCTION_NAME,
+  ?check_trace(
+     try
+       ?assertEqual(ok, classy_table:open(T, opts())),
+       ?assertEqual(ok, classy_table:dirty_write(T, foo, bad)),
+       ?assertEqual(ok, classy_table:dirty_write(T, bar, good)),
+       ?assertEqual(ok, classy_table:write(T, foo, good)),
+       ?assertEqual([good], classy_table:lookup(T, foo)),
+       ?assertEqual([good], classy_table:lookup(T, bar)),
+       ?assertEqual(ok, classy_table:flush(T)),
+       ?assertEqual([good], classy_table:lookup(T, foo)),
+       ?assertEqual([good], classy_table:lookup(T, bar)),
+       %% Test dirty deletes:
+       ?assertEqual(ok, classy_table:dirty_delete(T, foo)),
+       ?assertEqual(ok, classy_table:dirty_write(T, bar, bad)),
+       ?assertEqual(ok, classy_table:delete(T, bar)),
+       ?assertEqual([], classy_table:lookup(T, foo)),
+       ?assertEqual([], classy_table:lookup(T, bar)),
+       ?assertEqual(ok, classy_table:flush(T)),
+       ?assertEqual([], classy_table:lookup(T, foo)),
+       ?assertEqual([], classy_table:lookup(T, bar))
+     after
+       cleanup(Clean)
+     end,
+     [ fun classy_SUITE:no_unexpected_events/1
+     ]).
+
 %% This test verifies effects of dirty write and delete operations.
 smoke_dirty_write_delete_test() ->
   Clean = setup(?FUNCTION_NAME),
