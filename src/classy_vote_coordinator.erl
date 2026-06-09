@@ -125,7 +125,10 @@ receive_vote(#c_vote{id = Id} = Vote) ->
 
 %% @private Restore votes that were ongoing before the node shut down
 restore() ->
-  MS = {#classy_kv{k = #pk_cd{tag = '$1', id = '$1'}, v = '$3'}, [], [{{'$1', '$2', '$3'}}]},
+  MS = { #classy_kv{k = #pk_cd{tag = '$1', id = '$2'}, v = '$3'}
+       , []
+       , [{{'$1', '$2', '$3'}}]
+       },
   Ongoing = ets:select(?ptab, [MS]),
   lists:foreach(
     fun({_, _, _} = StartArgs) ->
