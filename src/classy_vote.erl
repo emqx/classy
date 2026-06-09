@@ -204,36 +204,6 @@ retry_interval() ->
 %%================================================================================
 
 %%--------------------------------------------------------------------------------
-%% Database access
-%%--------------------------------------------------------------------------------
-
-%% -spec db_set_options(true, id(), options()) -> ok;
-%%                     (false, id(), #prepare{}) -> ok.
-%% db_set_options(IsCoordinator, VoteId, Options) ->
-%%   case IsCoordinator of
-%%     true ->
-%%       #{tag := Tag, lock := Lock} = Options;
-%%     false ->
-%%       #prepare{tag = Tag, lock = Lock} = Options
-%%   end,
-%%   classy_table:write(
-%%     ?ptab,
-%%     #pk{is_coordinator = IsCoordinator, tag = Tag, id = VoteId},
-%%     #ps{lock = Lock, options = Options}).
-
-%% -spec db_get_options(boolean(), tag(), id()) -> {ok, options()} | undefined.
-%% db_get_options(IsCoordinator, Tag, VoteId) ->
-%%   case classy_table:lookup(
-%%          ?ptab,
-%%          #pk{is_coordinator = IsCoordinator, tag = Tag, id = VoteId}) of
-%%     [#ps{options = Options}] ->
-%%       {ok, Options};
-%%     [] ->
-%%       %% Note this could race with table restoration
-%%       undefined
-%%   end.
-
-%%--------------------------------------------------------------------------------
 %% Input validation
 %%--------------------------------------------------------------------------------
 

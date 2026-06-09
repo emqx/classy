@@ -94,8 +94,8 @@ start_link_membership_sup() ->
 start_link_vote_coordinator_sup() ->
   case supervisor:start_link({local, ?VOTE_COORDINATOR_SUP}, ?MODULE, ?VOTE_COORDINATOR_SUP) of
     {ok, _} = Ok ->
-      %%ok = classy_vote:create_table(),
-      %% classy_vote:restore(),
+      ok = classy_vote:create_table(),
+      classy_vote_coordinator:restore(),
       Ok;
     Other ->
       Other
