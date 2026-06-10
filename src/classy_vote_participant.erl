@@ -78,8 +78,17 @@ start_link(Prepare = #prepare{id = ID}) ->
     []).
 
 restore() ->
-  %% FIXME: implement me
-  ok.
+  %% Note: this call returns after the table is restored & safe to read:
+  ok = classy_vote:create_table(),
+  MS = { #classy_kv{k = #pk_pd{_ = '_'}, v = '$1', _ = '_'}
+       , []
+       , ['$1']
+       },
+  lists:foreach(
+    fun(Prep) ->
+        vote(Prep)
+    end,
+    ets:select(?ptab, [MS])).
 
 %%================================================================================
 %% Internal exports
@@ -158,6 +167,8 @@ handle_event(info, {'EXIT', _, Reason}, _, _) ->
     normal -> keep_state_and_data;
     _      -> {stop, shutdown}
   end;
+handle_event({call, From}, #c_outcome{} = Outcome, ?s_wait_outcome, D) ->
+  do_receive_outcome(From, Outcome, D);
 handle_event(ET, Event, State, _Data) ->
   %% TODO: put ID and MFAs into error messages
   ?tp(warning, ?classy_unknown_event,
@@ -181,6 +192,13 @@ terminate(Reason, State, _Data) ->
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+do_receive_outcome(From, #c_outcome{result = Result}, D = #d{vote = MyVote}) ->
+  NextStage = case Result of
+                true -> ?s_commit;
+                false -> ?s_rollback
+              end,
+  {next_state, NextStage, db_update(NextStage, MyVote, 0, D), [{reply, From, ack}]}.
 
 enter(OldStage, Stage, #d{prep = Prep} = D) ->
   #prepare{id = ID} = Prep,

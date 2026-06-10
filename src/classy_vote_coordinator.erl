@@ -124,6 +124,8 @@ receive_vote(#c_vote{id = Id} = Vote) ->
 
 %% @private Restore votes that were ongoing before the node shut down
 restore() ->
+  %% Note: This call ensures that table is restored & safe to read:
+  ok = classy_vote:create_table(),
   MS = { #classy_kv{k = #pk_cd{tag = '$1', id = '$2'}, v = '$3'}
        , []
        , [{{'$1', '$2', '$3'}}]

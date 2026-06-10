@@ -93,7 +93,6 @@ start_link_membership_sup() ->
 start_link_vote_coordinator_sup() ->
   case supervisor:start_link({local, ?VOTE_COORDINATOR_SUP}, ?MODULE, ?VOTE_COORDINATOR_SUP) of
     {ok, _} = Ok ->
-      ok = classy_vote:create_table(),
       classy_vote_coordinator:restore(),
       Ok;
     Other ->
@@ -104,7 +103,6 @@ start_link_vote_coordinator_sup() ->
 start_link_vote_participant_sup() ->
   case supervisor:start_link({local, ?VOTE_PARTICIPANT_SUP}, ?MODULE, ?VOTE_PARTICIPANT_SUP) of
     {ok, _} = Ok ->
-      ok = classy_vote:create_table(),
       classy_vote_participant:restore(),
       Ok;
     Other ->
@@ -194,7 +192,7 @@ init(?VOTE_COORDINATOR_SUP) ->
               , period    => 1
               },
   {ok, {SupFlags, [Children]}};
-init(?VOTE_COORDINATOR_SUP) ->
+init(?VOTE_PARTICIPANT_SUP) ->
   Children = #{ id       => worker
               , start    => {classy_vote_participant, start_link, []}
               , shutdown => 5_000
