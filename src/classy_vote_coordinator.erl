@@ -276,7 +276,7 @@ enter(OldStage, Stage, D) ->
 perform_vote(D = #d{opts = Opts}) ->
   #opts{strategy = Strategy} = Opts,
   {all, Timeout} = Strategy,
-  Args = prepare_multi(start_participant, D),
+  Args = prepare_multi(vote, D),
   _ = classy_lib:multicall(Args, Timeout),
   {keep_state_and_data, mk_timeout(Timeout)}.
 

@@ -201,34 +201,36 @@ retry_interval() ->
 
 -spec with_defaults(options()) -> {ok, options()} | {error, _}.
 with_defaults(UserOpts) when is_map(UserOpts) ->
-  Defaults = #{ post_vote => {?MODULE, do_nothing, []}
-              , strategy  => {all, classy_lib:rpc_timeout()}
+  Defaults = #{ strategy  => {all, classy_lib:rpc_timeout()}
               , lock      => []
               },
   Merged = maps:merge(Defaults, UserOpts),
   case Merged of
     #{ tag       := _
-     , post_vote := PostVote
      , actions   := Actions0
      , strategy  := Strategy0
      , lock      := _
      } ->
       maybe
-        ok ?= verify_post_vote(PostVote),
         {ok, Actions} ?= verify_actions(Actions0),
         {ok, Strategy} ?= verify_strategy(Strategy0),
-        {ok, Merged#{ actions  := Actions
-                    , strategy := Strategy
+        {ok, PostVote} ?= verify_post_vote(Merged),
+        {ok, Merged#{ actions   := Actions
+                    , strategy  := Strategy
+                    , post_vote => PostVote
                     }}
       end;
     _ ->
       {error, badarg}
   end.
 
-verify_post_vote(undefined) ->
-  ok;
-verify_post_vote(MFA) ->
-  verify_mfa(bad_post_vote, 1, MFA).
+verify_post_vote(#{post_vote := PostVote}) ->
+  maybe
+    ok = verify_mfa(bad_post_vote, 1, PostVote),
+    {ok, [PostVote]}
+  end;
+verify_post_vote(#{}) ->
+  {ok, []}.
 
 verify_strategy(all) ->
   {ok, {all, classy_lib:rpc_timeout()}};

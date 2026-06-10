@@ -48,6 +48,7 @@
 -define(classy_vote_pre_results, classy_vote_pre_results).
 -define(classy_vote_coord_stage, classy_vote_coord_stage).
 -define(classy_vote_coord_recv, classy_vote_coord_recv).
+-define(classy_vote_part_stage, classy_vote_part_stage).
 
 %% Site information:
 -define(site_info, classy_site_status_tab).

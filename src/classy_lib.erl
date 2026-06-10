@@ -9,6 +9,9 @@
 -export([ fold_per_cluster/3
         , count_up_peers/1
         , sites_to_nodes/1
+        , safe_apply/1
+        , safe_apply/3
+        , multicall/1
         , multicall/2
         ]).
 
@@ -34,6 +37,8 @@
              , multicall_target/0
              , multicall_args/0
              , multicall_result/1
+             , multicall_error/0
+             , wrapped_exception/0
              ]).
 
 %%================================================================================
@@ -45,11 +50,12 @@
 
 -type multicall_args() :: #{multicall_target() => {module(), atom(), list()}}.
 
--type multicall_error() ::
-        {error, site_is_down} |
+-type wrapped_exception() ::
         {error, {throw, _Reason}} |
         {error, {error, _Reason, _Stacktrace :: list()}} |
         {error, {exit, _Reason}}.
+
+-type multicall_error() :: {error, site_is_down} | wrapped_exception().
 
 -type multicall_result(Result) ::
         #{multicall_target() => {ok, Result} |
@@ -62,6 +68,27 @@
 %%================================================================================
 %% API functions
 %%================================================================================
+
+-spec safe_apply({module(), atom(), list()}) -> {ok, term()} | wrapped_exception().
+safe_apply({M, F, A}) ->
+  safe_apply(M, F, A).
+
+-spec safe_apply(module(), atom(), list()) -> {ok, term()} | wrapped_exception().
+safe_apply(Module, Function, Args) ->
+  try apply(Module, Function, Args)
+  catch
+    throw:Reason ->
+      {error, {throw, Reason}};
+    error:Reason:Stack ->
+      {error, {error, Reason, Stack}};
+    exit:Reason ->
+      {error, {exit, Reason}}
+  end.
+
+%% @doc Call a function on multiple nodes in parallel with default timeout.
+-spec multicall(multicall_args()) -> multicall_result(term()).
+multicall(SitesWithArgs) ->
+  multicall(SitesWithArgs, rpc_timeout()).
 
 %% @doc Call a function on multiple sites in parallel.
 %%
