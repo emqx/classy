@@ -80,11 +80,10 @@
         , start_time    :: integer()
         , reserved = []
         }).
--record(d_coord,
+-record(d,
         { opts :: #opts{}
-        , remaining :: remaining()
         }).
--type d_coord() :: #d_coord{}.
+-type d() :: #d{}.
 
 %%================================================================================
 %% API functions
@@ -192,7 +191,7 @@ terminate(Reason, State, _Data) ->
 %%================================================================================
 
 -spec init_new_coordinator(classy_vote:id(), map()) ->
-        {ok, commit_stage(), d_coord()} | {error, _}.
+        {ok, commit_stage(), d()} | {error, _}.
 init_new_coordinator(ID, Options) ->
   #{ tag := Tag
    , actions := Actions0
@@ -220,7 +219,7 @@ init_new_coordinator(ID, Options) ->
               , actions = Actions
               , start_time = os:system_time(millisecond)
               },
-  D = #d_coord{opts = Opts, remaining = 0},
+  D = #d{opts = Opts},
   %% This is a new election.
   %% Perform a pre-vote immediately,
   %% and return pre-vote result to the requester synchronously.
@@ -242,15 +241,15 @@ init_new_coordinator(ID, Options) ->
       %% Now persist options (todo: do it atomically with creating the state?):
       Remaining = ones(n_participants(D)),
       ok = db_establish(?s_vote, Remaining, D),
-      {ok, ?s_vote, D#d_coord{remaining = Remaining}};
+      {ok, ?s_vote, D};
     false ->
       {error, false}
   end.
 
--spec restore_coordinator(classy_vote:tag(), classy_vote:id(), #opts{}) -> {ok, commit_stage(), d_coord()}.
+-spec restore_coordinator(classy_vote:tag(), classy_vote:id(), #opts{}) -> {ok, commit_stage(), d()}.
 restore_coordinator(_Tag, Id, Opts) ->
-  [#ps_c{stage = Stage, remaining = Remaining}] = classy_table:lookup(?ptab, #pk_cs{id = Id}),
-  D0 = #d_coord{opts = Opts, remaining = Remaining},
+  [#ps_c{stage = Stage}] = classy_table:lookup(?ptab, #pk_cs{id = Id}),
+  D0 = #d{opts = Opts},
   case Stage of
     ?s_vote ->
       %% If voting was aborted, we just rollback:
@@ -260,73 +259,74 @@ restore_coordinator(_Tag, Id, Opts) ->
       {ok, Other, D0}
   end.
 
--spec enter(commit_stage(), commit_stage(), d_coord()) ->
+-spec enter(commit_stage(), commit_stage(), d()) ->
         {keep_state_and_data, gen_statem:action()} |
-        {keep_state, d_coord(), gen_statem:action()}.
+        {keep_state, d(), gen_statem:action()}.
 enter(OldStage, Stage, D) ->
-  #d_coord{opts = #opts{id = ID}} = D,
+  #d{opts = #opts{id = ID}} = D,
   ?tp(debug, ?classy_vote_coord_stage, #{id => ID, to => Stage, from => OldStage}),
   case Stage of
     ?s_vote ->
       perform_vote(D);
     _ when Stage =:= ?s_commit; Stage =:= ?s_rollback ->
-      Remaining = ones(n_participants(D)),
-      db_set_coord_state(Stage, Remaining, D),
-      {keep_state, D#d_coord{remaining = Remaining}, mk_timeout(0)}
+      {keep_state, D, mk_timeout(0)}
   end.
 
--spec perform_vote(d_coord()) -> {keep_state_and_data, gen_statem:action()}.
-perform_vote(D = #d_coord{opts = Opts}) ->
+-spec perform_vote(d()) -> {keep_state_and_data, gen_statem:action()}.
+perform_vote(D = #d{opts = Opts}) ->
   #opts{strategy = Strategy} = Opts,
   {all, Timeout} = Strategy,
   Args = prepare_multi(start_participant, D),
   _ = classy_lib:multicall(Args, Timeout),
   {keep_state_and_data, mk_timeout(Timeout)}.
 
--spec handle_vote(classy:site(), boolean(), #ps_c{}, d_coord()) ->
-        {next_state, #ps_c{}, d_coord()} |
-        {keep_state, d_coord()}.
-handle_vote(
-  From,
-  Vote,
-  Stage,
-  #d_coord{opts = Opts, remaining = Rem0} = D0
- ) ->
-  #opts{id = Id} = Opts,
+-spec handle_vote(classy:site(), boolean(), #ps_c{}, d()) ->
+        {next_state, #ps_c{}, d()} |
+        {keep_state, d()} |
+        keep_state_and_data.
+handle_vote(From, Vote, ?s_vote, #d{opts = #opts{id = Id, actions = Acts}} = D0) ->
   ?tp(debug, ?classy_vote_coord_recv,
       #{ id => Id
        , from => From
        , vote => Vote
-       , stage => Stage
+       , stage => ?s_vote
        }),
-  %% FIXME:
-  SiteNr = 0,
-  NParticipants = n_participants(D0),
-  Rem = unset_bit(SiteNr, Rem0),
-  case Stage of
-    ?s_vote ->
+  case Acts of
+    #{From := #act{site_bit = SiteBit}} ->
       case Vote of
         true ->
-          case Rem of
-            0 ->
-              D = db_set_coord_state(?s_commit, ones(NParticipants), D0),
-              {next_state, ?s_commit, D};
-            _ ->
-              D = db_set_coord_state(?s_vote, ones(NParticipants), D0),
-              {keep_state, D}
+          Remaining = unset_bit(SiteBit, remaining(D0)),
+          if Remaining > 0 ->
+              %% Need more votes
+              D = db_set_coord_state(?s_vote, Remaining, D0),
+              {keep_state, D};
+             true ->
+              %% This was the last one:
+              D = db_set_coord_state(?s_commit, ones(n_participants(D0)), D0),
+              {next_state, ?s_commit, D}
           end;
         false ->
-          D = db_set_coord_state(?s_rollback, ones(NParticipants), D0),
+          %% Commence rollback
+          D = db_set_coord_state(?s_rollback, ones(n_participants(D0)), D0),
           {next_state, ?s_rollback, D}
       end;
-    _ ->
-      %% Late vote; irrelevant
-      {keep_state, D0}
-  end.
+    #{} ->
+      %% Unexpected reply, should not happen:
+      ?tp(warning, ?classy_vote_coord_recv,
+          #{ id => Id
+           , from => {unexpected, From}
+           , vote => Vote
+           , stage => ?s_vote
+           }),
+      keep_state_and_data
+  end;
+handle_vote(_From, _Vote, _Other, _D) ->
+  %% Late vote, irrelevant.
+  keep_state_and_data.
 
--spec state_timeout(commit_stage(), d_coord()) ->
-        {next_state, commit_stage(), d_coord()} |
-        {keep_state, d_coord(), gen_statem:action()}.
+-spec state_timeout(commit_stage(), d()) ->
+        {next_state, commit_stage(), d()} |
+        {keep_state, d(), gen_statem:action()}.
 state_timeout(?s_vote, D0) ->
   %% Vote timed out, move to rollback:
   D = db_set_coord_state(?s_rollback, ones(n_participants(D0)), D0),
@@ -345,8 +345,8 @@ state_timeout(Stage, D0) ->
       perform_post_commit(Outcome, D)
   end.
 
--spec perform_post_commit(boolean(), d_coord()) -> {stop, normal}.
-perform_post_commit(Outcome, D = #d_coord{opts = Opts}) ->
+-spec perform_post_commit(boolean(), d()) -> {stop, normal}.
+perform_post_commit(Outcome, D = #d{opts = Opts}) ->
   #opts{post_vote = PostActions} = Opts,
   lists:foreach(
     fun({M, F, Args}) ->
@@ -364,7 +364,8 @@ perform_post_commit(Outcome, D = #d_coord{opts = Opts}) ->
   ok = db_teardown(D),
   {stop, normal}.
 
-broadcast_outcome(Result, #d_coord{remaining = Remaining0, opts = Options}) ->
+-spec broadcast_outcome(boolean(), d()) -> remaining().
+broadcast_outcome(Result, #d{opts = Options} = D) ->
   #opts{id = Id, tag = Tag, actions = Acts} = Options,
   Sites = classy:sites(),
   Call = {classy_vote_participant, receive_outcome,
@@ -374,7 +375,7 @@ broadcast_outcome(Result, #d_coord{remaining = Remaining0, opts = Options}) ->
                       }
           ]},
   %% Collect target sites:
-  {Remaining, Multicall} =
+  {Remaining2, Multicall} =
     maps:fold(
       fun(Site, #act{site_bit = Bit}, {Remaining1, Acc}) ->
           case is_bit_set(Bit, Remaining1) andalso lists:member(Site, Sites) of
@@ -387,7 +388,7 @@ broadcast_outcome(Result, #d_coord{remaining = Remaining0, opts = Options}) ->
               {Remaining1, Acc#{{Site, Bit} => Call}}
             end
       end,
-      {Remaining0, #{}},
+      {remaining(D), #{}},
       Acts),
   %% Broadcast:
   Results = classy_lib:multicall(Multicall, classy_lib:rpc_timeout()),
@@ -406,17 +407,17 @@ broadcast_outcome(Result, #d_coord{remaining = Remaining0, opts = Options}) ->
             Remaining3
         end
     end,
-    Remaining,
+    Remaining2,
     Results).
 
--spec prepare_multi(atom(), d_coord()) -> map().
-prepare_multi(Function, D = #d_coord{opts = #opts{actions = Acts}}) ->
+-spec prepare_multi(atom(), d()) -> map().
+prepare_multi(Function, D = #d{opts = #opts{actions = Acts}}) ->
   #{Site => {classy_vote_participant, Function, [prepare(D, Act)]} ||
     Site := Act <- Acts}.
 
--spec prepare(d_coord(), #act{}) -> #prepare{}.
+-spec prepare(d(), #act{}) -> #prepare{}.
 prepare(
-  #d_coord{opts = #opts{id = Id, tag = Tag, lock = Lock}},
+  #d{opts = #opts{id = Id, tag = Tag, lock = Lock}},
   #act{prepare = Prep, commit = Commit, rollback = Rollback}
  ) ->
   {ok, Self} = classy_node:the_site(),
@@ -448,18 +449,23 @@ decide_pre_vote_result(Strategy, Iter0) ->
 %% Database access
 %%--------------------------------------------------------------------------------
 
--spec db_set_coord_state(commit_stage(), remaining(), #d_coord{}) -> #d_coord{}.
-db_set_coord_state(Stage, Remaining, D = #d_coord{opts = Opts}) ->
+-spec remaining(d()) -> remaining().
+remaining(#d{opts = #opts{id = Id}}) ->
+  [#ps_c{remaining = Rem}] = classy_table:lookup(?ptab, #pk_cs{id = Id}),
+  Rem.
+
+-spec db_set_coord_state(commit_stage(), remaining(), d()) -> d().
+db_set_coord_state(Stage, Remaining, D = #d{opts = Opts}) ->
   #opts{id = Id} = Opts,
   ok = classy_table:write(
          ?ptab,
          #pk_cs{id = Id},
          #ps_c{stage = Stage, remaining = Remaining}),
-  D#d_coord{remaining = Remaining}.
+  D.
 
 %% Write information about the vote to the DB atomically.
--spec db_establish(commit_stage(), remaining(), #d_coord{}) -> ok.
-db_establish(Stage, Remaining, #d_coord{opts = Opts}) ->
+-spec db_establish(commit_stage(), remaining(), d()) -> ok.
+db_establish(Stage, Remaining, #d{opts = Opts}) ->
   #opts{tag = Tag, id = Id} = Opts,
   StateKey = #pk_cs{id = Id},
   StaticDataKey = #pk_cd{tag = Tag, id = Id},
@@ -471,8 +477,8 @@ db_establish(Stage, Remaining, #d_coord{opts = Opts}) ->
   ok.
 
 %% Atomically delete information about the vote from the DB.
--spec db_teardown(d_coord()) -> ok.
-db_teardown(#d_coord{opts = #opts{id = Id, tag = Tag}}) ->
+-spec db_teardown(d()) -> ok.
+db_teardown(#d{opts = #opts{id = Id, tag = Tag}}) ->
   StateKey = #pk_cs{id = Id},
   StaticDataKey = #pk_cd{tag = Tag, id = Id},
   {ok, _} = classy_table:atomically(
@@ -494,8 +500,8 @@ unset_bit(Bit, Bitfield) ->
 is_bit_set(Bit, Bitfield) ->
   (Bitfield band (1 bsl Bit)) > 0.
 
--spec n_participants(d_coord()) -> pos_integer().
-n_participants(#d_coord{opts = Opts}) ->
+-spec n_participants(d()) -> pos_integer().
+n_participants(#d{opts = Opts}) ->
   maps:size(Opts#opts.actions).
 
 mk_timeout(N) ->
