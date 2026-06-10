@@ -355,7 +355,7 @@ handle_call(#call_force_compaction{}, From, S0) ->
       {reply, ok, S};
     {error, Reason, S} ->
       gen_server:reply(From, {error, Reason}),
-      {stop, compaction_failed, S}
+      {stop, Reason, S}
   end;
 handle_call(#call_clear{}, From, S0) ->
   S = handle_clear(S0),
@@ -406,7 +406,7 @@ terminate(Reason, S) ->
     #s{name = Name, log = Log} ->
       optvar:unset(?optvar(Name)),
       handle_flush(S),
-      disk_log:close(Log),
+      Log =/= undefined andalso disk_log:close(Log),
       exec_on_update(close, S)
   end.
 
@@ -617,7 +617,7 @@ handle_flush(S = #s{ets = ETS, log = Log, dirty = Dirty, log_size = LogSize0}) -
      , log_size = LogSize + 2 %% account for the markers
      }.
 
--spec exec_on_update_open(#s{}) -> ok.
+-spec exec_on_update_open(s()) -> ok.
 exec_on_update_open(#s{on_update = undefined}) ->
   ok;
 exec_on_update_open(S = #s{ets = ETS}) ->
@@ -630,7 +630,7 @@ exec_on_update_open(S = #s{ets = ETS}) ->
     ETS),
   ok.
 
--spec exec_on_update_clear(#s{}) -> ok.
+-spec exec_on_update_clear(s()) -> ok.
 exec_on_update_clear(#s{on_update = undefined}) ->
   ok;
 exec_on_update_clear(S = #s{ets = ETS}) ->
@@ -657,7 +657,7 @@ exec_on_update(Op, #s{on_update = Fun, name = Name}) ->
            })
   end.
 
--spec do_compaction(s()) -> {ok, s()} | {error, _Reason, undefined}.
+-spec do_compaction(s()) -> {ok, s()} | {error, wal_compaction_failed, s()}.
 do_compaction(S0 = #s{name = Name, ets = Ets}) ->
   S1 = #s{log = Old} = handle_flush(S0),
   ok = close_log(Old),
@@ -681,7 +681,8 @@ do_compaction(S0 = #s{name = Name, ets = Ets}) ->
            , stack => Stack
            , table => Name
            }),
-      {error, Err, undefined}
+      S = S0#s{log = undefined},
+      {error, wal_compaction_failed, S}
   end.
 
 dump_ets(_Log, N, '$end_of_table') ->
@@ -737,7 +738,7 @@ with_compaction(From, Reply, S0) ->
       {stop, Reason, S}
   end.
 
--spec maybe_compact(#s{}) -> {ok, #s{}} | {error, _Reason, #s{}}.
+-spec maybe_compact(s()) -> {ok, s()} | {error, _Reason, s()}.
 maybe_compact(S = #s{badness_threshold = Threshold}) ->
   case log_badness(S) >= Threshold of
     true ->
