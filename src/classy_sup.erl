@@ -182,7 +182,7 @@ init(#membership_sup{}) ->
   {ok, {SupFlags, [Children]}};
 init(?VOTE_COORDINATOR_SUP) ->
   Children = #{ id       => worker
-              , start    => {classy_vote_coodinator, start_link, []}
+              , start    => {classy_vote_coordinator, start_link, []}
               , shutdown => 5_000
               , type     => worker
               , restart  => transient

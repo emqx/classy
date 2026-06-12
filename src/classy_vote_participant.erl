@@ -32,11 +32,11 @@
 
 %%             .----> rollback <-.
 %%            /                   \
-%%           /                    \
+%%           /                     \
 %%  o--- prepare          receive_outcome=false
-%%          \                    /
-%%          \                   /
-%%           "-----> wait_outcome ---> receive_outcome=true --> commit
+%%          \                     /
+%%           \                   /
+%%            "-----> wait_outcome ---> receive_outcome=true --> commit
 
 %% Persistent state (dynamically changing data):
 %%   Key:
@@ -95,9 +95,14 @@ restore() ->
 %%================================================================================
 
 %% @private Coordinator -> Participant
--spec pre_vote(#prepare{}) -> {ok, boolean()} | {error, _}.
+-spec pre_vote(#prepare{}) -> boolean() | {error, _}.
 pre_vote(Prepare) ->
-  do_prepare(Prepare, false).
+  case do_prepare(Prepare, false) of
+    {ok, Bool} when is_boolean(Bool) ->
+      Bool;
+    {error, Err} ->
+      error(Err)
+  end.
 
 %% @private Coordinator -> Participant
 -spec vote(#prepare{}) -> ok | {error, _}.
@@ -193,12 +198,13 @@ terminate(Reason, State, _Data) ->
 %% Internal functions
 %%================================================================================
 
-do_receive_outcome(From, #c_outcome{result = Result}, D = #d{vote = MyVote}) ->
+do_receive_outcome(From, #c_outcome{result = Result}, D0 = #d{vote = MyVote}) ->
   NextStage = case Result of
                 true -> ?s_commit;
                 false -> ?s_rollback
               end,
-  {next_state, NextStage, db_update(NextStage, MyVote, 0, D), [{reply, From, ack}]}.
+  {ok, D} = db_update(NextStage, MyVote, 0, D0),
+  {next_state, NextStage, D, [{reply, From, ack}]}.
 
 enter(OldStage, Stage, #d{prep = Prep} = D) ->
   #prepare{id = ID} = Prep,
@@ -224,7 +230,7 @@ perform_commit(D = #d{completed_actions = CA, prep = Prep}) ->
   #prepare{commit = CommitActions} = Prep,
   perform_actions(
     ?s_commit,
-    lists:nthtail(CA, CommitActions),
+    nthtail(CA, CommitActions),
     D).
 
 -spec perform_rollback(d()) -> {stop, normal, d()}.
@@ -232,7 +238,7 @@ perform_rollback(D = #d{completed_actions = CA, prep = Prep}) ->
   #prepare{rollback = RollbackActions} = Prep,
   perform_actions(
     ?s_rollback,
-    lists:nthtail(CA, RollbackActions),
+    nthtail(CA, RollbackActions),
     D).
 
 -spec perform_actions(stage(), [classy_vote:mfargs()], d()) -> {stop, normal, d()}.
@@ -280,15 +286,16 @@ do_prepare(
     {ok, Vote}
   end.
 
-send_vote(#d{vote = Vote, prep = Prep}) ->
+send_vote(#d{vote = Vote, prep = Prep = #prepare{id = ID}}) ->
   {ok, Self} = classy_node:the_site(),
   #prepare{id = Id, coordinator = Coordinator} = Prep,
   Arg = #c_vote{ id = Id
                , vote = Vote
                , from = Self
                },
-  _ = classy_lib:multicall(
-        #{Coordinator => {classy_vote_coordinator, receive_vote, [Arg]}}),
+  _ = ?tp_span(debug, ?classy_vote_part_send_vote, #{id => ID, vote => Vote, from => Self},
+               classy_lib:multicall(
+                 #{Coordinator => {classy_vote_coordinator, receive_vote, [Arg]}})),
   ok.
 
 verify_coordinator(Coordinator) ->
@@ -327,6 +334,10 @@ db_teardown(#d{prep = #prepare{id = ID, tag = Tag}}) ->
                  [ {d, DataKey}
                  , {d, StateKey}
                  ]),
+    ?tp(debug, ?classy_vote_part_flow_complete,
+        #{ id => ID
+         , tag => Tag
+         }),
     ok
   end.
 
@@ -366,6 +377,11 @@ get_prepare(Tag, Id) ->
     [] ->
       undefined
   end.
+
+nthtail(NComplete, Actions) ->
+  lists:nthtail(
+    min(NComplete, length(Actions)),
+    Actions).
 
 mk_timer(After) ->
   {state_timeout, After, ?state_timeout}.

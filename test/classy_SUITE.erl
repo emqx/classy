@@ -728,6 +728,62 @@ t_300_rpc(_) ->
      end,
      []).
 
+t_400_vote_smoke_test(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
+  VerifyCleanState =
+    fun(Nodes) ->
+        Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
+        [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
+    end,
+  ?check_trace(
+     #{timetrap => 15_000},
+     begin
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       N3 = create_start_site(S3, #{}),
+       Nodes = [N1, N2, N3],
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
+       ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       wait_site_joined(Sites, Cluster, S3),
+       %% Immediate failure, missing site:
+       ?tp(test_stage, #{n => 1}),
+       Ref1 = vote1,
+       ?assertEqual(
+          {error, #{<<"bad_site">> => {error, site_is_down}}},
+          ?ON(S1,
+              classy_vote:create(#{ tag     => Ref1
+                                  , actions => #{<<"bad_site">> => make_vote(true, true, Ref1, 1)}
+                                  }))),
+       VerifyCleanState(Nodes),
+       %% Pre-vote fail:
+       Ref2 = vote2,
+       ?assertEqual(
+          {error, #{S => {ok, false} || S <- [S1, S2, S3]}},
+          ?ON(S1,
+              classy_vote:create(#{ tag => Ref2
+                                  , actions  => #{Site => make_vote(false, false, Ref2, 1) || Site <- [S1, S2, S3]}
+                                  }))),
+       VerifyCleanState(Nodes),
+       %% Vote stage fails:
+       Ref3 = vote3,
+       {ok, ID3} = ?ON(S1,
+                       classy_vote:create(#{ tag => Ref3
+                                           , actions => #{ S2 => make_vote(true, true, Ref3, 1)
+                                                         , S3 => make_vote(true, false, Ref3, 1)
+                                                         }
+                                           })),
+       classy_vote:test_wait_conclude(ID3)
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     | classy_vote:trace_props()
+     ]).
+
 t_999_fuzz(_Config) ->
   %% NOTE: we set timeout at the lowest level to capture the trace
   %% and have a nicer error message.
@@ -1116,6 +1172,31 @@ setup_hooks(Site) ->
         classy_node:maybe_init_the_site(Site)
     end,
     0).
+
+make_vote(HowToPreVote, HowToVote, Ref, NCommitSteps) ->
+  #{ prepare  => {?MODULE, vote_prepare, [HowToPreVote, HowToVote, Ref]}
+   , commit   => [{?MODULE, vote_commit, [Step, Ref]} ||
+                   Step <- lists:seq(1, NCommitSteps)]
+   , rollback => [{?MODULE, vote_rollback, [Ref]}]
+   , post_vote => {?MODULE, post_vote, [Ref]}
+   }.
+
+vote_prepare(ForReal, HowToPreVote, HowToVote, Ref) ->
+  Result = case ForReal of
+             true -> HowToVote;
+             false -> HowToPreVote
+           end,
+  ?tp(classy_test_vote_prep, #{ref => Ref, vote => Result, for_real => ForReal}),
+  Result.
+
+vote_commit(Step, Ref) ->
+  ?tp(classy_test_vote_commit, #{ref => Ref, step => Step}).
+
+vote_rollback(Ref) ->
+  ?tp(classy_test_vote_rollback, #{ref => Ref}).
+
+post_vote(Result, Ref) ->
+  ?tp(classy_test_post_vote, #{ref => Ref, result => Result}).
 
 -spec proper_printout(string(), list()) -> _.
 proper_printout(Char, []) when Char =:= ".";

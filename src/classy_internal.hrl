@@ -49,6 +49,12 @@
 -define(classy_vote_coord_stage, classy_vote_coord_stage).
 -define(classy_vote_coord_recv, classy_vote_coord_recv).
 -define(classy_vote_part_stage, classy_vote_part_stage).
+-define(classy_vote_flow_start, classy_vote_flow_start).
+-define(classy_vote_alloc_id, classy_vote_alloc_id).
+-define(classy_vote_part_send_vote, classy_vote_part_send_vote).
+-define(classy_vote_part_flow_complete, classy_vote_part_flow_complete).
+-define(classy_vote_coord_early_abort, classy_vote_coord_early_abort).
+-define(classy_vote_coord_flow_complete, classy_vote_coord_flow_complete).
 
 %% Site information:
 -define(site_info, classy_site_status_tab).

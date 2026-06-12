@@ -59,12 +59,17 @@
 
 -export_type([id/0, tag/0, lock/0, mfargs/0, strategy/0, actions/0, options/0, vote/0, outcome/0]).
 
--include_lib("snabbkaffe/include/trace.hrl").
 -include("classy.hrl").
 -include("classy_vote.hrl").
 
 -ifdef(TEST).
+-include_lib("snabbkaffe/include/snabbkaffe.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-export([ test_wait_conclude/1
+        , trace_props/0
+        , prop_every_vote_concludes/1
+        , prop_coord_receives_votes/1
+        ]).
 -endif.
 
 %%================================================================================
@@ -131,12 +136,14 @@
 %% @doc Initiate a new vote.
 %%
 %% Note: This function returns immediately.
--spec create(options()) -> ok | {error, _}.
+-spec create(options()) -> {ok, classy_vote:id()} | {error, _}.
 create(UserOptions) ->
   maybe
+    %% Create a new vote:
+    ID = classy_uid:cluster_unique_seq_tuple(classy_vote_sequence),
     {ok, Options} ?= with_defaults(UserOptions),
-    {ok, _} ?= classy_vote_coordinator:new(Options),
-    ok
+    {ok, _} ?= classy_vote_coordinator:new(ID, Options),
+    {ok, ID}
   end.
 
 %%================================================================================
@@ -152,7 +159,7 @@ create_table() ->
      }).
 
 verify_prepare(Prepare) ->
-  verify_mfa(bad_prepare, 0, Prepare).
+  verify_mfa(bad_prepare, 1, Prepare).
 
 verify_commit(Commit) ->
   verify_mfas(bad_commit, Commit).
@@ -267,3 +274,37 @@ enrich_action(Site, SiteActions) when is_binary(Site), is_map(SiteActions) ->
   end;
 enrich_action(BadSite, BadAction) ->
   throw({error, {bad_action, BadSite, BadAction}}).
+
+-ifdef(TEST).
+
+test_wait_conclude(ID) ->
+  %% 1. Wait coordinator:
+  {ok, CoordEvt} = ?block_until(#{?snk_kind := K, id := ID} when K =:= ?classy_vote_coord_early_abort;
+                                                           K =:= ?classy_vote_coord_flow_complete),
+  case CoordEvt of
+    #{?snk_kind := ?classy_vote_coord_early_abort} ->
+      ok;
+    #{?snk_kind := ?classy_vote_coord_flow_complete} ->
+      %% TODO: wait for participants' commit
+      ok
+  end.
+
+trace_props() ->
+  [ fun ?MODULE:prop_every_vote_concludes/1
+  , fun ?MODULE:prop_coord_receives_votes/1
+  ].
+
+prop_every_vote_concludes(Trace) ->
+  ?strict_causality(
+     #{?snk_kind := ?classy_vote_flow_start, id := Id},
+     #{?snk_kind := K, id := Id} when K =:= ?classy_vote_coord_flow_complete;
+                                      K =:= ?classy_vote_coord_early_abort,
+     Trace).
+
+prop_coord_receives_votes(Trace) ->
+  ?strict_causality(
+     #{?snk_kind := ?classy_vote_part_send_vote, id := Id, vote := Vote, from := From, ?snk_span := start},
+     #{?snk_kind := ?classy_vote_coord_recv, id := Id, vote := Vote, from := From},
+     Trace).
+
+-endif.
