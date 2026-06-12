@@ -2,7 +2,7 @@
 
 conf() ->
   #{ plugins => [anvl_git, anvl_erlc, anvl_hex_pm, anvl_rebar3]
-   , conditions => [static_checks, compile]
+   , conditions => [all, static_checks, compile]
    , erlang =>
        #{ bdeps => [proper, familiar]
         , compile =>
@@ -31,6 +31,9 @@ conf() ->
             ]
         }
    }.
+
+?MEMO(all,
+      precondition(static_checks())).
 
 compile() ->
   anvl_erlc:app_compiled(default, classy).
