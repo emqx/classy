@@ -359,6 +359,7 @@ state_timeout(Stage, D0) ->
 -spec perform_post_commit(boolean(), d()) -> {stop, normal}.
 perform_post_commit(Outcome, D = #d{opts = Opts}) ->
   #opts{post_vote = PostActions} = Opts,
+  ?tp(warning, "OHAYO", #{pa => PostActions}),
   lists:foreach(
     fun({M, F, Args}) ->
         try apply(M, F, [Outcome | Args])

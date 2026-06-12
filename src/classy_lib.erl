@@ -306,16 +306,16 @@ multicall_receive_replies(Collection0, WaitTime, Acc, RemainingTargets) ->
         WaitTime,
         Acc#{Target => {ok, Resp}},
         RemainingTargets -- [Target]);
-    no_response ->
+    no_request ->
+      Acc
+  catch
+    error:{erpc, timeout} ->
       lists:foldl(
         fun(Target, Acc1) ->
             Acc1#{Target => {error, timeout}}
         end,
         Acc,
         RemainingTargets);
-    no_request ->
-      Acc
-  catch
     throw:{Throw, Target, Collection} ->
       multicall_receive_replies(
         Collection,

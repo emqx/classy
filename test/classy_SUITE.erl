@@ -686,7 +686,8 @@ t_300_rpc(_) ->
            },
           ?ON(S1,
               classy_lib:multicall(
-                #{S => {erlang, node, []} || S <- [S1, S2, SB]}, 5_000))),
+                #{S => {erlang, node, []} || S <- [S1, S2, SB]},
+                5_000))),
        %% Handling of throw:
        ?assertEqual(
           #{ S1 => {error, {throw, {foo, S1}}}
@@ -695,7 +696,8 @@ t_300_rpc(_) ->
            },
           ?ON(S1,
               classy_lib:multicall(
-                #{S => {erlang, throw, [{foo, S}]} || S <- [S1, S2, SB]}, 5_000))),
+                #{S => {erlang, throw, [{foo, S}]} || S <- [S1, S2, SB]},
+                5_000))),
        %% Handling of errors:
        ?assertMatch(
           #{ S1 := {error, {error, {foo, S1}, _}}
@@ -704,7 +706,8 @@ t_300_rpc(_) ->
            },
           ?ON(S1,
               classy_lib:multicall(
-                #{S => {erlang, error, [{foo, S}]} || S <- [S1, S2, SB]}, 5_000))),
+                #{S => {erlang, error, [{foo, S}]} || S <- [S1, S2, SB]},
+                5_000))),
        ?assertEqual(
           #{ S1 => {error, {exit, {foo, S1}}}
            , S2 => {error, {exit, {foo, S2}}}
@@ -712,7 +715,17 @@ t_300_rpc(_) ->
            },
           ?ON(S1,
               classy_lib:multicall(
-                #{S => {erlang, exit, [{foo, S}]} || S <- [S1, S2, SB]}, 5_000))),
+                #{S => {erlang, exit, [{foo, S}]} || S <- [S1, S2, SB]},
+                5_000))),
+       ?assertEqual(
+          #{ S1 => {error, timeout}
+           , S2 => {error, timeout}
+           , SB => {error, site_is_down}
+           },
+          ?ON(S1,
+              classy_lib:multicall(
+                #{S => {timer, sleep, [1_000]} || S <- [S1, S2, SB]},
+                100))),
        %% Multiple calls to the same site with tags:
        ?assertEqual(
           #{ {S2, 1} => {ok, N2}
@@ -728,10 +741,92 @@ t_300_rpc(_) ->
      end,
      []).
 
-t_400_vote_smoke_test(_) ->
+%% This testcase verifies various scenarios related to 2PC that lead
+%% to abort and rollback.
+t_400_vote_smoke_abort(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
+  VerifyCleanState =
+    fun(Nodes) ->
+        Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
+        [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
+    end,
+  Ref1 = vote1,
+  Ref2 = vote2,
+  Ref3 = vote3,
+  ?check_trace(
+     #{timetrap => 15_000},
+     begin
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       N3 = create_start_site(S3, #{}),
+       Nodes = [N1, N2, N3],
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
+       ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       wait_site_joined(Sites, Cluster, S3),
+       %% Immediate failure, missing site:
+       ?tp(test_stage, #{n => 1}),
+       ?assertEqual(
+          {error, #{<<"bad_site">> => {error, site_is_down}}},
+          ?ON(S1,
+              classy_vote:create(#{ tag     => Ref1
+                                  , actions => #{<<"bad_site">> => make_vote(true, true, Ref1, 1)}
+                                  , post_vote => make_post_vote(Ref1)
+                                  }))),
+       VerifyCleanState(Nodes),
+       %% Pre-vote fail:
+       ?assertEqual(
+          {error, #{S => {ok, false} || S <- [S1, S2, S3]}},
+          ?ON(S1,
+              classy_vote:create(#{ tag => Ref2
+                                  , actions  => #{Site => make_vote(false, false, Ref2, 1) || Site <- [S1, S2, S3]}
+                                  , post_vote => make_post_vote(Ref2)
+                                  }))),
+       VerifyCleanState(Nodes),
+       %% Vote stage fails:
+       {ok, ID3} = ?ON(S1,
+                       classy_vote:create(#{ tag => Ref3
+                                           , actions => #{ S2 => make_vote(true, true, Ref3, 1)
+                                                         , S3 => make_vote(true, false, Ref3, 1)
+                                                         }
+                                           , post_vote => make_post_vote(Ref3)
+                                           })),
+       classy_vote:test_wait_conclude(ID3),
+       VerifyCleanState(Nodes),
+       Nodes
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     , {"rollback events",
+        fun([_N1, N2, N3], Trace) ->
+            ?assertMatch(
+               [ #{ref := Ref3}
+               ],
+               ?of_node(N2, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [ #{ref := Ref3}
+               ],
+               ?of_node(N3, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [],
+               ?of_kind(classy_test_vote_commit, Trace)),
+            ?assertMatch(
+               [#{ref := Ref3, result := false}],
+               ?of_kind(classy_test_post_vote, Trace))
+        end}
+     | classy_vote:trace_props()
+     ]).
+
+%% Verify normal 2PC flow
+t_410_vote_commit(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Ref1 = vote1,
   Sites = [S1, S2, S3],
   VerifyCleanState =
     fun(Nodes) ->
@@ -750,37 +845,35 @@ t_400_vote_smoke_test(_) ->
        ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
        wait_site_joined(Sites, Cluster, S2),
        wait_site_joined(Sites, Cluster, S3),
-       %% Immediate failure, missing site:
-       ?tp(test_stage, #{n => 1}),
-       Ref1 = vote1,
-       ?assertEqual(
-          {error, #{<<"bad_site">> => {error, site_is_down}}},
-          ?ON(S1,
-              classy_vote:create(#{ tag     => Ref1
-                                  , actions => #{<<"bad_site">> => make_vote(true, true, Ref1, 1)}
-                                  }))),
-       VerifyCleanState(Nodes),
-       %% Pre-vote fail:
-       Ref2 = vote2,
-       ?assertEqual(
-          {error, #{S => {ok, false} || S <- [S1, S2, S3]}},
-          ?ON(S1,
-              classy_vote:create(#{ tag => Ref2
-                                  , actions  => #{Site => make_vote(false, false, Ref2, 1) || Site <- [S1, S2, S3]}
-                                  }))),
-       VerifyCleanState(Nodes),
        %% Vote stage fails:
-       Ref3 = vote3,
        {ok, ID3} = ?ON(S1,
-                       classy_vote:create(#{ tag => Ref3
-                                           , actions => #{ S2 => make_vote(true, true, Ref3, 1)
-                                                         , S3 => make_vote(true, false, Ref3, 1)
+                       classy_vote:create(#{ tag => Ref1
+                                           , actions => #{ S2 => make_vote(true, true, Ref1, 2)
+                                                         , S3 => make_vote(true, true, Ref1, 1)
                                                          }
+                                           , post_vote => make_post_vote(Ref1)
                                            })),
-       classy_vote:test_wait_conclude(ID3)
+       classy_vote:test_wait_conclude(ID3),
+       VerifyCleanState(Nodes),
+       Nodes
      end,
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1
+     , {"commit events",
+        fun([_N1, N2, N3], Trace) ->
+            ?assertMatch(
+               [ #{step := 1, ref := Ref1}
+               , #{step := 2, ref := Ref1}
+               ],
+               ?of_node(N2, ?of_kind(classy_test_vote_commit, Trace))),
+            ?assertMatch(
+               [ #{step := 1, ref := Ref1}
+               ],
+               ?of_node(N3, ?of_kind(classy_test_vote_commit, Trace))),
+            ?assertMatch(
+               [#{ref := Ref1, result := true}],
+               ?of_kind(classy_test_post_vote, Trace))
+        end}
      | classy_vote:trace_props()
      ]).
 
@@ -1178,8 +1271,10 @@ make_vote(HowToPreVote, HowToVote, Ref, NCommitSteps) ->
    , commit   => [{?MODULE, vote_commit, [Step, Ref]} ||
                    Step <- lists:seq(1, NCommitSteps)]
    , rollback => [{?MODULE, vote_rollback, [Ref]}]
-   , post_vote => {?MODULE, post_vote, [Ref]}
    }.
+
+make_post_vote(Ref) ->
+  {?MODULE, post_vote, [Ref]}.
 
 vote_prepare(ForReal, HowToPreVote, HowToVote, Ref) ->
   Result = case ForReal of

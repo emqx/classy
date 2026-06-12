@@ -106,7 +106,8 @@ pre_vote(Prepare) ->
 
 %% @private Coordinator -> Participant
 -spec vote(#prepare{}) -> ok | {error, _}.
-vote(Prepare) ->
+vote(Prepare = #prepare{tag = Tag, id = ID}) ->
+  ?tp(debug, ?classy_part_regular_vote_start, #{id => ID, tag => Tag}),
   case classy_sup:ensure_vote_participant([Prepare]) of
     {ok, _Pid} ->
       ok;

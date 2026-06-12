@@ -285,8 +285,26 @@ test_wait_conclude(ID) ->
     #{?snk_kind := ?classy_vote_coord_early_abort} ->
       ok;
     #{?snk_kind := ?classy_vote_coord_flow_complete} ->
-      %% TODO: wait for participants' commit
-      ok
+      %% Receive all vote initiation events from the participants
+      %% (assuming the number of participants is < 100):
+      {ok, SubRef} = snabbkaffe:subscribe(
+                       ?match_event(
+                          #{ ?snk_kind := ?classy_part_regular_vote_start
+                           , id := ID
+                           }),
+                       100,
+                       0,
+                       infinity),
+      {timeout, PartVoteInitEvents} = snabbkaffe:receive_events(SubRef),
+      %% Wait for conclusion:
+      lists:foreach(
+        fun(#{?snk_meta := #{node := Node}}) ->
+            ?block_until(#{ ?snk_kind := ?classy_vote_part_flow_complete
+                          , id := ID
+                          , ?snk_meta := #{node := Node}
+                          })
+        end,
+        PartVoteInitEvents)
   end.
 
 trace_props() ->
