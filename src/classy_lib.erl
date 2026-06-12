@@ -75,7 +75,7 @@ safe_apply({M, F, A}) ->
 
 -spec safe_apply(module(), atom(), list()) -> {ok, term()} | wrapped_exception().
 safe_apply(Module, Function, Args) ->
-  try apply(Module, Function, Args)
+  try {ok, apply(Module, Function, Args)}
   catch
     throw:Reason ->
       {error, {throw, Reason}};
@@ -299,8 +299,8 @@ map_deep_insert([K | Rest], Val, Outer) ->
         [multicall_target()]
        ) -> multicall_result(A).
 multicall_receive_replies(Collection0, WaitTime, Acc, RemainingTargets) ->
-  try erpc:wait_response(Collection0, WaitTime, true) of
-    {{response, Resp}, Target, Collection} ->
+  try erpc:receive_response(Collection0, WaitTime, true) of
+    {Resp, Target, Collection} ->
       multicall_receive_replies(
         Collection,
         WaitTime,
