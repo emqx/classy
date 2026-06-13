@@ -159,7 +159,7 @@ handle_event({call, ReplyTo}, VoteData = #c_vote{}, Stage, D) ->
   ?tp(foo, #{v => VoteData, s => Stage}),
   handle_vote(ReplyTo, Stage, VoteData, D);
 handle_event(state_timeout, ?state_timeout, Stage, D) ->
-  state_timeout(Stage, D);
+  handle_state_timeout(Stage, D);
 %% Common:
 handle_event(info, {'EXIT', _, Reason}, _, _) ->
   case Reason of
@@ -280,7 +280,7 @@ perform_vote(D = #d{opts = Opts}) ->
   #opts{strategy = Strategy} = Opts,
   {all, Timeout} = Strategy,
   Args = prepare_multi(vote, D),
-  _ = classy_lib:multicall(Args, Timeout),
+  classy_lib:multicast(Args),
   {keep_state_and_data, mk_timeout(Timeout)}.
 
 -spec handle_vote(gen_statem:from(), commit_stage(), #c_vote{}, d()) ->
@@ -335,14 +335,14 @@ handle_vote(ReplyTo, Stage, #c_vote{id = Id, from = From, vote = Vote}, _D) ->
   %% Late vote, irrelevant.
   {keep_state_and_data, {reply, ReplyTo, ok}}.
 
--spec state_timeout(commit_stage(), d()) ->
+-spec handle_state_timeout(commit_stage(), d()) ->
         {next_state, commit_stage(), d()} |
         {keep_state, d(), gen_statem:action()}.
-state_timeout(?s_vote, D0) ->
+handle_state_timeout(?s_vote, D0) ->
   %% Vote timed out, move to rollback:
   D = db_set_coord_state(?s_rollback, ones(n_participants(D0)), D0),
   {next_state, ?s_rollback, D};
-state_timeout(Stage, D0) ->
+handle_state_timeout(Stage, D0) ->
   Outcome = case Stage of
               ?s_commit -> true;
               ?s_rollback -> false
