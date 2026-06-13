@@ -342,6 +342,7 @@ t_070_cleanup(_) ->
               , env => #{ quorum            => 2
                         , max_site_downtime => 1
                         , forget_after      => 0
+                        , rpc_timeout       => 100
                         }
               }},
   Conf = #{fixtures => [AppConf]},
@@ -717,15 +718,24 @@ t_300_rpc(_) ->
               classy_lib:multicall(
                 #{S => {erlang, exit, [{foo, S}]} || S <- [S1, S2, SB]},
                 5_000))),
+       McallTimeout = 500,
+       {Time, TimedOutVal} =
+          ?ON(S1,
+              timer:tc(
+                fun() ->
+                    classy_lib:multicall(
+                      #{S => {timer, sleep, [1_000]} || S <- [S1, S2, SB]},
+                      McallTimeout)
+                end,
+                [],
+                millisecond)),
        ?assertEqual(
           #{ S1 => {error, timeout}
            , S2 => {error, timeout}
            , SB => {error, site_is_down}
            },
-          ?ON(S1,
-              classy_lib:multicall(
-                #{S => {timer, sleep, [1_000]} || S <- [S1, S2, SB]},
-                100))),
+          TimedOutVal),
+       ?give_or_take(McallTimeout, 50, Time),
        %% Multiple calls to the same site with tags:
        ?assertEqual(
           #{ {S2, 1} => {ok, N2}
