@@ -183,9 +183,9 @@ init(#membership_sup{}) ->
 init(?VOTE_COORDINATOR_SUP) ->
   Children = #{ id       => worker
               , start    => {classy_vote_coordinator, start_link, []}
-              , shutdown => 5_000
+              , shutdown => 10_000
               , type     => worker
-              , restart  => transient
+              , restart  => temporary
               },
   SupFlags = #{ strategy  => simple_one_for_one
               , intensity => 1_000_000
@@ -195,9 +195,9 @@ init(?VOTE_COORDINATOR_SUP) ->
 init(?VOTE_PARTICIPANT_SUP) ->
   Children = #{ id       => worker
               , start    => {classy_vote_participant, start_link, []}
-              , shutdown => 5_000
+              , shutdown => 10_000
               , type     => worker
-              , restart  => transient
+              , restart  => temporary
               },
   SupFlags = #{ strategy  => simple_one_for_one
               , intensity => 1_000_000

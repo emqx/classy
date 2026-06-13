@@ -263,7 +263,8 @@ drop(Tab) ->
 lookup(Tab, Key) ->
   case ets:whereis(Tab) of
     undefined ->
-      %% Protection against typos and such:
+      %% Protection against typos and deadlocks. If this happens, the
+      %% user must fix application startup order.
       error({badtable, Tab});
     _ ->
       %% Avoid reads while table is not fully restored:

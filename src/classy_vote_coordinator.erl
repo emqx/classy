@@ -359,7 +359,6 @@ state_timeout(Stage, D0) ->
 -spec perform_post_commit(boolean(), d()) -> {stop, normal}.
 perform_post_commit(Outcome, D = #d{opts = Opts}) ->
   #opts{post_vote = PostActions} = Opts,
-  ?tp(warning, "OHAYO", #{pa => PostActions}),
   lists:foreach(
     fun({M, F, Args}) ->
         try apply(M, F, [Outcome | Args])
@@ -373,7 +372,7 @@ perform_post_commit(Outcome, D = #d{opts = Opts}) ->
         end
     end,
     PostActions),
-  ok = db_teardown(D),
+  ok = db_teardown(Outcome, D),
   {stop, normal}.
 
 -spec broadcast_outcome(boolean(), d()) -> remaining().
@@ -490,8 +489,8 @@ db_establish(Stage, Remaining, #d{opts = Opts}) ->
   ok.
 
 %% Atomically delete information about the vote from the DB.
--spec db_teardown(d()) -> ok.
-db_teardown(#d{opts = #opts{id = Id, tag = Tag}}) ->
+-spec db_teardown(boolean(), d()) -> ok.
+db_teardown(Outcome, #d{opts = #opts{id = Id, tag = Tag}}) ->
   StateKey = #pk_cs{id = Id},
   StaticDataKey = #pk_cd{tag = Tag, id = Id},
   {ok, _} = classy_table:atomically(
@@ -500,8 +499,9 @@ db_teardown(#d{opts = #opts{id = Id, tag = Tag}}) ->
               , {d, StaticDataKey}
               ]),
   ?tp(debug, ?classy_vote_coord_flow_complete,
-      #{ id  => Id
-       , tag => Tag
+      #{ id      => Id
+       , tag     => Tag
+       , outcome => Outcome
        }),
   ok.
 

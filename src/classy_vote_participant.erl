@@ -107,7 +107,7 @@ pre_vote(Prepare) ->
 %% @private Coordinator -> Participant
 -spec vote(#prepare{}) -> ok | {error, _}.
 vote(Prepare = #prepare{tag = Tag, id = ID}) ->
-  ?tp(debug, ?classy_part_regular_vote_start, #{id => ID, tag => Tag}),
+  ?tp(debug, ?classy_vote_part_recv, #{id => ID, tag => Tag}),
   case classy_sup:ensure_vote_participant([Prepare]) of
     {ok, _Pid} ->
       ok;
@@ -319,6 +319,7 @@ db_establish(Stage, Vote, CompletedActions, Prep) ->
                  [ {w, DataKey, Prep}
                  , {w, StateKey, State}
                  ]),
+    ?tp(debug, ?classy_vote_part_established, #{id => ID, tag => Tag}),
     {ok, #d{ prep = Prep
            , vote = Vote
            , completed_actions = CompletedActions

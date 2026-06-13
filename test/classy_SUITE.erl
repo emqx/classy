@@ -795,7 +795,7 @@ t_400_vote_smoke_abort(_) ->
                                                          }
                                            , post_vote => make_post_vote(Ref3)
                                            })),
-       classy_vote:test_wait_conclude(ID3),
+       ?assertNot(classy_vote:test_wait_conclude(ID3)),
        VerifyCleanState(Nodes),
        Nodes
      end,
@@ -816,6 +816,233 @@ t_400_vote_smoke_abort(_) ->
                ?of_kind(classy_test_vote_commit, Trace)),
             ?assertMatch(
                [#{ref := Ref3, result := false}],
+               ?of_kind(classy_test_post_vote, Trace))
+        end}
+     | classy_vote:trace_props()
+     ]).
+
+%% Verify that timeout leads to aborted transaction:
+t_401_vote_timeout(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
+  VerifyCleanState =
+    fun(Nodes) ->
+        Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
+        [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
+    end,
+  Ref1 = vote1,
+  ?check_trace(
+     #{timetrap => 15_000},
+     begin
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       N3 = create_start_site(S3, #{}),
+       Nodes = [N1, N2, N3],
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
+       ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       wait_site_joined(Sites, Cluster, S3),
+       ?force_ordering(
+          #{?snk_kind := test_go},
+          #{?snk_kind := classy_test_vote_prep, for_real := true}),
+       {ok, ID} = ?ON(S1,
+                      classy_vote:create(#{ tag => Ref1
+                                          , actions => #{ S => make_vote(true, true, Ref1, 1) ||
+                                                          S <- [S2, S3]
+                                                        }
+                                          , post_vote => make_post_vote(Ref1)
+                                          , strategy => {all, 100}
+                                          })),
+       ct:sleep(200),
+       ?tp(test_go, #{}),
+       ?assertNot(classy_vote:test_wait_conclude(ID)),
+       VerifyCleanState(Nodes),
+       Nodes
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     , {"rollback events",
+        fun([_N1, N2, N3], Trace) ->
+            ?assertMatch(
+               [ #{ref := Ref1}
+               ],
+               ?of_node(N2, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [ #{ref := Ref1}
+               ],
+               ?of_node(N3, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [],
+               ?of_kind(classy_test_vote_commit, Trace)),
+            ?assertMatch(
+               [#{ref := Ref1, result := false}],
+               ?of_kind(classy_test_post_vote, Trace))
+        end}
+     | classy_vote:trace_props()
+     ]).
+
+%% Verify that restart of the coordinator during vote leads to abort
+t_403_vote_coord_restart(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
+  VerifyCleanState =
+    fun(Nodes) ->
+        Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
+        [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
+    end,
+  Ref1 = vote1,
+  ?check_trace(
+     #{timetrap => 15_000},
+     begin
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       N3 = create_start_site(S3, #{}),
+       Nodes = [N1, N2, N3],
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
+       ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       wait_site_joined(Sites, Cluster, S3),
+       ?force_ordering(
+          #{?snk_kind := test_go},
+          #{?snk_kind := classy_test_vote_prep, for_real := true}),
+       {ok, ID} = ?ON(S1,
+                      classy_vote:create(#{ tag => Ref1
+                                          , actions => #{ S => make_vote(true, true, Ref1, 1) ||
+                                                          S <- [S2, S3]
+                                                        }
+                                          , post_vote => make_post_vote(Ref1)
+                                          , strategy => {all, 10_000}
+                                          })),
+       stop_site(S1),
+       ok = restart_site(S1),
+       ?tp(notice, test_go, #{}),
+       ?assertNot(classy_vote:test_wait_conclude(ID)),
+       VerifyCleanState(Nodes),
+       Nodes
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     , {"rollback events",
+        fun([_N1, N2, N3], Trace) ->
+            ?assertMatch(
+               [ #{ref := Ref1}
+               ],
+               ?of_node(N2, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [ #{ref := Ref1}
+               ],
+               ?of_node(N3, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [],
+               ?of_kind(classy_test_vote_commit, Trace)),
+            ?assertMatch(
+               [#{ref := Ref1, result := false}],
+               ?of_kind(classy_test_post_vote, Trace))
+        end}
+     | classy_vote:trace_props()
+     ]).
+
+%% Verify that restart of the participant during vote leads to abort
+t_404_vote_part_restart(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
+  VerifyCleanState =
+    fun(Nodes) ->
+        ?retry(100, 10,
+           begin
+             Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
+             [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
+           end)
+    end,
+  Ref1 = vote1,
+  Ref2 = vote2,
+  ?check_trace(
+     #{timetrap => 30_000},
+     begin
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       N3 = create_start_site(S3, #{}),
+       Nodes = [N1, N2, N3],
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
+       ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       wait_site_joined(Sites, Cluster, S3),
+       %% Case 1: participant restarts *after* establishing vote
+       %% request in the DB:
+       ?force_ordering(
+          #{?snk_kind := test_go1},
+          #{ ?snk_kind := classy_test_vote_prep
+           , for_real := true
+           , ?snk_meta := #{node := N3}
+           }),
+       {ok, ID1} = ?ON(S1,
+                       classy_vote:create(#{ tag => Ref1
+                                           , actions => #{ S => make_vote(true, true, Ref1, 1) ||
+                                                          S <- [S2, S3]
+                                                         }
+                                           , post_vote => make_post_vote(Ref1)
+                                           , strategy => {all, 1_000}
+                                           })),
+       %% Make sure vote request is recorded in the DB:
+       ?block_until(
+          #{?snk_kind := ?classy_vote_part_established, id := ID1}),
+       stop_site(S3),
+       ?tp(notice, test_go1, #{}),
+       ok = restart_site(S3),
+       ?assertNot(classy_vote:test_wait_conclude(ID1)),
+       VerifyCleanState(Nodes),
+       %% Case 2: participant restarts *before* recording the vote
+       %% request into the DB. Flow should conclude without that
+       %% participant.
+       ?force_ordering(
+          #{?snk_kind := test_go2},
+          #{ ?snk_kind := ?classy_vote_part_recv
+           , tag := Ref2
+           , ?snk_meta := #{node := N3}
+           }),
+       {ok, ID2} = ?ON(S1,
+                       classy_vote:create(#{ tag => Ref2
+                                           , actions => #{ S => make_vote(true, true, Ref2, 1) ||
+                                                          S <- [S2, S3]
+                                                         }
+                                           , post_vote => make_post_vote(Ref2)
+                                           , strategy => {all, 1_000}
+                                           })),
+       stop_site(S3),
+       ?tp(notice, test_go2, #{}),
+       ok = restart_site(S3),
+       ?assertNot(classy_vote:test_wait_conclude(ID2)),
+       VerifyCleanState(Nodes),
+       Nodes
+     end,
+     [ fun no_unexpected_events/1
+     , {"rollback events",
+        fun([_N1, N2, N3], Trace) ->
+            ?assertMatch(
+               [ #{ref := Ref1}
+               , #{ref := Ref2}
+               ],
+               ?of_node(N2, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [ #{ref := Ref1}
+               ],
+               ?of_node(N3, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [],
+               ?of_kind(classy_test_vote_commit, Trace)),
+            ?assertMatch(
+               [ #{ref := Ref1, result := false}
+               , #{ref := Ref2, result := false}
+               ],
                ?of_kind(classy_test_post_vote, Trace))
         end}
      | classy_vote:trace_props()
@@ -853,7 +1080,7 @@ t_410_vote_commit(_) ->
                                                          }
                                            , post_vote => make_post_vote(Ref1)
                                            })),
-       classy_vote:test_wait_conclude(ID3),
+       ?assert(classy_vote:test_wait_conclude(ID3)),
        VerifyCleanState(Nodes),
        Nodes
      end,
@@ -1179,6 +1406,7 @@ create_start_site(Cluster, Site, CustomConf) ->
              #{ app => classy
               , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site]}
                         , cleanup_check_interval => 100
+                        , vote_retry_interval => 100
                         }
               }},
   Fixtures = maps:get(fixtures, CustomConf, []),

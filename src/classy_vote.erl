@@ -277,19 +277,20 @@ enrich_action(BadSite, BadAction) ->
 
 -ifdef(TEST).
 
+-spec test_wait_conclude(classy_vote:id()) -> boolean().
 test_wait_conclude(ID) ->
   %% 1. Wait coordinator:
   {ok, CoordEvt} = ?block_until(#{?snk_kind := K, id := ID} when K =:= ?classy_vote_coord_early_abort;
-                                                           K =:= ?classy_vote_coord_flow_complete),
+                                                                 K =:= ?classy_vote_coord_flow_complete),
   case CoordEvt of
     #{?snk_kind := ?classy_vote_coord_early_abort} ->
-      ok;
-    #{?snk_kind := ?classy_vote_coord_flow_complete} ->
+      false;
+    #{?snk_kind := ?classy_vote_coord_flow_complete, outcome := Outcome} ->
       %% Receive all vote initiation events from the participants
       %% (assuming the number of participants is < 100):
       {ok, SubRef} = snabbkaffe:subscribe(
                        ?match_event(
-                          #{ ?snk_kind := ?classy_part_regular_vote_start
+                          #{ ?snk_kind := ?classy_vote_part_established
                            , id := ID
                            }),
                        100,
@@ -304,7 +305,8 @@ test_wait_conclude(ID) ->
                           , ?snk_meta := #{node := Node}
                           })
         end,
-        PartVoteInitEvents)
+        PartVoteInitEvents),
+      Outcome
   end.
 
 trace_props() ->

@@ -50,8 +50,9 @@
 -define(classy_vote_coord_recv, classy_vote_coord_recv).
 -define(classy_vote_part_stage, classy_vote_part_stage).
 -define(classy_vote_flow_start, classy_vote_flow_start).
+-define(classy_vote_part_established, classy_vote_part_established).
 -define(classy_vote_alloc_id, classy_vote_alloc_id).
--define(classy_part_regular_vote_start, classy_part_regular_vote_start).
+-define(classy_vote_part_recv, classy_vote_part_recv).
 -define(classy_vote_part_send_vote, classy_vote_part_send_vote).
 -define(classy_vote_part_flow_complete, classy_vote_part_flow_complete).
 -define(classy_vote_coord_early_abort, classy_vote_coord_early_abort).
