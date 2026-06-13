@@ -329,10 +329,15 @@ multicall_receive_replies(Collection0, WaitTime, Acc, RemainingTargets) ->
         Acc#{Target => {error, {exit, Exit}}},
         RemainingTargets -- [Target]);
     error:{Err, Target, Collection} ->
-      {exception, Reason, Stack} = Err,
+      case Err of
+        {exception, Exc, Stack} ->
+          Reason = {error, Exc, Stack};
+        Reason ->
+          ok
+      end,
       multicall_receive_replies(
         Collection,
         WaitTime,
-        Acc#{Target => {error, {error, Reason, Stack}}},
+        Acc#{Target => {error, Reason}},
         RemainingTargets -- [Target])
   end.
