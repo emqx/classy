@@ -56,11 +56,11 @@
         {error, {error, _Reason, _Stacktrace :: list()}} |
         {error, {exit, _Reason}}.
 
--type multicall_error() :: {error, site_is_down} | wrapped_exception().
+-type multicall_error() :: {error, site_is_down} | {error, {erpc, _}} | wrapped_exception().
 
 -type multicall_result(Result) ::
         #{multicall_target() => {ok, Result} |
-                                {error, multicall_error()}}.
+                                multicall_error()}.
 
 -type unix_time_s() :: integer().
 

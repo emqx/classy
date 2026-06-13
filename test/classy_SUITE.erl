@@ -751,6 +751,36 @@ t_300_rpc(_) ->
      end,
      []).
 
+%% This testcase verifies behavior of RPC when a node gets stopped amidst a multicall:
+t_310_rpc_to_failing_node(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  ?check_trace(
+     #{timetrap => 15_000},
+     begin
+       %% Prepare
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       wait_site_joined([S1, S2], Cluster, S2),
+       %% Test:
+       FS2 = {get_cluster(), S2},
+       spawn_link(
+         fun() ->
+             timer:sleep(1000),
+             familiar:stop_site(FS2)
+         end),
+       ?assertEqual(
+          #{S2 => {error, {erpc, noconnection}}},
+          ?ON(S1,
+              classy_lib:multicall(
+                #{S2 => {timer, sleep, [30_000]}},
+                30_000))),
+       ok
+     end,
+     []).
+
 %% This testcase verifies various scenarios related to 2PC that lead
 %% to abort and rollback.
 t_400_vote_smoke_abort(_) ->
