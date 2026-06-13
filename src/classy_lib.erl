@@ -11,6 +11,7 @@
         , sites_to_nodes/1
         , safe_apply/1
         , safe_apply/3
+        , multicast/1
         , multicall/1
         , multicall/2
         ]).
@@ -84,6 +85,28 @@ safe_apply(Module, Function, Args) ->
     exit:Reason ->
       {error, {exit, Reason}}
   end.
+
+
+%% @doc Call a function on multiple nodes in parallel with default timeout.
+-spec multicast(multicall_args()) -> ok.
+multicast(SitesWithArgs) ->
+  maps:foreach(
+    fun(SiteOrTuple, {Module, Function, Args}) when is_atom(Module),
+                                                    is_atom(Function),
+                                                    is_list(Args) ->
+
+        case SiteOrTuple of
+          Site when is_binary(Site) -> ok;
+          {Site, _} -> ok
+        end,
+        case classy_node:node_of_site(Site, true) of
+          {ok, Node} ->
+            erpc:cast(Node, Module, Function, Args);
+          undefined ->
+            ok
+        end
+    end,
+    SitesWithArgs).
 
 %% @doc Call a function on multiple nodes in parallel with default timeout.
 -spec multicall(multicall_args()) -> multicall_result(term()).
