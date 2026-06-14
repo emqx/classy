@@ -38,8 +38,8 @@ bidi_link(ClusterInfo, NodeA, NodeB) ->
       #{site := SiteA, peers := PeersA} = A,
       #{site := SiteB, peers := PeersB} = B,
       maybe
-        #{SiteB := #{up := true, node := NodeB}} ?= PeersA,
-        #{SiteA := #{up := true, node := NodeA}} ?= PeersB,
+        #{SiteB := #{connected := true, node := NodeB}} ?= PeersA,
+        #{SiteA := #{connected := true, node := NodeA}} ?= PeersB,
         {ok, true}
       else
         _ ->
@@ -165,7 +165,7 @@ full_mesh_test() ->
 test_cluster_info_full_mesh(Cluster, N) ->
   Peers = maps:from_list(
             [{Site, #{ node        => Node
-                     , up          => true
+                     , connected   => true
                      , last_update => 0
                      }} ||
               {Site, Node} <- test_ids(1, N)]),
@@ -195,7 +195,7 @@ test_disconnect(A, B, ClusterInfo = #{infos := Infos}) ->
   {SiteB, _} = test_ids(B),
   #{NodeA := AInfo = #{peers := Peers0}} = Infos,
   #{SiteB := SiteBInfo} = Peers0,
-  Peers = Peers0#{SiteB := SiteBInfo#{up => false}},
+  Peers = Peers0#{SiteB := SiteBInfo#{connected => false}},
   ClusterInfo#{infos := Infos#{NodeA := AInfo#{peers := Peers}}}.
 
 test_ids(N) ->

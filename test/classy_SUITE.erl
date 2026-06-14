@@ -586,6 +586,43 @@ t_091_node_of_site(_) ->
      , fun events_on_all_sites/1
      ]).
 
+t_092_bidi_link(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  Sites = [S1, S2],
+  ?check_trace(
+     #{timetrap => 20_000},
+     begin
+       %% Prepare system:
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       #{cluster := Cluster} = ?ON(S1, classy_node:hello()),
+       CInfo1 = classy:info([N1, N2]),
+       ?assertEqual(
+          {ok, false},
+          classy_partition:bidi_link(CInfo1, N1, N2),
+          CInfo1),
+       %% Join sites:
+       ?ON(S2, classy:join_node(N1, join)),
+       wait_site_joined(Sites, Cluster, S2),
+       %% Now joined sites should have a bidirectional link:
+       CInfo2 = classy:info([N1, N2]),
+       ?assertEqual(
+          {ok, true},
+          classy_partition:bidi_link(CInfo2, N1, N2),
+          CInfo2),
+       %% Stop one of the sites:
+       stop_site(S2),
+       CInfo3 = classy:info([N1, N2]),
+       ?assertEqual(
+          {error, insufficient_data},
+          classy_partition:bidi_link(CInfo3, N1, N2),
+          CInfo3)
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
 %% This testcase verifies basic functionality of autocluster.
 t_100_autocluster(_) ->
   S1 = <<"s1">>,
