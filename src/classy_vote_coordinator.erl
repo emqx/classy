@@ -352,7 +352,7 @@ handle_state_timeout(Stage, D0) ->
               ?s_rollback -> false
             end,
   Remaining = broadcast_outcome(Outcome, D0),
-  D = db_set_coord_state(?s_commit, Remaining, D0),
+  D = db_set_coord_state(Stage, Remaining, D0),
   case Remaining > 0 of
     true ->
       {keep_state, D, mk_timeout(classy_vote:retry_interval())};
