@@ -323,7 +323,7 @@ verify_coordinator(Coordinator) ->
     {ok, _} ->
       ok;
     _ ->
-      {errror, coordinator_unreachable}
+      {error, coordinator_unreachable}
   end.
 
 -spec db_establish(stage(), boolean(), non_neg_integer(), #prepare{}) -> {ok, d()} | {error, _}.
