@@ -1101,6 +1101,7 @@ t_404_vote_part_restart(_) ->
        Nodes
      end,
      [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
      , {"rollback events",
         fun([_N1, N2, N3], Trace) ->
             ?assertMatch(
@@ -1221,6 +1222,7 @@ t_411_commit_actions_after_restart(_) ->
        Nodes
      end,
      [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
      , {"commit events",
         fun([_N1, N2], Trace) ->
             ?assertMatch(
@@ -1305,6 +1307,7 @@ t_412_commit_action_crash(_) ->
        Nodes
      end,
      [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
      , {"coordinator history",
         fun([N1, _N2], Trace) ->
             ?assertMatch(
@@ -1587,9 +1590,9 @@ validate_site_event(#{?snk_kind := classy_create_new_cluster},
   E;
 %%   Abrupt stop:
 validate_site_event(_,
-                    #{?snk_kind := classy_test_site_stop} = E) ->
+                    #{?snk_kind := familiar_peer_stop} = E) ->
   E;
-validate_site_event(#{?snk_kind := classy_test_site_stop},
+validate_site_event(#{?snk_kind := familiar_peer_stop},
                     #{?snk_kind := classy_change_run_level, to := single} = E) ->
   E.
 
@@ -1607,7 +1610,7 @@ site_of_event(#{?snk_kind := Kind, ?snk_meta := #{local := Site}}) when
     Kind =:= classy_peer_up;
     Kind =:= classy_peer_down ->
   Site;
-site_of_event(#{?snk_kind := classy_test_site_stop, site := Site}) ->
+site_of_event(#{?snk_kind := familiar_peer_stop, site := Site}) ->
   Site;
 site_of_event(_) ->
   undefined.

@@ -468,7 +468,7 @@ precondition(S, {call, ?MODULE, join_node, [Local, Target|_]}) ->
   is_running(Local, S) andalso
   is_running(Target, S) andalso
   Local =/= Target;
-precondition(S, {call, classy_test_site, stop, [Site]}) ->
+precondition(S, {call, ?MODULE, stop_site, [Site]}) ->
   %% For simplicity, we avoid stopping all sites in clusters that have >1 sites.
   %% Stopping all sites at once leads to loss of synchronization and split views,
   %% since the site that recieved the last command may become unable to propagate data.

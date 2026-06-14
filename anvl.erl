@@ -21,7 +21,7 @@ conf() ->
             , #{id => optvar,     repo => "https://github.com/emqx/optvar",           ref => {tag,"1.0.5"}}
             , #{id => snabbkaffe, repo => "https://github.com/kafka4beam/snabbkaffe", ref => {tag,"1.0.10"}}
             , #{id => gproc,      repo => "https://github.com/uwiger/gproc",          ref => {tag,"1.1.0"}}
-            , #{id => familiar,   repo => "https://github.com/ieQu1/familiar",        ref => {tag,"0.1.0"}}
+            , #{id => familiar,   repo => "https://github.com/ieQu1/familiar",        ref => {tag,"0.1.1"}}
             ]
         , hex_pm =>
             [ #{id => proper, version => "1.5.0"}
