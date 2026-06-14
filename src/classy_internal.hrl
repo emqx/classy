@@ -22,7 +22,7 @@
 -define(on_node_init, on_node_init).
 -define(on_create_cluster, on_create_cluster).
 -define(on_create_site, on_create_site).
--define(on_site_status_change, on_site_status_change).
+-define(on_peer_connection_status_change, on_peer_connection_status_change).
 -define(on_membership_change, on_membership_change).
 -define(on_pre_join, on_pre_join).
 -define(on_post_join, on_post_join).
@@ -45,9 +45,25 @@
 -define(classy_table_anomaly, classy_table_anomaly).
 -define(classy_bad_data, classy_bad_data).
 
+-define(classy_vote_pre_results, classy_vote_pre_results).
+-define(classy_vote_coord_stage, classy_vote_coord_stage).
+-define(classy_vote_coord_recv, classy_vote_coord_recv).
+-define(classy_vote_coord_commit, classy_vote_coord_commit).
+-define(classy_vote_coord_post_actions, classy_vote_coord_post_actions).
+-define(classy_vote_part_stage, classy_vote_part_stage).
+-define(classy_vote_part_perform_action, classy_vote_part_perform_action).
+-define(classy_vote_flow_start, classy_vote_flow_start).
+-define(classy_vote_part_established, classy_vote_part_established).
+-define(classy_vote_alloc_id, classy_vote_alloc_id).
+-define(classy_vote_part_recv, classy_vote_part_recv).
+-define(classy_vote_part_send_vote, classy_vote_part_send_vote).
+-define(classy_vote_part_flow_complete, classy_vote_part_flow_complete).
+-define(classy_vote_coord_early_abort, classy_vote_coord_early_abort).
+-define(classy_vote_coord_flow_complete, classy_vote_coord_flow_complete).
+
 %% Site information:
 -define(site_info, classy_site_status_tab).
--record(site_info, {isup, node, last_update}).
+-record(site_info, {isconn, node, last_update}).
 %%    Number of restarts since creation of the site
 -define(n_restarts, n_restarts).
 

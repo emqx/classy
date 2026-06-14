@@ -87,9 +87,9 @@ terminate(_Reason, _S) ->
 -spec site_down_since(classy_lib:unix_time_s(), classy:site()) -> classy_lib:unix_time_s() | alive.
 site_down_since(RemoteT, Site) ->
   case classy_table:lookup(?site_info, Site) of
-    [#site_info{isup = true}] ->
+    [#site_info{isconn = true}] ->
       alive;
-    [#site_info{isup = false, last_update = DownSince}] ->
+    [#site_info{isconn = false, last_update = DownSince}] ->
       classy_lib:adjust_time_s_skew(RemoteT, DownSince);
     [] ->
       %% We have never seen the site alive:
@@ -114,7 +114,7 @@ check_down_sites() ->
             true ?= Site =/= Local,
             %% Before asking the remote sites, check the local data first:
             [ #site_info{ node = Node
-                        , isup = false
+                        , isconn = false
                         , last_update = LastUpdate
                         }
             ] ?= classy_table:lookup(?site_info, Site),

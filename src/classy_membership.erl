@@ -609,8 +609,8 @@ run_hooks(S = #s{clock = C, cluster = Cluster, site = Local}) ->
   UpdatedEntries = memtab_since(hooks_ran(S) + 1, S),
   lists:foreach(
     fun(Op = #op_set{k = #mem{s = Peer}}) ->
-        IsUp = state(Op),
-        classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, IsUp]);
+        IsConn = state(Op),
+        classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, IsConn]);
        (#op_set{}) ->
         ok
     end,

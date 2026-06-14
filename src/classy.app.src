@@ -2,20 +2,23 @@
     {description, "An OTP library"},
     {vsn, "0.1.0"},
     {registered, []},
-    {applications, [
-        kernel,
-        stdlib,
-        crypto,
-        snabbkaffe,
-        gproc,
-        optvar,
+    {applications,
+     [ kernel
+     , stdlib
+     , crypto
+     , snabbkaffe
+     , gproc
+     , optvar
         %% Discovery:
-        eetcd,
-        hackney,
-        jsone,
-        %% Test harness:
-        tools
-    ]},
+     , eetcd
+     , hackney
+     , jsone
+     ]},
+    {optional_applications,
+     [ %% Test harness:
+       tools
+     , familiar
+     ]},
     {env, []},
     {modules, []},
     {mod, {classy_app, []}},

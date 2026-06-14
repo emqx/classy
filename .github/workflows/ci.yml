@@ -30,9 +30,19 @@ jobs:
         steps:
         - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
+        - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+          with:
+            repository: 'k32/anvl'
+            ref: 'master'
+            path: 'anvl'
+
+        - name: ANVL bootstrap
+          run: |
+            cd anvl && ./bootstrap.escript
+
         - name: Compile
           run: |
-            make
+            ~/.local/bin/anvl
 
         - name: Run tests
           run: |

@@ -18,6 +18,9 @@
         , clusters/1
         , diagnostic/1
         , diagnostic/2
+        , call/5
+        , call/4
+        , call/3
         ]).
 
 %% behavior callbacks:
@@ -34,6 +37,8 @@
         , join_node/4
         , kick_site/4
         , start_site/2
+        , stop_site/1
+        , familiar_cluster/0
         ]).
 
 -export_type([test_conf/0]).
@@ -63,7 +68,7 @@
 
 -type test_conf() ::
         #{ module := module()
-         , sites => [{classy:site(), classy_test_site:conf()}]
+         , sites => [{classy:site(), familiar:site_conf()}]
          , quorum => pos_integer()
          , n_sites => pos_integer()
          , _ => _
@@ -73,7 +78,7 @@
         #{ %% Current symbolic cluster ID of the site:
            cluster := cluster()
          , running := boolean()
-         , conf := classy_test_site:conf()
+         , conf := familiar:site_conf()
          }.
 
 -type s() ::
@@ -93,12 +98,15 @@
 %% Internal exports
 %%================================================================================
 
+familiar_cluster() ->
+  classy_fuzz_cluster.
+
 -spec init_cluster(test_conf()) -> ok.
 init_cluster(#{sites := Sites, quorum := Quorum, n_sites := NSites}) ->
   lists:foreach(
     fun({Site, Conf0}) ->
         Fixtures = maps:get(fixtures, Conf0, []),
-        ClassyFixture = {classy_test_app,
+        ClassyFixture = {familiar_app,
                          #{ app => classy
                           , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site]}
                                     , quorum => Quorum
@@ -108,8 +116,8 @@ init_cluster(#{sites := Sites, quorum := Quorum, n_sites := NSites}) ->
                           }},
         Conf = Conf0#{fixtures => [ClassyFixture] ++ Fixtures},
         ?assertMatch(
-           ok,
-           classy_test_cluster:ensure_site(Site, Conf))
+           {ok, _},
+           familiar:create_site(familiar_cluster(), Site, Conf))
     end,
     Sites).
 
@@ -121,7 +129,7 @@ setup_hooks(Site) ->
     0).
 
 join_node(Origin, Target, Intent, S) ->
-  TargetNode = classy_test_site:which_node(Target),
+  TargetNode = familiar:which_node({familiar_cluster(), Target}),
   ?tp(info, classy_test_fuzzer_join_node,
       #{ site        => Origin
        , target      => Target
@@ -134,7 +142,7 @@ join_node(Origin, Target, Intent, S) ->
   case OriginCluster of
     TargetCluster ->
       %% If already in the same cluster, no join event expected
-      Result = classy_test_site:call(
+      Result = call(
                  Origin,
                  fun() ->
                      classy:join_node(TargetNode, Intent)
@@ -146,7 +154,7 @@ join_node(Origin, Target, Intent, S) ->
         [Origin | sites_of_cluster(TargetCluster, S)],
         fun() ->
             ?retry(100, 10,
-                   ok = classy_test_site:call(
+                   ok = call(
                           Origin,
                           fun() ->
                               classy:join_node(TargetNode, Intent)
@@ -166,7 +174,7 @@ kick_site(Origin, Target, Intent, S) ->
   exec_and_wait_sync(
     sites_of_cluster(cluster_of(Origin, S), S),
     fun() ->
-        classy_test_site:call(
+        call(
           Origin,
           fun() ->
               classy:kick_site(Target, Intent)
@@ -175,6 +183,9 @@ kick_site(Origin, Target, Intent, S) ->
     end,
     ?match_event(#{?snk_kind := classy_member_leave, remote := Target}),
     S).
+
+stop_site(Site) ->
+  familiar:stop_site(familiar_cluster(), Site).
 
 start_site(Site, S) ->
   %% Note: since in non-singleton clusters we don't stop all sites,
@@ -198,7 +209,7 @@ start_site(Site, S) ->
                 end,
                 NEvents,
                 ?sync_timeout),
-  Ret = classy_test_site:start(Site),
+  Ret = familiar:start_site({familiar_cluster(), Site}),
   {Ret, snabbkaffe:receive_events(Sub)}.
 
 %%================================================================================
@@ -274,7 +285,7 @@ real_cluster_of(Site) ->
      100,
      begin
        #{cluster := Cluster} =
-         classy_test_site:call(
+         call(
            Site,
            classy_node, hello, [],
            ?rpc_timeout),
@@ -304,18 +315,31 @@ diagnostic(SelectedSites, #{sites := Sites}) ->
     fun(Site, #{running := R}) ->
         case R of
           true ->
-            catch classy_test_site:call(
+            catch call(
                     Site,
                     fun() ->
                         #{ members => classy_membership:dump()
                          , node => catch ets:tab2list(classy_node)
                          }
-                    end);
+                    end,
+                    5_000);
           false ->
             stopped
         end
     end,
     maps:with(SelectedSites, Sites)).
+
+-spec call(classy:site(), module(), atom(), list(), timeout()) -> _.
+call(Site, M, F, A, Timeout) ->
+  familiar:call({familiar_cluster(), Site}, M, F, A, Timeout).
+
+-spec call(classy:site(), module(), atom(), list()) -> _.
+call(Site, M, F, A) ->
+  familiar:call({familiar_cluster(), Site}, M, F, A).
+
+-spec call(classy:site(), function(), timeout()) -> _.
+call(Site, Fun, Timeout) ->
+  familiar:call({familiar_cluster(), Site}, Fun, Timeout).
 
 %%================================================================================
 %% Proper generators
@@ -342,7 +366,7 @@ running_site_command_(Site, S = #{sites := Sites}) ->
   frequency(
     [ {7, {call, ?MODULE, kick_site, [Site, oneof(OtherMembers), kick, S]}} || length(OtherMembers) > 0] ++
     [ {10, {call, ?MODULE, join_node, [Site, oneof(OtherRunning), join, S]}} || length(OtherRunning) > 0] ++
-    [ {5, {call, classy_test_site, stop, [Site]}}
+    [ {5, {call, ?MODULE, stop_site, [Site]}}
     | optcall(S, running_site_command, [Site, S], [])
     ]).
 
@@ -405,7 +429,7 @@ next_state(S, _Ret, {call, ?MODULE, start_site, [Site | _]}) ->
     Site,
     fun(SiteS) -> SiteS#{running := true} end,
     S);
-next_state(S, _Ret, {call, classy_test_site, stop, [Site]}) ->
+next_state(S, _Ret, {call, ?MODULE, stop_site, [Site]}) ->
   update_site(
     Site,
     fun(SiteS) -> SiteS#{running := false} end,
@@ -444,7 +468,7 @@ precondition(S, {call, ?MODULE, join_node, [Local, Target|_]}) ->
   is_running(Local, S) andalso
   is_running(Target, S) andalso
   Local =/= Target;
-precondition(S, {call, classy_test_site, stop, [Site]}) ->
+precondition(S, {call, ?MODULE, stop_site, [Site]}) ->
   %% For simplicity, we avoid stopping all sites in clusters that have >1 sites.
   %% Stopping all sites at once leads to loss of synchronization and split views,
   %% since the site that recieved the last command may become unable to propagate data.
@@ -487,7 +511,7 @@ postcondition(PrevState, Call, Result) ->
           });
     {call, ?MODULE, start_site, Args} ->
       ?assertMatch(
-         {ok, {ok, _Event}},
+         {{ok, _Node}, {ok, _Event}},
          Result,
          #{ msg => "Start failed"
           , args => Args
@@ -519,7 +543,7 @@ verify_cluster_converged(Cluster, Sites, S) ->
   %% Verify that all running sites in the cluster have the same view of the cluster:
   Running = [I || I <- Sites, classy_test_fuzzer:is_running(I, S)],
   Views = [{ I
-           , classy_test_site:call(I, classy, sites, [])
+           , call(I, classy, sites, [])
            }
            || I <- Running],
   case Views of

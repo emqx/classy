@@ -12,6 +12,7 @@
         , kick_site/2
         , the_site/0
         , the_cluster/0
+        , parent_site/0
         , nodes/1
         , peer_info/0
         , node_of_site/2
@@ -24,9 +25,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([ hello/0
-        , cluster_info/0
-        ]).
+-export([hello/0]).
 
 -export_type([run_level_atom/0]).
 
@@ -44,6 +43,7 @@
 -define(ptab, classy_node).
 -define(the_site, the_site).
 -define(the_cluster, the_cluster).
+-define(parent_site, parent_site).
 
 -record(call_join,
         { node :: node()
@@ -75,8 +75,14 @@
 %% Any `undefined' argument is replaced with a sufficiently unique random string.
 -spec maybe_init_the_site(classy:site() | undefined) -> ok.
 maybe_init_the_site(MaybeSite) ->
-  {_, Site} = ensure_the_id(?the_site, ?on_create_site, [], MaybeSite),
-  _ = ensure_the_id(?the_cluster, ?on_create_cluster, [Site], undefined),
+  {_IsNewSite, Site, Ops1} = ensure_the_id(?the_site, ?on_create_site, [], MaybeSite),
+  {IsNewCluster, _Cluster, Ops2} = ensure_the_id(?the_cluster, ?on_create_cluster, [Site], undefined),
+  Ops3 = case IsNewCluster of
+           true  -> [{w, ?parent_site, Site}];
+           false -> []
+         end,
+  {ok, Effects} = classy_table:atomically(?ptab, Ops1 ++ Ops2 ++ Ops3),
+  [Fun() || Fun <- Effects],
   ok.
 
 %% @private
@@ -96,6 +102,17 @@ the_cluster() ->
 -spec the_site() -> {ok, classy:site()} | undefined.
 the_site() ->
   case classy_table:lookup(?ptab, ?the_site) of
+    [V] -> {ok, V};
+    []  -> undefined
+  end.
+
+%% @doc Return ID of the site that invited us to `the_cluster'.
+%%
+%% The return value could be equal to `{ok, the_site()}' for the site that originally created the cluster.
+%% `undefined' return value means the local site is not initialized.
+-spec parent_site() -> {ok, classy:site()} | undefined.
+parent_site() ->
+  case classy_table:lookup(?ptab, ?parent_site) of
     [V] -> {ok, V};
     []  -> undefined
   end.
@@ -144,7 +161,7 @@ nodes(Query) ->
              stopped -> [{'=:=', '$2', false}]
            end,
   MS = { #classy_kv{ v = #site_info{ node = '$1'
-                                   , isup = '$2'
+                                   , isconn = '$2'
                                    , _ = '_'
                                    }
                    , _ = '_'
@@ -157,9 +174,9 @@ nodes(Query) ->
 -spec peer_info() -> #{classy:site() => classy:peer_info()}.
 peer_info() ->
   ets:foldl(
-    fun(#classy_kv{k = Site, v = #site_info{node = Node, isup = IsUp, last_update = LU}}, Acc) ->
+    fun(#classy_kv{k = Site, v = #site_info{node = Node, isconn = IsConn, last_update = LU}}, Acc) ->
         Info = #{ node        => Node
-                , up          => IsUp
+                , connected   => IsConn
                 , last_update => LU
                 },
         Acc#{Site => Info}
@@ -168,9 +185,9 @@ peer_info() ->
     ?site_info).
 
 -spec node_of_site(classy:site(), boolean()) -> {ok, node()} | undefined.
-node_of_site(Site, OnlyLive) ->
+node_of_site(Site, OnlyConnected) ->
   case classy_table:lookup(?site_info, Site) of
-    [#site_info{isup = IsUp, node = Node}] when IsUp; not OnlyLive ->
+    [#site_info{isconn = IsConnected, node = Node}] when IsConnected; not OnlyConnected ->
       {ok, Node};
     _ ->
       undefined
@@ -206,7 +223,7 @@ init(_) ->
      , nodedown_reason => true
      }),
   ok = classy_table:open(?ptab, #{}),
-  ok = classy_table:open(?site_info, #{}),
+  ok = classy_table:open(?site_info, #{ets_options => [{read_concurrency, true}]}),
   classy:on_membership_change(fun on_membership_change/4, -100),
   increase_n_restarts(),
   classy_hook:foreach(?on_node_init, []),
@@ -296,7 +313,7 @@ terminate(Reason, S) ->
 %% Internal exports
 %%================================================================================
 
-%% @doc Called by remote node during `join'.
+%% @private RPC target, called by remote node during `join'.
 %% Returns information about the local site, used for bootstrapping the remote.
 hello() ->
   maybe
@@ -313,20 +330,6 @@ hello() ->
       {error, not_in_cluster};
     Err ->
       Err
-  end.
-
-%% @doc RPC target
--spec cluster_info() -> {ok, classy:cluster_id(), [{classy:site(), node()}]} | error.
-cluster_info() ->
-  maybe
-    {ok, Cluster} ?= the_cluster(),
-    {ok, Site} ?= the_site(),
-    Peers = classy_membership:members(Cluster, Site),
-    Nodes = classy_membership:node_of_site(Cluster, Site),
-    {ok, Cluster, [{I, maps:get(I, Nodes, undefined)} || I <- Peers]}
-  else
-    _ ->
-      error
   end.
 
 %%================================================================================
@@ -445,7 +448,7 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
       end;
     undefined ->
       %% Site is not in any cluster:
-      {ok, S} = join_cluster(Cluster, Node, Local, S0),
+      {ok, S} = join_cluster(Cluster, Node, Local, Remote, S0),
       do_join_node(Node, Cluster, Remote, MemData, S)
   end.
 
@@ -461,10 +464,13 @@ on_leave(S0 = #s{cluster = Cluster, site = Local}, Intent) ->
       init_cluster()
   end.
 
-join_cluster(Cluster, JoinToNode, Local, S = #s{run_level = 0}) ->
+-spec join_cluster(classy:cluster_id(), node(), classy:site(), classy:site(), #s{}) -> {ok, #s{}}.
+join_cluster(Cluster, JoinToNode, Local, Remote, S = #s{run_level = 0}) ->
   {ok, _} = classy_sup:ensure_membership(Cluster, Local),
   classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode]),
-  classy_table:write(?ptab, ?the_cluster, Cluster),
+  classy_table:dirty_write(?ptab, ?the_cluster, Cluster),
+  classy_table:dirty_write(?ptab, ?parent_site, Remote),
+  classy_table:flush(?ptab),
   {ok, S#s{cluster = Cluster, peer_state = #{}}}.
 
 %% Update node tracking information
@@ -479,25 +485,25 @@ update_sites_status(S0 = #s{cluster = Cluster, site = Local}) ->
          fun(Site, Acc) ->
              case NodesOfSite of
                #{Site := Node} ->
-                 IsUp = lists:member(Node, Nodes);
+                 IsConn = lists:member(Node, Nodes);
                #{} ->
                  Node = undefined,
-                 IsUp = false
+                 IsConn = false
              end,
              case classy_table:lookup(?site_info, Site) of
-               [#site_info{isup = IsUp, node = Node}] ->
+               [#site_info{isconn = IsConn, node = Node}] ->
                  %% No changes:
                  ok;
                _ ->
                  classy_table:dirty_write(
                    ?site_info,
                    Site,
-                   #site_info{ isup = IsUp
+                   #site_info{ isconn = IsConn
                              , node = Node
                              , last_update = classy_lib:time_s()
                              })
              end,
-             maybe_on_site_status_change(Acc, Site, Node, IsUp, true)
+             maybe_on_peer_connection_status_change(Acc, Site, Node, IsConn, true)
         end,
         S0,
         Members),
@@ -509,7 +515,7 @@ update_sites_status(S0 = #s{cluster = Cluster, site = Local}) ->
                 Acc;
               false ->
                 classy_table:dirty_delete(?site_info, Site),
-                maybe_on_site_status_change(Acc, Site, Node, false, false)
+                maybe_on_peer_connection_status_change(Acc, Site, Node, false, false)
             end
         end,
         S1,
@@ -517,17 +523,17 @@ update_sites_status(S0 = #s{cluster = Cluster, site = Local}) ->
   classy_table:flush(?site_info),
   S.
 
--spec maybe_on_site_status_change(#s{}, classy:site(), node() | undefined, boolean(), boolean()) -> #s{}.
-maybe_on_site_status_change(S = #s{cluster = Cluster, site = Local, peer_state = PS0}, Site, Node, IsUp, Keep) ->
+-spec maybe_on_peer_connection_status_change(#s{}, classy:site(), node() | undefined, boolean(), boolean()) -> #s{}.
+maybe_on_peer_connection_status_change(S = #s{cluster = Cluster, site = Local, peer_state = PS0}, Site, Node, IsConn, Keep) ->
   Changed = case PS0 of
-              #{Site := {Node, IsUp}} ->
+              #{Site := {Node, IsConn}} ->
                 false;
               #{} ->
-                classy_hook:foreach(?on_site_status_change, [Cluster, Local, Site, Node, IsUp]),
+                classy_hook:foreach(?on_peer_connection_status_change, [Cluster, Local, Site, Node, IsConn]),
                 true
             end,
   PS = if Changed andalso Keep ->
-           PS0#{Site => {Node, IsUp}};
+           PS0#{Site => {Node, IsConn}};
           not Keep ->
            maps:remove(Site, PS0);
           true ->
@@ -554,11 +560,14 @@ init_cluster() ->
   end.
 
 -spec ensure_the_id(?the_cluster | ?the_site, ?on_create_cluster | ?on_create_site, list(), binary() | undefined) ->
-        {boolean(), binary()}.
+        { boolean()
+        , binary()
+        , [classy_table:atomic_op(fun(() -> _))]
+        }.
 ensure_the_id(Key, OnCreateHook, HookArgs, Default) ->
   case classy_table:lookup(?ptab, Key) of
     [Bin] when is_binary(Bin) ->
-      {false, Bin};
+      {false, Bin, []};
     [] ->
       case Default of
         undefined ->
@@ -566,9 +575,14 @@ ensure_the_id(Key, OnCreateHook, HookArgs, Default) ->
         Val when is_binary(Val) ->
           ok
       end,
-      classy_hook:foreach(OnCreateHook, [Val | HookArgs]),
-      classy_table:write(?ptab, Key, Val),
-      {true, Val}
+      { true
+      , Val
+      , [ {w, Key, Val}
+        , {then, fun() ->
+                     classy_hook:foreach(OnCreateHook, [Val | HookArgs])
+                 end}
+        ]
+      }
   end.
 
 -spec adjust_run_level(#s{}) -> #s{}.

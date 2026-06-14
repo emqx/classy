@@ -12,6 +12,8 @@
         , stop/1
         , start_table/2
         , ensure_membership/2
+        , ensure_vote_coordinator/1
+        , ensure_vote_participant/1
         ]).
 
 %% behavior callbacks:
@@ -20,6 +22,8 @@
 %% internal exports:
 -export([ start_link_table_sup/0
         , start_link_membership_sup/0
+        , start_link_vote_coordinator_sup/0
+        , start_link_vote_participant_sup/0
         ]).
 
 -export_type([]).
@@ -35,6 +39,8 @@
 -define(SUP, ?MODULE).
 -define(TABLE_SUP, classy_table_sup).
 -define(MEMBERSHIP_SUP, classy_membership_sup).
+-define(VOTE_COORDINATOR_SUP, classy_vote_coordinator_sup).
+-define(VOTE_PARTICIPANT_SUP, classy_vote_participant_sup).
 
 %%================================================================================
 %% API functions
@@ -63,6 +69,14 @@ ensure_membership(Cluster, Site) ->
       Err
   end.
 
+-spec ensure_vote_coordinator(_) -> {ok, pid()} | {error, _}.
+ensure_vote_coordinator(Args) ->
+  simple_one_for_one_ensure_child(?VOTE_COORDINATOR_SUP, Args).
+
+-spec ensure_vote_participant(_) -> {ok, pid()} | {error, _}.
+ensure_vote_participant(Args) ->
+  simple_one_for_one_ensure_child(?VOTE_PARTICIPANT_SUP, Args).
+
 %%================================================================================
 %% Internal exports
 %%================================================================================
@@ -74,6 +88,26 @@ start_link_table_sup() ->
 -spec start_link_membership_sup() -> supervisor:startlink_ret().
 start_link_membership_sup() ->
   supervisor:start_link({local, ?MEMBERSHIP_SUP}, ?MODULE, #membership_sup{}).
+
+-spec start_link_vote_coordinator_sup() -> supervisor:startlink_ret().
+start_link_vote_coordinator_sup() ->
+  case supervisor:start_link({local, ?VOTE_COORDINATOR_SUP}, ?MODULE, ?VOTE_COORDINATOR_SUP) of
+    {ok, _} = Ok ->
+      classy_vote_coordinator:restore(),
+      Ok;
+    Other ->
+      Other
+  end.
+
+-spec start_link_vote_participant_sup() -> supervisor:startlink_ret().
+start_link_vote_participant_sup() ->
+  case supervisor:start_link({local, ?VOTE_PARTICIPANT_SUP}, ?MODULE, ?VOTE_PARTICIPANT_SUP) of
+    {ok, _} = Ok ->
+      classy_vote_participant:restore(),
+      Ok;
+    Other ->
+      Other
+  end.
 
 %%================================================================================
 %% behavior callbacks
@@ -109,6 +143,8 @@ init(#top{}) ->
              , sup_spec(#{id => ?MEMBERSHIP_SUP, start => {?MODULE, start_link_membership_sup, []}})
              , Node
              , UIDGen
+             , sup_spec(#{id => ?VOTE_COORDINATOR_SUP, start => {?MODULE, start_link_vote_coordinator_sup, []}})
+             , sup_spec(#{id => ?VOTE_PARTICIPANT_SUP, start => {?MODULE, start_link_vote_participant_sup, []}})
              , Autoclean
              , Autocluster
              ],
@@ -143,6 +179,38 @@ init(#membership_sup{}) ->
               , period        => 10
               , auto_shutdown => never
               },
+  {ok, {SupFlags, [Children]}};
+init(?VOTE_COORDINATOR_SUP) ->
+  %% Note: since both coordinator and participant workers deal with
+  %% persistent data, recovery via restart by the supervisor is too
+  %% risky. It can lead to the situation where workers restart from a
+  %% corrupted state and immediately restart.
+  %%
+  %% We let operator or business logic restart the workers if they
+  %% deem that safe. Additionally, the workers are automatically
+  %% restarted on node restart.
+  Children = #{ id       => worker
+              , start    => {classy_vote_coordinator, start_link, []}
+              , shutdown => 5_000
+              , type     => worker
+              , restart  => temporary
+              },
+  SupFlags = #{ strategy  => simple_one_for_one
+              , intensity => 1_000_000
+              , period    => 1
+              },
+  {ok, {SupFlags, [Children]}};
+init(?VOTE_PARTICIPANT_SUP) ->
+  Children = #{ id       => worker
+              , start    => {classy_vote_participant, start_link, []}
+              , shutdown => 5_000
+              , type     => worker
+              , restart  => temporary
+              },
+  SupFlags = #{ strategy  => simple_one_for_one
+              , intensity => 1_000_000
+              , period    => 1
+              },
   {ok, {SupFlags, [Children]}}.
 
 %%================================================================================
@@ -158,3 +226,13 @@ sup_spec(M) ->
      , significant => false
      },
     M).
+
+simple_one_for_one_ensure_child(Sup, Args) ->
+  case supervisor:start_child(Sup, Args) of
+    {ok, _} = Ok ->
+      Ok;
+    {error, {already_started, Pid}} ->
+      {ok, Pid};
+    Err ->
+      Err
+  end.

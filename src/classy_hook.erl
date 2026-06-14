@@ -45,8 +45,6 @@ init() ->
   %% Default initialization:
   classy:on_node_init(fun classy_builtin_hooks:gen_random_site_id/0, -100),
   classy:post_kick(fun classy_builtin_hooks:maybe_reinitialize_after_kick/3, -100),
-  %% Default autocluster behavior:
-  classy:pre_autocluster(fun classy_builtin_hooks:autocluster_select_site/2, -100),
   %% Info logging:
   classy:on_create_site(fun classy_builtin_hooks:log_create_site/1, 100),
   classy:on_create_cluster(fun classy_builtin_hooks:log_create_cluster/2, 100),
@@ -54,7 +52,7 @@ init() ->
   classy:post_join(fun classy_builtin_hooks:log_post_join/3, -100),
   classy:on_membership_change(fun classy_builtin_hooks:log_membership_change/4, 100),
   classy:run_level(fun classy_builtin_hooks:log_run_level/2, -100),
-  classy:on_site_status_change(fun classy_builtin_hooks:log_site_status_change/5, 100),
+  classy:on_peer_connection_status_change(fun classy_builtin_hooks:log_site_status_change/5, 100),
   %% User initialization:
   case application:get_env(classy, setup_hooks) of
     {ok, {Mod, Func, Args}} ->

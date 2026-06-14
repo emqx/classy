@@ -6,12 +6,18 @@
 -compile(nowarn_export_all).
 -compile(export_all).
 
+-define(ON(SITE, BODY),
+        familiar:call(
+          {get_cluster(), SITE},
+          fun() ->
+              BODY
+          end)).
+
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 -include_lib("proper/include/proper.hrl").
 -include("src/classy_internal.hrl").
-
--define(ON(SITE, BODY), classy_test_site:call(SITE, fun() -> BODY end)).
+-include_lib("familiar/include/familiar.hrl").
 
 -define(assertSameSet(EXP, GOT), ?assertEqual(lists:sort(EXP), lists:sort(GOT))).
 -define(assertSameSet(EXP, GOT, COMMENT), ?assertEqual(lists:sort(EXP), lists:sort(GOT), COMMENT)).
@@ -20,42 +26,45 @@
 %% Tests
 %%================================================================================
 
-t_010_cluster(_Conf) ->
+t_010_cluster(_) ->
   ?check_trace(
      #{timetrap => 15_000},
      begin
        %% Create site and ensure that this operation is idempotent:
-       ?assertMatch(ok, classy_test_cluster:ensure_site(<<"foo">>, #{})),
-       ?assertMatch(ok, classy_test_cluster:ensure_site(<<"foo">>, #{})),
+       {ok, S1} = familiar:create_site(get_cluster(), <<"foo">>),
        %% Check that error message is legible when calling a stopped site:
        ?assertError(
-          {site_is_not_running, <<"foo">>},
-          classy_test_site:call(<<"foo">>,
-                                fun() ->
-                                    ok
-                                end)),
+          {site_is_not_running, S1},
+          familiar:call(S1,
+                        fun() ->
+                            ok
+                        end)),
        %% Start site:
-       ?assertMatch(ok, classy_test_site:start(<<"foo">>)),
-       ?assertMatch({error, already_started}, classy_test_site:start(<<"foo">>)),
+       ?assertEqual(
+          {ok, 'foo@127.22.0.0'},
+          familiar:start_site(S1)),
+       ?assertMatch({error, already_started}, familiar:start_site(S1)),
        %% Test calls and log forwarding:
-       ?assertMatch('foo@127.0.0.1', classy_test_site:call(<<"foo">>, erlang, node, [])),
+       ?assertEqual(
+          'foo@127.22.0.0',
+          familiar:call(S1, erlang, node, [])),
        ?assertMatch(
           ok,
-          classy_test_site:call(<<"foo">>,
-                                fun() ->
-                                    ?tp(test_msg_from_foo, #{})
-                                end)),
+          familiar:call(S1,
+                        fun() ->
+                            ?tp(test_msg_from_foo, #{})
+                        end)),
        ?block_until(#{?snk_kind := test_msg_from_foo}),
        %% Test stopping idempotency:
-       ?assertMatch(ok, classy_test_site:stop(<<"foo">>)),
-       ?assertMatch(ok, classy_test_site:stop(<<"foo">>))
+       ?assertMatch(ok, familiar:stop_site(S1)),
+       ?assertMatch(ok, familiar:stop_site(S1))
      end,
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
 
 %% This testcase verifies happy case of joining one node to another:
-t_020_join(_Conf) ->
+t_020_join(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   ?check_trace(
@@ -122,7 +131,7 @@ t_020_join(_Conf) ->
      ]).
 
 %% This testcase verifies happy case of kicking node from the cluster:
-t_030_kick(_Conf) ->
+t_030_kick(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   S3 = <<"s3">>,
@@ -174,7 +183,7 @@ t_030_kick(_Conf) ->
      ]).
 
 %% Verify that node can be kicked from the cluster while down:
-t_040_kick_in_absentia(_Conf) ->
+t_040_kick_in_absentia(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   S3 = <<"s3">>,
@@ -194,7 +203,7 @@ t_040_kick_in_absentia(_Conf) ->
        wait_site_joined(Sites, Cluster1, S2),
        wait_site_joined(Sites, Cluster1, S3),
        %% Stop S1:
-       classy_test_site:stop(S1),
+       stop_site(S1),
        %% Kick S1 from the cluster from S:
        ?assertMatch(ok, ?ON(S3, classy:kick_node(N1, kick))),
        wait_site_kicked([S2, S3], Cluster1, S1),
@@ -209,7 +218,7 @@ t_040_kick_in_absentia(_Conf) ->
                                                          , local := S1
                                                          , cluster := C
                                                          } when C =/= Cluster1)),
-       ok = classy_test_site:start(S1),
+       ok = restart_site(S1),
        %% It should process the information about getting kicked:
        wait_site_kicked([S1], Cluster1, S1),
        {ok, _} = snabbkaffe:receive_events(SubRef),
@@ -240,7 +249,7 @@ t_040_kick_in_absentia(_Conf) ->
      ]).
 
 %% Verify that join and kick can be forbidden via hooks:
-t_050_pre_checks(_Conf) ->
+t_050_pre_checks(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   Sites = [S1, S2],
@@ -291,7 +300,7 @@ t_050_pre_checks(_Conf) ->
      ]).
 
 %% This testcase verifies functionality of `at_lower_level' API.
-t_060_at_lower_level(_Config) ->
+t_060_at_lower_level(_) ->
   S1 = <<"s1">>,
   ?check_trace(
      #{timetrap => 20_000},
@@ -323,16 +332,17 @@ t_060_at_lower_level(_Config) ->
      ]).
 
 %% This testcase verifies site autoclean functionality
-t_070_cleanup(_Config) ->
+t_070_cleanup(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   S3 = <<"s3">>,
   Sites = [S1, S2, S3],
-  AppConf = {classy_test_app,
+  AppConf = {familiar_app,
              #{ app => classy
               , env => #{ quorum            => 2
                         , max_site_downtime => 1
                         , forget_after      => 0
+                        , rpc_timeout       => 100
                         }
               }},
   Conf = #{fixtures => [AppConf]},
@@ -350,13 +360,13 @@ t_070_cleanup(_Config) ->
        wait_site_joined(Sites, Cluster, S3),
        %% Stop two sites. Autoclean on S1 should not attempt to delete
        %% anything due to lack of quorum:
-       classy_test_site:stop(S2),
-       classy_test_site:stop(S3),
+       stop_site(S2),
+       stop_site(S3),
        ct:sleep(5_000),
        ?assertSameSet(Sites, ?ON(S1, classy:sites())),
        %% Bring up S2 and restore quorum, that should lead to deletion of S3:
        ?wait_async_action(
-          classy_test_site:start(S2),
+          restart_site(S2),
           #{?snk_kind := automatically_kick_down_site}),
        wait_site_kicked([S1, S2], Cluster, S3),
        ?assertSameSet([S1, S2], ?ON(S1, classy:sites())),
@@ -367,14 +377,14 @@ t_070_cleanup(_Config) ->
      ]).
 
 %% This testcase verifies membership cleanup.
-t_071_membership_forget(_Config) ->
+t_071_membership_forget(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   S3 = <<"s3">>,
   S4 = <<"s4">>,
   ForgetAfterS = 1,
   WaitForget = ForgetAfterS * 1000 + 10,
-  AppConf = {classy_test_app,
+  AppConf = {familiar_app,
              #{ app => classy
               , env => #{forget_after => ForgetAfterS}
               }},
@@ -390,7 +400,7 @@ t_071_membership_forget(_Config) ->
        [ok = ?ON(I, classy:join_node(N1, join)) || I <- [S2, S3, S4]],
        #{cluster := Cluster} = ?ON(S1, classy_node:hello()),
        %% Stop S3. Its absence should prevent cleanup from doing anything.
-       classy_test_site:stop(S3),
+       stop_site(S3),
        %% Kick S2, pass time and trigger cleanup at S1:
        ?ON(S1, classy:kick_site(S2, kick)),
        ct:sleep(WaitForget),
@@ -426,7 +436,7 @@ t_071_membership_forget(_Config) ->
 %% This testcase verifies that sites that membership CRDT recovers
 %% from lost packets. Packet loss is emulated by setting "acked_out"
 %% counters to higher values.
-t_080_desync(_Config) ->
+t_080_desync(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   S3 = <<"s3">>,
@@ -463,9 +473,8 @@ t_080_desync(_Config) ->
      , fun events_on_all_sites/1
      ]).
 
-%% This testcase verifies `classy:info()' and
-%% `classy_node:cluster_info/0' and `classy:clusters/1' functions.
-t_090_info(_Config) ->
+%% This testcase verifies `classy:info/0' and `classy:info/1'
+t_090_info(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   Sites = [S1, S2],
@@ -481,36 +490,51 @@ t_090_info(_Config) ->
        [?ON(I, classy:enrich_site_info(EnrichInfo, 0))
         || I <- Sites],
        %% Verify functions in singleton clusters:
-       {ok, Cluster1, [{S1, N1}]} = ?ON(S1, classy_node:cluster_info()),
-       {ok, Cluster2, [{S2, N2}]} = ?ON(S2, classy_node:cluster_info()),
+       #{ cluster     := Cluster1
+        , site        := S1
+        , peers       := Peers1_0
+        , last_update := _
+        , hello       := world
+        } = I1_0 = ?ON(S1, classy:info()),
+       #{ cluster     := Cluster2_0
+        , site        := S2
+        , peers       := Peers2_0
+        , last_update := _
+        , hello       := world
+        } = I2_0 = ?ON(S2, classy:info()),
+       ?assert(is_binary(Cluster1)),
+       ?assertNotEqual(Cluster1, Cluster2_0),
+       ?assertEqual(0, maps:size(Peers1_0)),
+       ?assertEqual(0, maps:size(Peers2_0)),
+       %%
        ?assertMatch(
-          #{ clusters  := #{ Cluster1 := [[{S1, N1}]]
-                           , Cluster2 := [[{S2, N2}]]
-                           }
-           , bad_nodes := ['fake@node.local']
+          #{ infos  :=
+               #{ N1 := I1_0
+                , N2 := I2_0
+                }
+           , bad_nodes :=
+               #{'fake@node.local' := {error, {erpc, noconnection}}}
            },
-          ?ON(S1, classy:clusters([N1, N2, 'fake@node.local']))),
+          ?ON(S1, classy:info([N1, N2, 'fake@node.local']))),
        %% Form cluster:
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
        wait_site_joined(Sites, Cluster1, S2),
-       %% Verify `classy:info':
+       %% Verify `classy:info/1':
        [?assertMatch(
-           #{ hello   := world
-            , site    := I
-            , cluster := Cluster1
-            , peers   := #{ S1 := #{node := _, up := true, last_update := _}
-                          , S2 := #{node := _, up := true, last_update := _}
+           #{ infos :=
+                #{ N1 := #{ cluster := Cluster1
+                          , site := S1
+                          , peers := #{S2 := #{node := N2, connected := true, last_update := _}}
                           }
+                 , N2 := #{ cluster := Cluster1
+                          , site := S2
+                          , peers := #{S1 := #{node := N1, connected := true, last_update := _}}
+                          }
+                 }
             },
-           ?ON(I, classy:info()))
-        || I <- Sites],
-       %% Verify cluster info:
-       #{ clusters  := #{Cluster1 := [Cluster1Peers]}
-        , bad_nodes := ['fake@node.local']
-        } = ?ON(S1, classy:clusters([N1, N2, 'fake@node.local'])),
-       ?assertSameSet(
-          [{S1, N1}, {S2, N2}],
-          Cluster1Peers)
+           ?ON(I, classy:info([N1, N2])))
+        || I <- [S1, S2]],
+       ok
      end,
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1
@@ -519,7 +543,7 @@ t_090_info(_Config) ->
 %% This testcase verifies behavior or `node_of_site' function when
 %% peer goes down. `OnlyLive' flag should prevent this function from
 %% returning an old node name.
-t_091_node_of_site(_Config) ->
+t_091_node_of_site(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   Sites = [S1, S2],
@@ -549,7 +573,7 @@ t_091_node_of_site(_Config) ->
            ?ON(I, classy:node_of_site(J, OnlyLive)))
         || I <- Sites, J <- Sites, OnlyLive <- [true, false]],
        %% Shut down S2 and verify that S1 reacted on changes:
-       classy_test_site:stop(S2),
+       stop_site(S2),
        ?assertEqual(
           undefined,
           ?ON(S1, classy:node_of_site(S2, true))),
@@ -561,23 +585,59 @@ t_091_node_of_site(_Config) ->
      , fun events_on_all_sites/1
      ]).
 
-%% This testcase verifies basic functionality of autocluster.
-t_100_autocluster(_Config) ->
+t_092_bidi_link(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   Sites = [S1, S2],
-  Strategy = {static, #{seeds => [fuzz_node_name(I) || I <- Sites]}},
-  AppConf = {classy_test_app,
-             #{ app => classy
-              , env => #{discovery_strategy => Strategy}}
-              },
-  Conf = #{fixtures => [AppConf]},
   ?check_trace(
      #{timetrap => 20_000},
      begin
        %% Prepare system:
-       _N1 = create_start_site(S1, Conf),
-       _N2 = create_start_site(S2, Conf),
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       #{cluster := Cluster} = ?ON(S1, classy_node:hello()),
+       CInfo1 = classy:info([N1, N2]),
+       ?assertEqual(
+          {ok, false},
+          classy_partition:bidi_link(CInfo1, N1, N2),
+          CInfo1),
+       %% Join sites:
+       ?ON(S2, classy:join_node(N1, join)),
+       wait_site_joined(Sites, Cluster, S2),
+       %% Now joined sites should have a bidirectional link:
+       CInfo2 = classy:info([N1, N2]),
+       ?assertEqual(
+          {ok, true},
+          classy_partition:bidi_link(CInfo2, N1, N2),
+          CInfo2),
+       %% Stop one of the sites:
+       stop_site(S2),
+       CInfo3 = classy:info([N1, N2]),
+       ?assertEqual(
+          {error, insufficient_data},
+          classy_partition:bidi_link(CInfo3, N1, N2),
+          CInfo3)
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
+%% This testcase verifies basic functionality of autocluster.
+t_100_autocluster(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  Sites = [S1, S2],
+  ?check_trace(
+     #{timetrap => 20_000},
+     begin
+       %% Prepare system:
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       %% Update the discovery strategy in the runtime:
+       Strategy = {static, #{seeds => [N1, N2]}},
+       [?ON(I,
+            application:set_env(classy, discovery_strategy, Strategy))
+        || I <- Sites],
        %% Wait for the autocluster to do its job:
        ?block_until(#{?snk_kind := classy_member_join})
      end,
@@ -588,7 +648,7 @@ t_100_autocluster(_Config) ->
 %% This testcase verifies that n_restarts counter increments every
 %% time when the site is started. It also verifies ID generation
 %% functions that depend on that counter.
-t_200_n_restarts(_Config) ->
+t_200_n_restarts(_) ->
   S = <<"s1">>,
   ?check_trace(
      begin
@@ -615,8 +675,8 @@ t_200_n_restarts(_Config) ->
           [UI1, UI2, UI3, UI4],
           lists:uniq([UI1, UI2, UI3, UI4])),
        [begin
-          classy_test_site:stop(S),
-          classy_test_site:start(S),
+          stop_site(S),
+          restart_site(S),
           ?assertEqual(
              {ok, Nr},
              ?ON(S, classy_node:n_restarts())),
@@ -636,6 +696,699 @@ t_200_n_restarts(_Config) ->
                ?ON(S, classy_uid:cluster_unique_tuple()))
         end
         || Nr <- lists:seq(1, 5)]
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
+%% This testcase verifies normal operation and error handling in `classy_lib:multicall' API.
+t_300_rpc(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  SB = <<"sbad">>,
+  ?check_trace(
+     #{timetrap => 15_000},
+     begin
+       %% Prepare
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       wait_site_joined([S1, S2], Cluster, S2),
+       %% Tests:
+       ?assertEqual(
+          #{ S1 => {ok, N1}
+           , S2 => {ok, N2}
+           , SB => {error, site_is_down}
+           },
+          ?ON(S1,
+              classy_lib:multicall(
+                #{S => {erlang, node, []} || S <- [S1, S2, SB]},
+                5_000))),
+       %% Handling of throw:
+       ?assertEqual(
+          #{ S1 => {error, {throw, {foo, S1}}}
+           , S2 => {error, {throw, {foo, S2}}}
+           , SB => {error, site_is_down}
+           },
+          ?ON(S1,
+              classy_lib:multicall(
+                #{S => {erlang, throw, [{foo, S}]} || S <- [S1, S2, SB]},
+                5_000))),
+       %% Handling of errors:
+       ?assertMatch(
+          #{ S1 := {error, {error, {foo, S1}, _}}
+           , S2 := {error, {error, {foo, S2}, _}}
+           , SB := {error, site_is_down}
+           },
+          ?ON(S1,
+              classy_lib:multicall(
+                #{S => {erlang, error, [{foo, S}]} || S <- [S1, S2, SB]},
+                5_000))),
+       ?assertEqual(
+          #{ S1 => {error, {exit, {foo, S1}}}
+           , S2 => {error, {exit, {foo, S2}}}
+           , SB => {error, site_is_down}
+           },
+          ?ON(S1,
+              classy_lib:multicall(
+                #{S => {erlang, exit, [{foo, S}]} || S <- [S1, S2, SB]},
+                5_000))),
+       McallTimeout = 500,
+       {Time, TimedOutVal} =
+          ?ON(S1,
+              timer:tc(
+                fun() ->
+                    classy_lib:multicall(
+                      #{S => {timer, sleep, [1_000]} || S <- [S1, S2, SB]},
+                      McallTimeout)
+                end,
+                [],
+                millisecond)),
+       ?assertEqual(
+          #{ S1 => {error, timeout}
+           , S2 => {error, timeout}
+           , SB => {error, site_is_down}
+           },
+          TimedOutVal),
+       ?give_or_take(McallTimeout, 50, Time),
+       %% Multiple calls to the same site with tags:
+       ?assertEqual(
+          #{ {S2, 1} => {ok, N2}
+           , {S2, 2} => {ok, N2}
+           },
+          ?ON(S1,
+              classy_lib:multicall(
+                #{ {S2, 1} => {erlang, node, []}
+                 , {S2, 2} => {erlang, node, []}
+                 },
+                5_000))),
+       ok
+     end,
+     []).
+
+%% This testcase verifies behavior of RPC when a node gets stopped amidst a multicall:
+t_310_rpc_to_failing_node(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  ?check_trace(
+     #{timetrap => 15_000},
+     begin
+       %% Prepare
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       wait_site_joined([S1, S2], Cluster, S2),
+       %% Test:
+       FS2 = {get_cluster(), S2},
+       spawn_link(
+         fun() ->
+             timer:sleep(1000),
+             familiar:stop_site(FS2)
+         end),
+       ?assertEqual(
+          #{S2 => {error, {erpc, noconnection}}},
+          ?ON(S1,
+              classy_lib:multicall(
+                #{S2 => {timer, sleep, [30_000]}},
+                30_000))),
+       ok
+     end,
+     []).
+
+%% This testcase verifies various scenarios related to 2PC that lead
+%% to abort and rollback.
+t_400_vote_smoke_abort(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
+  Ref1 = vote1,
+  Ref2 = vote2,
+  Ref3 = vote3,
+  ?check_trace(
+     #{timetrap => 15_000},
+     begin
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       N3 = create_start_site(S3, #{}),
+       Nodes = [N1, N2, N3],
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
+       ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       wait_site_joined(Sites, Cluster, S3),
+       %% Immediate failure, missing site:
+       ?tp(test_stage, #{n => 1}),
+       ?assertEqual(
+          {error, #{<<"bad_site">> => {error, site_is_down}}},
+          ?ON(S1,
+              classy_vote:create(#{ tag     => Ref1
+                                  , actions => #{<<"bad_site">> => make_vote(true, true, Ref1, 1)}
+                                  , post_vote => make_post_vote(Ref1)
+                                  }))),
+       verify_no_votes(Nodes),
+       %% Pre-vote fail:
+       ?assertEqual(
+          {error, #{S => {ok, false} || S <- [S1, S2, S3]}},
+          ?ON(S1,
+              classy_vote:create(#{ tag => Ref2
+                                  , actions  => #{Site => make_vote(false, false, Ref2, 1) || Site <- [S1, S2, S3]}
+                                  , post_vote => make_post_vote(Ref2)
+                                  }))),
+       verify_no_votes(Nodes),
+       %% Vote stage fails:
+       {ok, ID3} = ?ON(S1,
+                       classy_vote:create(#{ tag => Ref3
+                                           , actions => #{ S2 => make_vote(true, true, Ref3, 1)
+                                                         , S3 => make_vote(true, false, Ref3, 1)
+                                                         }
+                                           , post_vote => make_post_vote(Ref3)
+                                           })),
+       ?assertNot(classy_vote:test_wait_conclude(ID3)),
+       verify_no_votes(Nodes),
+       Nodes
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     , {"rollback events",
+        fun([_N1, N2, N3], Trace) ->
+            ?assertMatch(
+               [ #{ref := Ref3}
+               ],
+               ?of_node(N2, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [ #{ref := Ref3}
+               ],
+               ?of_node(N3, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [],
+               ?of_kind(classy_test_vote_commit, Trace)),
+            ?assertMatch(
+               [#{ref := Ref3, result := false}],
+               ?of_kind(classy_test_post_vote, Trace))
+        end}
+     | classy_vote:trace_props()
+     ]).
+
+%% Verify that timeout leads to aborted transaction:
+t_401_vote_timeout(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
+  Ref1 = vote1,
+  ?check_trace(
+     #{timetrap => 15_000},
+     begin
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       N3 = create_start_site(S3, #{}),
+       Nodes = [N1, N2, N3],
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
+       ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       wait_site_joined(Sites, Cluster, S3),
+       ?force_ordering(
+          #{?snk_kind := test_go},
+          #{?snk_kind := classy_test_vote_prep, for_real := true}),
+       {ok, ID} = ?ON(S1,
+                      classy_vote:create(#{ tag => Ref1
+                                          , actions => #{ S => make_vote(true, true, Ref1, 1) ||
+                                                          S <- [S2, S3]
+                                                        }
+                                          , post_vote => make_post_vote(Ref1)
+                                          , strategy => {all, 100}
+                                          })),
+       ct:sleep(200),
+       ?tp(test_go, #{}),
+       ?assertNot(classy_vote:test_wait_conclude(ID)),
+       verify_no_votes(Nodes),
+       Nodes
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     , {"rollback events",
+        fun([_N1, N2, N3], Trace) ->
+            ?assertMatch(
+               [ #{ref := Ref1}
+               ],
+               ?of_node(N2, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [ #{ref := Ref1}
+               ],
+               ?of_node(N3, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [],
+               ?of_kind(classy_test_vote_commit, Trace)),
+            ?assertMatch(
+               [#{ref := Ref1, result := false}],
+               ?of_kind(classy_test_post_vote, Trace))
+        end}
+     | classy_vote:trace_props()
+     ]).
+
+%% Verify that restart of the coordinator during vote leads to abort
+t_403_vote_coord_restart(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
+  Ref1 = vote1,
+  ?check_trace(
+     #{timetrap => 15_000},
+     begin
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       N3 = create_start_site(S3, #{}),
+       Nodes = [N1, N2, N3],
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
+       ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       wait_site_joined(Sites, Cluster, S3),
+       ?force_ordering(
+          #{?snk_kind := test_go},
+          #{?snk_kind := classy_test_vote_prep, for_real := true}),
+       {ok, ID} = ?ON(S1,
+                      classy_vote:create(#{ tag => Ref1
+                                          , actions => #{ S => make_vote(true, true, Ref1, 1) ||
+                                                          S <- [S2, S3]
+                                                        }
+                                          , post_vote => make_post_vote(Ref1)
+                                          , strategy => {all, 10_000}
+                                          })),
+       stop_site(S1),
+       ok = restart_site(S1),
+       ?tp(notice, test_go, #{}),
+       ?assertNot(classy_vote:test_wait_conclude(ID)),
+       verify_no_votes(Nodes),
+       Nodes
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     , {"rollback events",
+        fun([_N1, N2, N3], Trace) ->
+            ?assertMatch(
+               [ #{ref := Ref1}
+               ],
+               ?of_node(N2, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [ #{ref := Ref1}
+               ],
+               ?of_node(N3, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [],
+               ?of_kind(classy_test_vote_commit, Trace)),
+            ?assertMatch(
+               [#{ref := Ref1, result := false}],
+               ?of_kind(classy_test_post_vote, Trace))
+        end}
+     | classy_vote:trace_props()
+     ]).
+
+%% Verify that restart of the participant during vote leads to abort
+t_404_vote_part_restart(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
+  Ref1 = vote1,
+  Ref2 = vote2,
+  ?check_trace(
+     #{timetrap => 30_000},
+     begin
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       N3 = create_start_site(S3, #{}),
+       Nodes = [N1, N2, N3],
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
+       ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       wait_site_joined(Sites, Cluster, S3),
+       %% Case 1: participant restarts *after* establishing vote
+       %% request in the DB:
+       ?force_ordering(
+          #{?snk_kind := test_go1},
+          #{ ?snk_kind := classy_test_vote_prep
+           , for_real := true
+           , ?snk_meta := #{node := N3}
+           }),
+       {ok, ID1} = ?ON(S1,
+                       classy_vote:create(#{ tag => Ref1
+                                           , actions => #{ S => make_vote(true, true, Ref1, 1) ||
+                                                          S <- [S2, S3]
+                                                         }
+                                           , post_vote => make_post_vote(Ref1)
+                                           , strategy => {all, 1_000}
+                                           })),
+       %% Make sure vote request is recorded in the DB:
+       ?block_until(
+          #{?snk_kind := ?classy_vote_part_established, id := ID1}),
+       stop_site(S3),
+       ?tp(notice, test_go1, #{}),
+       ok = restart_site(S3),
+       ?assertNot(classy_vote:test_wait_conclude(ID1)),
+       verify_no_votes(Nodes),
+       %% Case 2: participant restarts *before* recording the vote
+       %% request into the DB. Flow should conclude without that
+       %% participant.
+       ?force_ordering(
+          #{?snk_kind := test_go2},
+          #{ ?snk_kind := ?classy_vote_part_recv
+           , tag := Ref2
+           , ?snk_meta := #{node := N3}
+           }),
+       {ok, ID2} = ?ON(S1,
+                       classy_vote:create(#{ tag => Ref2
+                                           , actions => #{ S => make_vote(true, true, Ref2, 1) ||
+                                                          S <- [S2, S3]
+                                                         }
+                                           , post_vote => make_post_vote(Ref2)
+                                           , strategy => {all, 1_000}
+                                           })),
+       stop_site(S3),
+       ?tp(notice, test_go2, #{}),
+       ok = restart_site(S3),
+       ?assertNot(classy_vote:test_wait_conclude(ID2)),
+       verify_no_votes(Nodes),
+       Nodes
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     , {"rollback events",
+        fun([_N1, N2, N3], Trace) ->
+            ?assertMatch(
+               [ #{ref := Ref1}
+               , #{ref := Ref2}
+               ],
+               ?of_node(N2, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [ #{ref := Ref1}
+               ],
+               ?of_node(N3, ?of_kind(classy_test_vote_rollback, Trace))),
+            ?assertMatch(
+               [],
+               ?of_kind(classy_test_vote_commit, Trace)),
+            ?assertMatch(
+               [ #{ref := Ref1, result := false}
+               , #{ref := Ref2, result := false}
+               ],
+               ?of_kind(classy_test_post_vote, Trace))
+        end}
+     | classy_vote:trace_props()
+     ]).
+
+%% Verify normal 2PC flow
+t_410_vote_commit(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Ref1 = vote1,
+  Sites = [S1, S2, S3],
+  ?check_trace(
+     #{timetrap => 15_000},
+     begin
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       N3 = create_start_site(S3, #{}),
+       Nodes = [N1, N2, N3],
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
+       ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       wait_site_joined(Sites, Cluster, S3),
+       %% Vote stage fails:
+       {ok, ID3} = ?ON(S1,
+                       classy_vote:create(#{ tag => Ref1
+                                           , actions => #{ S2 => make_vote(true, true, Ref1, 2)
+                                                         , S3 => make_vote(true, true, Ref1, 1)
+                                                         }
+                                           , post_vote => make_post_vote(Ref1)
+                                           })),
+       ?assert(classy_vote:test_wait_conclude(ID3)),
+       verify_no_votes(Nodes),
+       Nodes
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     , {"commit events",
+        fun([_N1, N2, N3], Trace) ->
+            ?assertMatch(
+               [ #{step := 1, ref := Ref1}
+               , #{step := 2, ref := Ref1}
+               ],
+               ?of_node(N2, ?of_kind(classy_test_vote_commit, Trace))),
+            ?assertMatch(
+               [ #{step := 1, ref := Ref1}
+               ],
+               ?of_node(N3, ?of_kind(classy_test_vote_commit, Trace))),
+            ?assertMatch(
+               [#{ref := Ref1, result := true}],
+               ?of_kind(classy_test_post_vote, Trace))
+        end}
+     | classy_vote:trace_props()
+     ]).
+
+%% Verify that commit flows finish after node restart:
+t_411_commit_actions_after_restart(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  Ref1 = vote1,
+  Sites = [S1, S2],
+  ?check_trace(
+     #{timetrap => 30_000},
+     begin
+       N1 = create_start_site(S1, #{peer => #{shutdown => halt}}),
+       N2 = create_start_site(S2, #{peer => #{shutdown => halt}}),
+       Nodes = [N1, N2],
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       %% Make sure post commit actions are delayed:
+       ?force_ordering(
+          #{?snk_kind := test_go},
+          #{?snk_kind := K} when K =:= ?classy_vote_part_perform_action;
+                                 K =:= ?classy_vote_coord_post_actions),
+       {ok, ID} = ?ON(S1,
+                      classy_vote:create(#{ tag => Ref1
+                                          , actions => #{S2 => make_vote(true, true, Ref1, 1)}
+                                          , post_vote => make_post_vote(Ref1)
+                                          })),
+       ?block_until(#{?snk_kind := ?classy_vote_coord_commit, id := ID}),
+       ?block_until(#{?snk_kind := ?classy_vote_part_stage, to := 2, id := ID}),
+       %% Restart sites:
+       [familiar:kill_site({get_cluster(), S}) || S <- Sites],
+       ?tp(notice, test_go, #{}),
+       [ok = restart_site(S) || S <- Sites],
+       ?assert(classy_vote:test_wait_conclude(ID)),
+       verify_no_votes(Nodes),
+       Nodes
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     , {"commit events",
+        fun([_N1, N2], Trace) ->
+            ?assertMatch(
+               [ #{?snk_kind := test_go}
+               , #{ ?snk_kind := classy_test_vote_commit
+                  , step := 1
+                  , ref := Ref1
+                  , ?snk_meta := #{node := N2}
+                  }
+               ],
+               ?of_kind([classy_test_vote_commit, test_go], Trace))
+        end}
+     , {"post vote events",
+        fun(Trace) ->
+            ?assertMatch(
+               [ #{ref := Ref1, result := true}
+               ],
+               ?of_kind(classy_test_post_vote, Trace))
+        end}
+     , {"participant stages",
+        fun([_N1, _N2], Trace) ->
+            ?assertMatch(
+               [ #{from := 0, to := 0} %% Enter prepare
+               , #{from := 0, to := 1} %% Enter wait outcome
+               , #{from := 1, to := 2} %% Received outcome; enter commit
+               , #{?snk_kind := test_go} %% Restarted
+               , #{from := 2, to := 2} %% Restored state into commit stage
+               , #{?snk_kind := classy_test_vote_commit}
+               ],
+               ?of_kind([?classy_vote_part_stage, test_go, classy_test_vote_commit], Trace))
+        end}
+     | classy_vote:trace_props()
+     ]).
+
+%% Verify that failed commit flows are retried after node restart.
+t_412_commit_action_crash(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  Ref1 = vote1,
+  Sites = [S1, S2],
+  ?check_trace(
+     #{timetrap => 30_000},
+     begin
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       Nodes = [N1, N2],
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       %% Inject failures into the commit flows:
+       InjErr1 = ?inject_crash(
+                    #{?snk_kind := classy_test_vote_commit, step := 2, ref := Ref1},
+                    snabbkaffe_nemesis:always_crash()),
+       InjErr2 = ?inject_crash(
+                    #{?snk_kind := classy_test_post_vote, ref := Ref1},
+                    snabbkaffe_nemesis:always_crash()),
+       %% Start vote:
+       {ok, ID} = ?ON(S1,
+                      classy_vote:create(#{ tag => Ref1
+                                          , actions => #{S2 => make_vote(true, true, Ref1, 3)}
+                                          , post_vote => make_post_vote(Ref1)
+                                          , on_fail => make_vote_on_fail(Ref1)
+                                          })),
+       %% Wait until failures are detected:
+       ?block_until(#{?snk_kind := classy_test_vote_on_fail, id := ID, stage := coord_post_vote}),
+       %% Participant:
+       ?block_until(#{?snk_kind := classy_test_vote_on_fail, id := ID, stage := I} when is_integer(I)),
+       %% Restart sites:
+       [stop_site(S) || S <- Sites],
+       snabbkaffe_nemesis:fix_crash(InjErr1),
+       snabbkaffe_nemesis:fix_crash(InjErr2),
+       ?tp(notice, test_restarted, #{}),
+       [ok = restart_site(S) || S <- Sites],
+       ?assert(classy_vote:test_wait_conclude(ID)),
+       verify_no_votes(Nodes),
+       Nodes
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
+     , {"coordinator history",
+        fun([N1, _N2], Trace) ->
+            ?assertMatch(
+               [ #{from := 0, to := 0} %% Enter vote
+               , #{from := 0, to := 10} %% Enter commit
+               , #{?snk_kind := classy_test_vote_on_fail, tag := Ref1, id := _, reason :=_ }
+                 %% Restarted
+               , #{from := 10, to := 10} %% Re-enter commit
+               , #{?snk_kind := classy_test_post_vote, ref := Ref1}
+               ],
+               ?of_node(N1,
+                        ?of_kind(
+                           [ ?classy_vote_coord_stage
+                           , classy_test_post_vote
+                           , classy_test_vote_on_fail
+                           ],
+                           Trace)))
+        end}
+     , {"participant history",
+        fun([_N1, N2], Trace) ->
+            ?assertMatch(
+               [ #{from := 0, to := 0} %% Enter prepare
+               , #{from := 0, to := 1} %% Enter wait outcome
+               , #{from := 1, to := 2} %% Received outcome; enter commit
+               , #{?snk_kind := classy_test_vote_commit, ref := Ref1, step := 1}
+               , #{?snk_kind := classy_test_vote_on_fail, tag := Ref1, reason := _, id := _}
+                 %% Restarted
+               , #{from := 2, to := 2} %% Restored state into commit stage
+               , #{?snk_kind := classy_test_vote_commit, ref := Ref1, step := 2}
+               , #{?snk_kind := classy_test_vote_commit, ref := Ref1, step := 3}
+               ],
+               ?of_node(N2,
+                        ?of_kind([ ?classy_vote_part_stage
+                                 , classy_test_vote_commit
+                                 , classy_test_vote_on_fail
+                                 ],
+                                 Trace)))
+        end}
+     | classy_vote:trace_props()
+     ]).
+
+%% Verify classy_vote:ls_votes functions (implicitly verify `classy_vote:fold_ongoing')
+t_413_fold_votes(_) ->
+  S1 = <<"s1">>,
+  Ref1 = vote1,
+  Ref2 = vote2,
+  ?check_trace(
+     #{timetrap => 30_000},
+     begin
+       N1 = create_start_site(S1, #{peer => #{shutdown => halt}}),
+       %% Make sure votes hang long enough for us to inspect them:
+       ?force_ordering(
+          #{?snk_kind := test_go},
+          #{?snk_kind := K} when K =:= classy_test_vote_commit;
+                                 K =:= classy_test_post_vote),
+       {ok, ID1} = ?ON(S1,
+                       classy_vote:create(#{ tag => Ref1
+                                           , actions => #{S1 => make_vote(true, true, Ref1, 1)}
+                                           , post_vote => make_post_vote(Ref1)
+                                           })),
+       {ok, ID2} = ?ON(S1,
+                       classy_vote:create(#{ tag => Ref2
+                                           , actions => #{S1 => make_vote(true, true, Ref2, 1)}
+                                           , post_vote => make_post_vote(Ref2)
+                                           })),
+       ct:sleep(100),
+       ?assertMatch(
+          [ #{ id := _
+             , tag := Ref1
+             , role := participant
+             , coordinator := <<"s1">>
+             }
+          , #{ id := _
+             , tag := Ref1
+             , role := coordinator
+             , start_time := _
+             , participants := [<<"s1">>]
+             }
+          ],
+          ?ON(S1, lists:sort(classy_vote:ls_votes(Ref1)))),
+       ?assertMatch(
+          [ #{ id := _
+             , tag := Ref2
+             , role := participant
+             , coordinator := <<"s1">>
+             }
+          , #{ id := _
+             , tag := Ref2
+             , role := coordinator
+             , start_time := _
+             , participants := [<<"s1">>]
+             }
+          ],
+          ?ON(S1, lists:sort(classy_vote:ls_votes(Ref2)))),
+       ?assertMatch(
+          [ #{ id := _
+             , tag := Ref1
+             , role := participant
+             , coordinator := <<"s1">>
+             }
+          , #{ id := _
+             , tag := Ref2
+             , role := participant
+             , coordinator := <<"s1">>
+             }
+          , #{ id := _
+             , tag := Ref1
+             , role := coordinator
+             , start_time := _
+             , participants := [<<"s1">>]
+             }
+          , #{ id := _
+             , tag := Ref2
+             , role := coordinator
+             , start_time := _
+             , participants := [<<"s1">>]
+             }
+          ],
+          ?ON(S1, lists:sort(classy_vote:ls_votes()))),
+       ok
      end,
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1
@@ -683,17 +1436,18 @@ t_999_fuzz(_Config) ->
       )).
 
 fuzz_prop(Cmds) ->
+  Cluster = classy_test_fuzzer:familiar_cluster(),
   ?check_trace(
      #{timetrap => 5_000 * length(Cmds) + 30_000},
      try
        %% Print information about the run:
        ct:pal("*** Commands:~n~s~n", [classy_test_fuzzer:format_cmds(Cmds)]),
        %% Initialize the system:
-       classy_test_cluster:start_link(
-         #{ peer => #{ args => ["-kernel", "prevent_overlapping_partitions", "false"]
-                     }
-          , fixtures => classy_test_fixture:defaults(?FUNCTION_NAME) ++ [{classy_test_snabbkaffe, #{}}]
-          }),
+       ok = familiar:start_link_cluster(
+              #{ id => Cluster
+               , peer => #{args => ["-kernel", "prevent_overlapping_partitions", "false"]}
+               , fixtures => familiar_fixture:defaults() ++ [{familiar_snabbkaffe, #{}}]
+               }),
        %% Run test:
        {_History, State, Result} = proper_statem:run_commands(
                                      classy_test_fuzzer,
@@ -701,9 +1455,12 @@ fuzz_prop(Cmds) ->
        ct:log(info, "*** Model state:~n  ~p~n", [State]),
        ct:log("*** Result:~n  ~p~n", [Result]),
        Result =:= ok orelse error({invalid_result, Result}),
-       ok = classy_test_cluster:stop(normal)
+       familiar:stop_cluster(Cluster, true)
+     catch
+       EC:Err:Stack ->
+         ct:pal(error, "*** ~p:~p~n Stack:~p", [EC, Err, Stack])
      after
-       ok = classy_test_cluster:stop(error)
+       familiar:stop_cluster(Cluster, false)
      end,
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1
@@ -726,7 +1483,7 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
   ExpectedSites = classy_test_fuzzer:sites_of_cluster(Cluster, S),
   ?assertSameSet(
      ExpectedSites,
-     classy_test_site:call(Site, classy, sites, []),
+     classy_test_fuzzer:call(Site, classy, sites, []),
      #{ on            => Site
       , msg           => "View of the cluster"
       , '~diagnostic' => classy_test_fuzzer:diagnostic(S)
@@ -734,8 +1491,8 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
       }),
   %% Verify list of all nodes:
   ?assertSameSet(
-     [fuzz_node_name(I) || I <- ExpectedSites],
-     classy_test_site:call(Site, classy, nodes, [all]),
+     [Node || I <- ExpectedSites, {ok, Node} <- [fuzz_node_name(I)]],
+     classy_test_fuzzer:call(Site, classy, nodes, [all]),
      #{ on            => Site
       , msg           => "View of all nodes"
       , '~diagnostic' => classy_test_fuzzer:diagnostic(S)
@@ -743,10 +1500,11 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
       }),
   %% Check running nodes:
   ?assertSameSet(
-     [fuzz_node_name(I)
+     [Node
       || I <- ExpectedSites,
+         {ok, Node} <- [fuzz_node_name(I)],
          classy_test_fuzzer:is_running(I, S)],
-     classy_test_site:call(Site, classy, nodes, [running]),
+     classy_test_fuzzer:call(Site, classy, nodes, [running]),
      #{ on            => Site
       , msg           => "View of running nodes"
       , '~diagnostic' => classy_test_fuzzer:diagnostic(S)
@@ -760,13 +1518,17 @@ no_stopped_nodes_reported_as_running(Site, #{sites := Sites}) ->
   StoppedNodes = maps:fold(
                    fun(Peer, #{running := Running}, Acc) ->
                        case Running of
-                         false -> [fuzz_node_name(Peer) | Acc];
+                         false ->
+                           case fuzz_node_name(Peer) of
+                             {ok, Node} -> [Node | Acc];
+                             undefined  -> Acc
+                           end;
                          true  -> Acc
                        end
                    end,
                    [],
                    Sites),
-  Running = classy_test_site:call(Site, classy, nodes, [running]),
+  Running = classy_test_fuzzer:call(Site, classy, nodes, [running]),
   ?assertMatch(
      Running,
      Running -- StoppedNodes,
@@ -774,9 +1536,6 @@ no_stopped_nodes_reported_as_running(Site, #{sites := Sites}) ->
       , on_site => Site
       , sites => Sites
       }).
-
-fuzz_node_name(Site) ->
-  binary_to_atom(<<Site/binary, "@127.0.0.1">>).
 
 %%================================================================================
 %% Trace specs
@@ -875,9 +1634,9 @@ validate_site_event(#{?snk_kind := classy_create_new_cluster},
   E;
 %%   Abrupt stop:
 validate_site_event(_,
-                    #{?snk_kind := classy_test_site_stop} = E) ->
+                    #{?snk_kind := familiar_peer_stop} = E) ->
   E;
-validate_site_event(#{?snk_kind := classy_test_site_stop},
+validate_site_event(#{?snk_kind := familiar_peer_stop},
                     #{?snk_kind := classy_change_run_level, to := single} = E) ->
   E.
 
@@ -895,7 +1654,7 @@ site_of_event(#{?snk_kind := Kind, ?snk_meta := #{local := Site}}) when
     Kind =:= classy_peer_up;
     Kind =:= classy_peer_down ->
   Site;
-site_of_event(#{?snk_kind := classy_test_site_stop, site := Site}) ->
+site_of_event(#{?snk_kind := familiar_peer_stop, site := Site}) ->
   Site;
 site_of_event(_) ->
   undefined.
@@ -916,32 +1675,59 @@ next_state(_S, _Ret, Call) ->
 init_per_testcase(t_999_fuzz, Cfg) ->
   Cfg;
 init_per_testcase(TC, Cfg) ->
-  Fixtures = [ {classy_test_snabbkaffe, #{}}
+  Fixtures = [ {familiar_snabbkaffe, #{}}
              ],
-  {ok, _} = classy_test_cluster:start_link(
-              #{ fixtures => classy_test_fixture:defaults(TC) ++ Fixtures
-               }),
+  ok = familiar:start_link_cluster(
+         #{ id => TC
+          , fixtures => familiar:default_fixtures() ++ Fixtures
+          , peer => #{args => ["-kernel", "prevent_overlapping_partitions", "false"]}
+          }),
+  put(classy_SUITE_cluster, {ok, TC}),
   Cfg.
 
+get_cluster() ->
+  {ok, Cluster} = get(classy_SUITE_cluster),
+  Cluster.
+
 create_start_site(Site, CustomConf) ->
-  Fixture = {classy_test_app,
+  create_start_site(get_cluster(), Site, CustomConf).
+
+create_start_site(Cluster, Site, CustomConf) ->
+  Fixture = {familiar_app,
              #{ app => classy
               , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site]}
                         , cleanup_check_interval => 100
+                        , vote_retry_interval => 100
+                        , rpc_timeout => 100
                         }
               }},
   Fixtures = maps:get(fixtures, CustomConf, []),
-  Conf = CustomConf#{fixtures => [Fixture | Fixtures]},
-  ?assertMatch(ok, classy_test_cluster:ensure_site(Site, Conf)),
-  ?assertMatch(ok, classy_test_site:start(Site)),
-  classy_test_site:which_node(Site).
+  Conf = CustomConf#{fixtures => [Fixture | Fixtures], start => true},
+  case familiar:create_site(Cluster, Site, Conf) of
+    {ok, _Site, Node} ->
+      Node;
+    Err ->
+      error({failed_to_create_test_site, #{ cluster => Cluster
+                                          , site => Site
+                                          , conf => CustomConf
+                                          , reason => Err
+                                          }})
+  end.
 
-end_per_testcase(_TC, Cfg) ->
-  Reason = case proplists:get_value(tc_status, Cfg) of
-             ok -> normal;
-             _  -> failed
-           end,
-  classy_test_cluster:stop(Reason),
+stop_site(Site) ->
+  familiar:stop_site(get_cluster(), Site).
+
+restart_site(Site) ->
+  ?assertMatch(
+     {ok, _},
+     familiar:start_site({get_cluster(), Site})).
+
+end_per_testcase(TC, Cfg) ->
+  Success = case proplists:get_value(tc_status, Cfg) of
+              ok -> true;
+              _  -> false
+            end,
+  _ = familiar:stop_cluster(TC, Success),
   snabbkaffe:stop().
 
 all() ->
@@ -952,13 +1738,12 @@ all(Module) ->
 
 wait_site_joined(WaitOnSites, Cluster, Site) ->
   lists:foreach(
-    fun(S) ->
-        Node = classy_test_site:which_node(S),
+    fun(Local) ->
         ?block_until(
            #{ ?snk_kind := classy_member_join
             , cluster := Cluster
+            , local := Local
             , remote := Site
-            , ?snk_meta := #{node := Node}
             })
     end,
     WaitOnSites),
@@ -967,13 +1752,12 @@ wait_site_joined(WaitOnSites, Cluster, Site) ->
 
 wait_site_kicked(WaitOnSites, Cluster, Site) ->
   lists:foreach(
-    fun(S) ->
-        Node = classy_test_site:which_node(S),
+    fun(Local) ->
         ?block_until(
            #{ ?snk_kind := classy_member_leave
             , cluster := Cluster
+            , local := Local
             , remote := Site
-            , ?snk_meta := #{node := Node}
             })
     end,
     WaitOnSites),
@@ -1002,6 +1786,43 @@ setup_hooks(Site) ->
     end,
     0).
 
+make_vote(HowToPreVote, HowToVote, Ref, NCommitSteps) ->
+  #{ prepare  => {?MODULE, vote_prepare, [HowToPreVote, HowToVote, Ref]}
+   , commit   => [{?MODULE, vote_commit, [Step, Ref]} ||
+                   Step <- lists:seq(1, NCommitSteps)]
+   , rollback => [{?MODULE, vote_rollback, [Ref]}]
+   }.
+
+make_post_vote(Ref) ->
+  {?MODULE, post_vote, [Ref]}.
+
+make_vote_on_fail(Ref) ->
+  {?MODULE, vote_on_fail, [Ref]}.
+
+vote_prepare(ForReal, HowToPreVote, HowToVote, Ref) ->
+  Result = case ForReal of
+             true -> HowToVote;
+             false -> HowToPreVote
+           end,
+  ?tp(classy_test_vote_prep, #{ref => Ref, vote => Result, for_real => ForReal}),
+  Result.
+
+vote_commit(Step, Ref) ->
+  ?tp(classy_test_vote_commit, #{ref => Ref, step => Step}).
+
+vote_rollback(Ref) ->
+  ?tp(classy_test_vote_rollback, #{ref => Ref}).
+
+post_vote(Result, Ref) ->
+  ?tp(classy_test_post_vote, #{ref => Ref, result => Result}).
+
+vote_on_fail(FailInfo, Ref) ->
+  ?tp(classy_test_vote_on_fail, FailInfo#{test_ref => Ref}).
+
+verify_no_votes(Nodes) ->
+  Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
+  [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)].
+
 -spec proper_printout(string(), list()) -> _.
 proper_printout(Char, []) when Char =:= ".";
                                Char =:= "x";
@@ -1009,3 +1830,6 @@ proper_printout(Char, []) when Char =:= ".";
   ct:print("~s", [[Char]]);
 proper_printout(Fmt, Args) ->
   ct:pal(Fmt, Args).
+
+fuzz_node_name(Site) ->
+  familiar:last_node({classy_test_fuzzer:familiar_cluster(), Site}).

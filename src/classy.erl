@@ -12,7 +12,8 @@
 
 %% API:
 -export([ info/0
-        , clusters/1
+        , info/1
+        , info/2
         , node_of_site/2
         , join_node/2
         , kick_site/2
@@ -27,7 +28,7 @@
 -export([ on_node_init/2
         , on_create_cluster/2
         , on_create_site/2
-        , on_site_status_change/2
+        , on_peer_connection_status_change/2
         , on_membership_change/2
         , pre_join/2
         , post_join/2
@@ -72,19 +73,16 @@
          }.
 
 -type info() ::
-        #{ cluster := cluster_id() | undefined
-         , site    := site() | undefined
-         , peers   := #{site() => peer_info()}
-         , atom()  => _
+        #{ cluster     := cluster_id() | undefined
+         , site        := site() | undefined
+         , last_update := classy_lib:unix_time_s() | undefined
+         , peers       := #{site() => peer_info()}
+         , atom()      => _
          }.
 
-%% Mapping from cluster ID to cluster partitions.
-%% Values in the map are lists, where each element is a distinct view of the cluster.
-%%
-%% In a fully consistent cluster, this list should contain only one element.
 -type cluster_info() ::
-        #{ clusters  := #{cluster_id() => [[{site(), node()}]]}
-         , bad_nodes := [node()]
+        #{ infos     := #{node() => info()}
+         , bad_nodes := #{node() => _}
          }.
 
 -type membership_change_hook() :: fun((cluster_id(), _Local :: site(), _Remote :: site(), _IsMember :: boolean()) -> _).
@@ -104,6 +102,7 @@
 %% API functions
 %%================================================================================
 
+%% RPC target
 %% @doc Provide general information about the local node.
 -spec info() -> info().
 info() ->
@@ -116,38 +115,57 @@ info() ->
     {ok, MaybeSite} -> ok;
     _               -> MaybeSite = undefined
   end,
-  Acc = #{ cluster => MaybeCluster
-         , site    => MaybeSite
-         , peers   => classy_node:peer_info()
+  PeerInfo0 = classy_node:peer_info(),
+  case maps:take(MaybeSite, PeerInfo0) of
+    {#{last_update := MyLU}, PeerInfo} ->
+      ok;
+    error ->
+      PeerInfo = PeerInfo0,
+      MyLU = undefined
+  end,
+  Acc = #{ cluster     => MaybeCluster
+         , site        => MaybeSite
+         , last_update => MyLU
+         , peers       => PeerInfo
          },
   classy_hook:fold(?on_enrich_site_info, [], Acc).
 
-%% @doc Gather cluster views from a given set of nodes
-%% and aggregate this information to derive partitions.
--spec clusters([node()]) -> cluster_info().
-clusters(Nodes) ->
-  SiteInfos = erpc:multicall(
-                Nodes,
-                classy_node, cluster_info, [],
-                classy_lib:rpc_timeout()),
-  {Clusters, BadNodes} =
+%% @doc Gather `info/0' from a set of nodes.
+%%
+%% The nodes don't have to be in the same cluster.
+%%
+%% WARNING: as a side effect of calling this function,
+%% the current node will establish Erlang distribution connection to all nodes in the list.
+-spec info([node()]) -> cluster_info().
+info(Nodes) ->
+  info(1, Nodes).
+
+%% @hidden
+-spec info(non_neg_integer(), [node()]) -> cluster_info().
+info(_Hops, Nodes) ->
+  RPCRet = erpc:multicall(
+             Nodes,
+             classy, info, [],
+             classy_lib:rpc_timeout()),
+  {Infos, BadNodes} =
     lists:foldl(
-      fun({_Node, {ok, {ok, Cluster, Peers0}}}, {AccClusters0, AccBadNodes}) ->
-          Peers = lists:sort(Peers0),
-          AccClusters = maps:update_with(
-                          Cluster,
-                          fun(P0) ->
-                              lists:usort([Peers | P0])
-                          end,
-                          [Peers],
-                          AccClusters0),
-          {AccClusters, AccBadNodes};
-         ({Node, _}, {AccClusters, AccBadNodes}) ->
-          {AccClusters, [Node | AccBadNodes]}
+      fun({Node, NodeReply}, {AccInfos, AccBadNodes}) ->
+          case NodeReply of
+            {ok, Info} ->
+              { AccInfos#{Node => Info}
+              , AccBadNodes
+              };
+            Error ->
+              { AccInfos
+              , AccBadNodes#{Node => Error}
+              }
+          end
       end,
-      {#{}, []},
-      lists:zip(Nodes, SiteInfos)),
-  #{ clusters  => Clusters
+      {#{}, #{}},
+      lists:zip(Nodes, RPCRet)),
+  %% TODO: gather information about missing nodes, that is peers of the nodes
+  %% TODO: make requests from a temporary, hidden Erlang node to avoid creating a mesh between different clusters?
+  #{ infos     => Infos
    , bad_nodes => BadNodes
    }.
 
@@ -194,6 +212,7 @@ kick_node(Node, Intent) ->
       {error, local_not_in_cluster}
   end.
 
+%% @doc List all peers
 -spec sites() -> [site()].
 sites() ->
   maybe
@@ -270,16 +289,19 @@ on_create_site(Hook, Prio) ->
   classy_hook:insert(?on_create_site, Hook, Prio).
 
 %% @doc Register a hook that is executed when a site changes
-%% status from up to down and vice versa.
+%% status from connected (`true') to disconnected (`false') and vice versa.
 %%
 %% Note: this hook runs in the classy main process.
 %% Hence it should avoid blocking it.
--spec on_site_status_change(Fun, classy_hook:prio()) -> classy_hook:hook()
-   when Fun :: fun((cluster_id(), Local, Remote, node(), _IsUp :: boolean()) -> _),
+%%
+%% Note: status change to `false' it not indicative of the remote node
+%% being actually down. This can happen during a network partition.
+-spec on_peer_connection_status_change(Fun, classy_hook:prio()) -> classy_hook:hook()
+   when Fun :: fun((cluster_id(), Local, Remote, node(), _IsConnected :: boolean()) -> _),
         Local :: site(),
         Remote :: site().
-on_site_status_change(Hook, Prio) ->
-  classy_hook:insert(?on_site_status_change, Hook, Prio).
+on_peer_connection_status_change(Hook, Prio) ->
+  classy_hook:insert(?on_peer_connection_status_change, Hook, Prio).
 
 %% @doc Register a hook that is executed when a site joins or leaves a cluster.
 -spec on_membership_change(membership_change_hook(), classy_hook:prio()) -> classy_hook:hook().
@@ -345,24 +367,15 @@ post_kick(Hook, Prio) ->
 pre_autoclean(Hook, Prio) ->
   classy_hook:insert(?on_pre_autoclean, Hook, Prio).
 
-%% @doc Register a hook that runs before autocluster.
-%% This hook allows the business code to pick the most appropriate cluster for automatic join.
-%%
-%% Return value:
-%%
-%% <itemize>
-%% <li>`{ok, {Cluster, [node()]}}': stop the search and join one of the returned nodes</li>
-%% <li>`{ok, undefined}': stop the search and do not join any node (abort autocluster until next retry)</li>
-%% <li>`undefined': continue the search</li>
-%% </itemize>
+%% @doc Register a hook that filters and ranks nodes for autocluster.
+%% It allows the business code to pick the most appropriate cluster for automatic join.
 %%
 %% WARNING: this hook cannot have side effects.
 -spec pre_autocluster(
-        fun((Candidates, cluster_info()) -> {ok, Discovered} | {ok, undefined} | undefined),
+        fun((cluster_info(), Discovered) -> Discovered),
         classy_hook:prio()
        ) -> classy_hook:hook()
-  when Candidates :: [node()],
-       Discovered :: {cluster_id(), [node()]}.
+  when Discovered :: [{cluster_id(), [node()]}].
 pre_autocluster(Hook, Prio) ->
   classy_hook:insert(?on_pre_autocluster, Hook, Prio).
 

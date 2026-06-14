@@ -6,7 +6,15 @@
 -module(classy_lib).
 
 %% API:
--export([]).
+-export([ fold_per_cluster/3
+        , count_up_peers/1
+        , sites_to_nodes/1
+        , safe_apply/1
+        , safe_apply/3
+        , multicast/1
+        , multicall/1
+        , multicall/2
+        ]).
 
 %% internal exports:
 -export([ rpc_timeout/0
@@ -25,11 +33,34 @@
         , map_deep_insert/3
         ]).
 
--export_type([unix_time_s/0, wakeup_timer/0]).
+-export_type([ unix_time_s/0
+             , wakeup_timer/0
+             , multicall_target/0
+             , multicall_args/0
+             , multicall_result/1
+             , multicall_error/0
+             , wrapped_exception/0
+             ]).
 
 %%================================================================================
 %% Type declarations
 %%================================================================================
+
+-type multicall_target() :: classy:site() |
+                            {classy:site(), _Token}.
+
+-type multicall_args() :: #{multicall_target() => {module(), atom(), list()}}.
+
+-type wrapped_exception() ::
+        {error, {throw, _Reason}} |
+        {error, {error, _Reason, _Stacktrace :: list()}} |
+        {error, {exit, _Reason}}.
+
+-type multicall_error() :: {error, site_is_down} | {error, {erpc, _}} | wrapped_exception().
+
+-type multicall_result(Result) ::
+        #{multicall_target() => {ok, Result} |
+                                multicall_error()}.
 
 -type unix_time_s() :: integer().
 
@@ -38,6 +69,148 @@
 %%================================================================================
 %% API functions
 %%================================================================================
+
+-spec safe_apply({module(), atom(), list()}) -> {ok, term()} | wrapped_exception().
+safe_apply({M, F, A}) ->
+  safe_apply(M, F, A).
+
+-spec safe_apply(module(), atom(), list()) -> {ok, term()} | wrapped_exception().
+safe_apply(Module, Function, Args) ->
+  try {ok, apply(Module, Function, Args)}
+  catch
+    throw:Reason ->
+      {error, {throw, Reason}};
+    error:Reason:Stack ->
+      {error, {error, Reason, Stack}};
+    exit:Reason ->
+      {error, {exit, Reason}}
+  end.
+
+
+%% @doc Call a function on multiple nodes in parallel with default timeout.
+-spec multicast(multicall_args()) -> ok.
+multicast(SitesWithArgs) ->
+  maps:foreach(
+    fun(SiteOrTuple, {Module, Function, Args}) when is_atom(Module),
+                                                    is_atom(Function),
+                                                    is_list(Args) ->
+
+        case SiteOrTuple of
+          Site when is_binary(Site) -> ok;
+          {Site, _} -> ok
+        end,
+        case classy_node:node_of_site(Site, true) of
+          {ok, Node} ->
+            erpc:cast(Node, Module, Function, Args);
+          undefined ->
+            ok
+        end
+    end,
+    SitesWithArgs).
+
+%% @doc Call a function on multiple nodes in parallel with default timeout.
+-spec multicall(multicall_args()) -> multicall_result(term()).
+multicall(SitesWithArgs) ->
+  multicall(SitesWithArgs, rpc_timeout()).
+
+%% @doc Call a function on multiple sites in parallel.
+%%
+%% @param Function
+%% Function name
+%%
+%% @param Args
+%% Map of multicall targets and their function arguments.
+%% Multicall target could be a site ID that is automatically translated to node name by `multicall',
+%% or a tuple containing site ID and an arbitrary term.
+%% The latter form allows to make multiple requests towards the same site.
+%% Each multicall target can have a distinct set of function arguments.
+-spec multicall(multicall_args(), timeout()) -> multicall_result(term()).
+multicall(SitesWithArgs, Timeout) ->
+  {ReqIdCollection, Sent, NotSent} =
+    maps:fold(
+      fun(SiteOrTuple, {Module, Function, Args}, {AccWait, AccSent, AccNotSent}) when
+            is_atom(Module),
+            is_atom(Function),
+            is_list(Args) ->
+          case SiteOrTuple of
+            Site when is_binary(Site) -> ok;
+            {Site, _}                 -> ok
+          end,
+          case classy_node:node_of_site(Site, true) of
+            {ok, Node} ->
+              ReqId = erpc:send_request(Node, Module, Function, Args),
+              { erpc:reqids_add(ReqId, SiteOrTuple, AccWait)
+              , [SiteOrTuple | AccSent]
+              , AccNotSent
+              };
+            undefined ->
+              { AccWait
+              , AccSent
+              , AccNotSent#{SiteOrTuple => {error, site_is_down}}
+              }
+          end
+      end,
+      {erpc:reqids_new(), [], #{}},
+      SitesWithArgs),
+  WaitTime = case Timeout of
+               infinity ->
+                 infinity;
+               T when is_integer(T) ->
+                 {abs, erlang:monotonic_time(millisecond) + Timeout}
+             end,
+  multicall_receive_replies(ReqIdCollection, WaitTime, NotSent, Sent).
+
+-spec count_up_peers(#{classy:site() => classy:peer_info()}) -> non_neg_integer().
+count_up_peers(Peers) ->
+  maps:fold(
+    fun(_, #{connected := Up}, Acc) ->
+        case Up of
+          true  -> Acc + 1;
+          false -> Acc
+        end
+    end,
+    0,
+    Peers).
+
+%% @doc Translates site IDs to node names of running nodes.
+%%
+%% Return stopped nodes in the second element of the tuple.
+-spec sites_to_nodes([classy:site()]) -> {[node()], _BadSites :: [classy:site()]}.
+sites_to_nodes(Sites) ->
+  lists:foldl(
+    fun(Site, {AccNodes, AccBad}) ->
+        case classy_node:node_of_site(Site, true) of
+          {ok, Node} ->
+            {[Node | AccNodes], AccBad};
+          undefined ->
+            {AccNodes, [Site | AccBad]}
+        end
+    end,
+    {[], []},
+    Sites).
+
+%% @doc Perform a fold over `classy:cluster_info()' result
+%% with accumulators are separated per cluster.
+%%
+%% `InitialAcc' parameter is used as the initial value of the accumulator for each cluster.
+%%
+%% Sites that are not part of any cluster or don't have a site ID are ignored.
+-spec fold_per_cluster(Fun, Acc, classy:cluster_info()) -> #{classy:cluster_id() => Acc}
+          when Fun :: fun((node(), classy:info(), Acc) -> Acc).
+fold_per_cluster(Fun, InitialAcc, #{infos := Infos}) ->
+  maps:fold(
+    fun(Node, Info, Acc) ->
+        case Info of
+          #{cluster := Cluster, site := Site} when is_binary(Cluster), is_binary(Site) ->
+            ClusterAcc0 = maps:get(Cluster, Acc, InitialAcc),
+            ClusterAcc = Fun(Node, Info, ClusterAcc0),
+            Acc#{Cluster => ClusterAcc};
+          _ ->
+            Acc
+        end
+    end,
+    #{},
+    Infos).
 
 %% @doc Read `rpc_timeout' environment variable (with default)
 rpc_timeout() ->
@@ -141,3 +314,53 @@ map_deep_insert([K | Rest], Val, Outer) ->
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+-spec multicall_receive_replies(
+        erpc:request_id_collection(),
+        erpc:timeout_time(),
+        multicall_result(A),
+        [multicall_target()]
+       ) -> multicall_result(A).
+multicall_receive_replies(Collection0, WaitTime, Acc, RemainingTargets) ->
+  try erpc:receive_response(Collection0, WaitTime, true) of
+    {Resp, Target, Collection} ->
+      multicall_receive_replies(
+        Collection,
+        WaitTime,
+        Acc#{Target => {ok, Resp}},
+        RemainingTargets -- [Target]);
+    no_request ->
+      Acc
+  catch
+    error:{erpc, timeout} ->
+      lists:foldl(
+        fun(Target, Acc1) ->
+            Acc1#{Target => {error, timeout}}
+        end,
+        Acc,
+        RemainingTargets);
+    throw:{Throw, Target, Collection} ->
+      multicall_receive_replies(
+        Collection,
+        WaitTime,
+        Acc#{Target => {error, {throw, Throw}}},
+        RemainingTargets -- [Target]);
+    exit:{{exception, Exit}, Target, Collection} ->
+      multicall_receive_replies(
+        Collection,
+        WaitTime,
+        Acc#{Target => {error, {exit, Exit}}},
+        RemainingTargets -- [Target]);
+    error:{Err, Target, Collection} ->
+      case Err of
+        {exception, Exc, Stack} ->
+          Reason = {error, Exc, Stack};
+        Reason ->
+          ok
+      end,
+      multicall_receive_replies(
+        Collection,
+        WaitTime,
+        Acc#{Target => {error, Reason}},
+        RemainingTargets -- [Target])
+  end.
