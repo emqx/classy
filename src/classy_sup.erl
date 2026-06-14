@@ -181,9 +181,17 @@ init(#membership_sup{}) ->
               },
   {ok, {SupFlags, [Children]}};
 init(?VOTE_COORDINATOR_SUP) ->
+  %% Note: since both coordinator and participant workers deal with
+  %% persistent data, recovery via restart by the supervisor is too
+  %% risky. It can lead to the situation where workers restart from a
+  %% corrupted state and immediately restart.
+  %%
+  %% We let operator or business logic restart the workers if they
+  %% deem that safe. Additionally, the workers are automatically
+  %% restarted on node restart.
   Children = #{ id       => worker
               , start    => {classy_vote_coordinator, start_link, []}
-              , shutdown => 10_000
+              , shutdown => 5_000
               , type     => worker
               , restart  => temporary
               },
@@ -195,7 +203,7 @@ init(?VOTE_COORDINATOR_SUP) ->
 init(?VOTE_PARTICIPANT_SUP) ->
   Children = #{ id       => worker
               , start    => {classy_vote_participant, start_link, []}
-              , shutdown => 10_000
+              , shutdown => 5_000
               , type     => worker
               , restart  => temporary
               },

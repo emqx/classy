@@ -246,10 +246,28 @@ perform_rollback(D = #d{completed_actions = CA, prep = Prep}) ->
 perform_actions(_, [], D) ->
   db_teardown(D),
   {stop, normal, D};
-perform_actions(Stage, [MFA | Rest], D0 = #d{completed_actions = CA, vote = Vote}) ->
-  _ = classy_lib:safe_apply(MFA),
-  {ok, D} = db_update(Stage, Vote, CA + 1, D0),
-  perform_actions(Stage, Rest, D).
+perform_actions(Stage, [MFA | Rest], D0 = #d{completed_actions = CA, vote = Vote, prep = Prep}) ->
+  #prepare{id = ID, tag = Tag, on_fail = OnFail} = Prep,
+  ?tp(debug, ?classy_vote_part_perform_action,
+      #{ id => ID
+       , stage => Stage
+       , action_ctr => CA
+       }),
+  case classy_lib:safe_apply(MFA) of
+    {ok, _} ->
+      {ok, D} = db_update(Stage, Vote, CA + 1, D0),
+      perform_actions(Stage, Rest, D);
+    Error ->
+      FailInfo = #{ tag => Tag
+                  , id => ID
+                  , reason => Error
+                  , stage => Stage
+                  , completed_actions => CA
+                  },
+      ?tp(critical, "Commit action failed", FailInfo),
+      classy_vote:on_fail(FailInfo, OnFail),
+      {stop, normal, D0}
+  end.
 
 -spec do_real_vote(d()) -> {next_state, ?s_wait_outcome, d()}.
 do_real_vote(#d{prep = Prep} = D0) ->
@@ -296,7 +314,8 @@ send_vote(#d{vote = Vote, prep = Prep = #prepare{id = ID}}) ->
                },
   _ = ?tp_span(debug, ?classy_vote_part_send_vote, #{id => ID, vote => Vote, from => Self},
                classy_lib:multicall(
-                 #{Coordinator => {classy_vote_coordinator, receive_vote, [Arg]}})),
+                 #{Coordinator => {classy_vote_coordinator, receive_vote, [Arg]}},
+                 classy_lib:rpc_timeout())),
   ok.
 
 verify_coordinator(Coordinator) ->
@@ -368,6 +387,7 @@ db_restore(Tag, Id) ->
           , vote = i2b(VoteI)
           , completed_actions = CompletedActions
           },
+    ?tp(warning, "OHAYO", #{d => D, s => Stage}),
     {ok, Stage, D}
   end.
 

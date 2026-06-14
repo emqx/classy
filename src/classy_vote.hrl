@@ -16,6 +16,7 @@
         , commit        :: [classy_vote:mfargs()]
         , rollback      :: [classy_vote:mfargs()]
         , coordinator   :: classy:site()
+        , on_fail       :: [classy_vote:mfargs()]
         , reserved = [] :: term()
         }).
 %%   Coordinator <- Participant

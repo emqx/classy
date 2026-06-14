@@ -12,7 +12,7 @@
 %% <itemize>
 %% <li>
 %% <b>prepare</b>: Executed on the participant sites.
-%% Classy prepends an additional arugment indicating whether the prepare action can have side effects.
+%% Classy prepends an additional argument indicating whether the prepare action can have side effects.
 %% Return value is a boolean indicating the participant's vote (`true' = `yes').
 %% </li>
 %%
@@ -22,7 +22,7 @@
 %% Classy doesn't add additional arguments.
 %% Return value is ignored.
 %%
-%% Un-executed actions are retried in case of node restart.
+%% Un-executed or failed actions are retried after node restart.
 %% </li>
 %%
 %% <li>
@@ -40,7 +40,18 @@
 %% It's NOT guaranteed that all commit actions on the participants are finished by this time.
 %% This callback can be retried on node restart.
 %% </li>
+%%
+%% <li>
+%% <b>on_fail</b>: Executed on both coordinator and participant if commit / rollback / post_commit actions fail.
+%% This callback may be used signal failures to the business logic.
+%% Classy prepends an argument of type `fail_info'.
+%% </li>
 %% </itemize>
+%%
+%% WARNING: when `commit', `rollback' or `post_vote' actions fail,
+%% coordinator or participant processes stop, but pending commit action will linger in the DB.
+%% Classy will <b>not</b> attempt to recover the action until the next node restart.
+%% Recovery of failed commit or rollback actions is left to the API consumers.
 -module(classy_vote).
 
 %% API:
@@ -55,9 +66,10 @@
         , verify_mfas/2
         , verify_mfa/3
         , retry_interval/0
+        , on_fail/2
         ]).
 
--export_type([id/0, tag/0, lock/0, mfargs/0, strategy/0, actions/0, options/0, vote/0, outcome/0]).
+-export_type([id/0, tag/0, lock/0, mfargs/0, strategy/0, actions/0, options/0, vote/0, outcome/0, fail_info/0]).
 
 -include("classy.hrl").
 -include("classy_vote.hrl").
@@ -103,10 +115,18 @@
          , post_vote => mfargs()
          , strategy  => strategy()
          , lock      => lock()
+         , on_fail   => mfargs()
          }.
 
 -type vote() :: #c_vote{}.
 -type outcome() :: #c_outcome{}.
+
+-type fail_info() ::
+        #{ tag    := tag()
+         , id     := id()
+         , reason := _
+         , _      => _
+         }.
 
 %%================================================================================
 %% API functions
@@ -158,15 +178,19 @@ create_table() ->
     #{ ets_options => [ordered_set, {read_concurrency, true}]
      }).
 
+%% @private
 verify_prepare(Prepare) ->
   verify_mfa(bad_prepare, 1, Prepare).
 
+%% @private
 verify_commit(Commit) ->
   verify_mfas(bad_commit, Commit).
 
+%% @private
 verify_rollback(Rollback) ->
   verify_mfas(bad_rollback, Rollback).
 
+%% @private
 verify_mfas(Reason, Commits) when is_list(Commits) ->
   try
     [case verify_mfa(Reason, 0, I) of
@@ -182,6 +206,7 @@ verify_mfas(Reason, Commits) when is_list(Commits) ->
 verify_mfas(Reason, Other) ->
   {error, {Reason, Other}}.
 
+%% @private
 -spec verify_mfa(atom(), non_neg_integer(), term()) -> ok | {error, {atom(), term()}}.
 verify_mfa(Subject, NExtraArgs, {M, F, Args}) when is_atom(M),
                                                    is_atom(F),
@@ -195,8 +220,18 @@ verify_mfa(Subject, NExtraArgs, {M, F, Args}) when is_atom(M),
 verify_mfa(Subject, _, Other) ->
   {error, {Subject, Other}}.
 
+%% @private
 retry_interval() ->
   application:get_env(classy, vote_retry_interval, 5_000).
+
+%% @private
+-spec on_fail(fail_info(), [mfargs()]) -> ok.
+on_fail(FailInfo, Funs) ->
+  lists:foreach(
+    fun({M, F, Args}) ->
+        _ = classy_lib:safe_apply(M, F, [FailInfo | Args])
+    end,
+    Funs).
 
 %%================================================================================
 %% Internal functions
@@ -222,9 +257,11 @@ with_defaults(UserOpts) when is_map(UserOpts) ->
         {ok, Actions} ?= verify_actions(Actions0),
         {ok, Strategy} ?= verify_strategy(Strategy0),
         {ok, PostVote} ?= verify_post_vote(Merged),
+        {ok, OnFail} ?= verify_on_fail(Merged),
         {ok, Merged#{ actions   := Actions
                     , strategy  := Strategy
                     , post_vote => PostVote
+                    , on_fail   => OnFail
                     }}
       end;
     _ ->
@@ -237,6 +274,14 @@ verify_post_vote(#{post_vote := PostVote}) ->
     {ok, [PostVote]}
   end;
 verify_post_vote(#{}) ->
+  {ok, []}.
+
+verify_on_fail(#{on_fail := OnFail}) ->
+  maybe
+    ok = verify_mfa(bad_post_vote, 1, OnFail),
+    {ok, [OnFail]}
+  end;
+verify_on_fail(#{}) ->
   {ok, []}.
 
 verify_strategy(all) ->

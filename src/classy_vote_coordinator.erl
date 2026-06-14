@@ -77,6 +77,7 @@
         , strategy      :: classy_vote:strategy()
         , actions       :: #{classy:site() => #act{}}
         , post_vote     :: [classy_vote:mfargs()]
+        , on_fail       :: [classy_vote:mfargs()]
         , start_time    :: integer()
         , reserved = []
         }).
@@ -198,6 +199,7 @@ init_new_coordinator(ID, Options) ->
    , actions := Actions0
    , strategy := Strategy
    , post_vote := PostVote
+   , on_fail := OnFail
    , lock := Lock
    } = Options,
   {_, Actions} =
@@ -218,6 +220,7 @@ init_new_coordinator(ID, Options) ->
               , id = ID
               , strategy = Strategy
               , post_vote = PostVote
+              , on_fail = OnFail
               , actions = Actions
               , start_time = os:system_time(millisecond)
               },
@@ -308,6 +311,7 @@ handle_vote(ReplyTo, ?s_vote, Call, #d{opts = #opts{id = Id, actions = Acts}} = 
              true ->
               %% This was the last one:
               D = db_set_coord_state(?s_commit, ones(n_participants(D0)), D0),
+              ?tp(debug, ?classy_vote_coord_commit, #{id => Id}),
               {next_state, ?s_commit, D, Reply}
           end;
         false ->
@@ -357,23 +361,33 @@ handle_state_timeout(Stage, D0) ->
   end.
 
 -spec perform_post_commit(boolean(), d()) -> {stop, normal}.
-perform_post_commit(Outcome, D = #d{opts = Opts}) ->
-  #opts{post_vote = PostActions} = Opts,
-  lists:foreach(
-    fun({M, F, Args}) ->
-        try apply(M, F, [Outcome | Args])
-        catch
-          EC:Err:Stack ->
-            ?tp(error, classy_vote_post_vote_callback_error,
-                #{ EC => Err
-                 , mfa => {M, F, length(Args) + 1}
-                 , stack => Stack
-                 })
-        end
-    end,
-    PostActions),
+perform_post_commit(Outcome, #d{opts = #opts{id = ID, tag = Tag, post_vote = PV}} = D) ->
+  ?tp(debug, ?classy_vote_coord_post_actions,
+      #{ id => ID
+       , tag => Tag
+       , outcome => Outcome
+       }),
+  perform_post_commit(Outcome, PV, D).
+
+-spec perform_post_commit(boolean(), [classy_vote:mfargs()], d()) -> {stop, normal}.
+perform_post_commit(Outcome, [], D) ->
   ok = db_teardown(Outcome, D),
-  {stop, normal}.
+  {stop, normal};
+perform_post_commit(Outcome, [{M, F, Args} | Rest], D) ->
+  case classy_lib:safe_apply(M, F, [Outcome | Args]) of
+    {ok, _} ->
+      perform_post_commit(Outcome, Rest, D);
+    Err ->
+      #d{opts = #opts{on_fail = OnFail, tag = Tag, id = Id}} = D,
+      FailInfo = #{ tag => Tag
+                  , id => Id
+                  , reason => Err
+                  , stage => coord_post_vote
+                  },
+      ?tp(critical, "Commit action failed", FailInfo),
+      classy_vote:on_fail(FailInfo, OnFail),
+      {stop, normal}
+  end.
 
 -spec broadcast_outcome(boolean(), d()) -> remaining().
 broadcast_outcome(Result, #d{opts = Options} = D) ->
@@ -429,7 +443,7 @@ prepare_multi(Function, D = #d{opts = #opts{actions = Acts}}) ->
 
 -spec prepare(d(), #act{}) -> #prepare{}.
 prepare(
-  #d{opts = #opts{id = Id, tag = Tag, lock = Lock}},
+  #d{opts = #opts{id = Id, tag = Tag, lock = Lock, on_fail = OnFail}},
   #act{prepare = Prep, commit = Commit, rollback = Rollback}
  ) ->
   {ok, Self} = classy_node:the_site(),
@@ -440,6 +454,7 @@ prepare(
           , commit = Commit
           , rollback = Rollback
           , coordinator = Self
+          , on_fail = OnFail
           }.
 
 -spec decide_pre_vote_result(classy_vote:strategy(), maps:iterator()) -> boolean().

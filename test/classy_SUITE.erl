@@ -1144,6 +1144,173 @@ t_410_vote_commit(_) ->
      | classy_vote:trace_props()
      ]).
 
+%% Verify that commit flows finish after node restart:
+t_411_commit_actions_after_restart(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  Ref1 = vote1,
+  Sites = [S1, S2],
+  VerifyCleanState =
+    fun(Nodes) ->
+        Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
+        [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
+    end,
+  ?check_trace(
+     #{timetrap => 30_000},
+     begin
+       N1 = create_start_site(S1, #{peer => #{shutdown => halt}}),
+       N2 = create_start_site(S2, #{peer => #{shutdown => halt}}),
+       Nodes = [N1, N2],
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       %% Make sure post commit actions are delayed:
+       ?force_ordering(
+          #{?snk_kind := test_go},
+          #{?snk_kind := K} when K =:= ?classy_vote_part_perform_action;
+                                 K =:= ?classy_vote_coord_post_actions),
+       {ok, ID} = ?ON(S1,
+                      classy_vote:create(#{ tag => Ref1
+                                          , actions => #{S2 => make_vote(true, true, Ref1, 1)}
+                                          , post_vote => make_post_vote(Ref1)
+                                          })),
+       ?block_until(#{?snk_kind := ?classy_vote_coord_commit, id := ID}),
+       ?block_until(#{?snk_kind := ?classy_vote_part_stage, to := 2, id := ID}),
+       %% Restart sites:
+       [familiar:kill_site({get_cluster(), S}) || S <- Sites],
+       ?tp(notice, test_go, #{}),
+       [ok = restart_site(S) || S <- Sites],
+       ?assert(classy_vote:test_wait_conclude(ID)),
+       VerifyCleanState(Nodes),
+       Nodes
+     end,
+     [ fun no_unexpected_events/1
+     , {"commit events",
+        fun([_N1, N2], Trace) ->
+            ?assertMatch(
+               [ #{?snk_kind := test_go}
+               , #{ ?snk_kind := classy_test_vote_commit
+                  , step := 1
+                  , ref := Ref1
+                  , ?snk_meta := #{node := N2}
+                  }
+               ],
+               ?of_kind([classy_test_vote_commit, test_go], Trace))
+        end}
+     , {"post vote events",
+        fun(Trace) ->
+            ?assertMatch(
+               [ #{ref := Ref1, result := true}
+               ],
+               ?of_kind(classy_test_post_vote, Trace))
+        end}
+     , {"participant stages",
+        fun([_N1, _N2], Trace) ->
+            ?assertMatch(
+               [ #{from := 0, to := 0} %% Enter prepare
+               , #{from := 0, to := 1} %% Enter wait outcome
+               , #{from := 1, to := 2} %% Received outcome; enter commit
+               , #{?snk_kind := test_go} %% Restarted
+               , #{from := 2, to := 2} %% Restored state into commit stage
+               , #{?snk_kind := classy_test_vote_commit}
+               ],
+               ?of_kind([?classy_vote_part_stage, test_go, classy_test_vote_commit], Trace))
+        end}
+     | classy_vote:trace_props()
+     ]).
+
+
+%% Verify that failed commit flows are retried after node restart.
+t_412_commit_action_crash(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  Ref1 = vote1,
+  Sites = [S1, S2],
+  VerifyCleanState =
+    fun(Nodes) ->
+        Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
+        [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
+    end,
+  ?check_trace(
+     #{timetrap => 30_000},
+     begin
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       Nodes = [N1, N2],
+       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       %% Inject failures into the commit flows:
+       InjErr1 = ?inject_crash(
+                    #{?snk_kind := classy_test_vote_commit, step := 2, ref := Ref1},
+                    snabbkaffe_nemesis:always_crash()),
+       InjErr2 = ?inject_crash(
+                    #{?snk_kind := classy_test_post_vote, ref := Ref1},
+                    snabbkaffe_nemesis:always_crash()),
+       %% Start vote:
+       {ok, ID} = ?ON(S1,
+                      classy_vote:create(#{ tag => Ref1
+                                          , actions => #{S2 => make_vote(true, true, Ref1, 3)}
+                                          , post_vote => make_post_vote(Ref1)
+                                          , on_fail => make_vote_on_fail(Ref1)
+                                          })),
+       %% Wait until failures are detected:
+       ?block_until(#{?snk_kind := classy_test_vote_on_fail, id := ID, stage := coord_post_vote}),
+       %% Participant:
+       ?block_until(#{?snk_kind := classy_test_vote_on_fail, id := ID, stage := I} when is_integer(I)),
+       %% Restart sites:
+       [stop_site(S) || S <- Sites],
+       snabbkaffe_nemesis:fix_crash(InjErr1),
+       snabbkaffe_nemesis:fix_crash(InjErr2),
+       ?tp(notice, test_restarted, #{}),
+       [ok = restart_site(S) || S <- Sites],
+       ?assert(classy_vote:test_wait_conclude(ID)),
+       VerifyCleanState(Nodes),
+       Nodes
+     end,
+     [ fun no_unexpected_events/1
+     , {"coordinator history",
+        fun([N1, _N2], Trace) ->
+            ?assertMatch(
+               [ #{from := 0, to := 0} %% Enter vote
+               , #{from := 0, to := 10} %% Enter commit
+               , #{?snk_kind := classy_test_vote_on_fail, tag := Ref1, id := _, reason :=_ }
+                 %% Restarted
+               , #{from := 10, to := 10} %% Re-enter commit
+               , #{?snk_kind := classy_test_post_vote, ref := Ref1}
+               ],
+               ?of_node(N1,
+                        ?of_kind(
+                           [ ?classy_vote_coord_stage
+                           , classy_test_post_vote
+                           , classy_test_vote_on_fail
+                           ],
+                           Trace)))
+
+        end}
+     , {"participant history",
+        fun([_N1, N2], Trace) ->
+            ?assertMatch(
+               [ #{from := 0, to := 0} %% Enter prepare
+               , #{from := 0, to := 1} %% Enter wait outcome
+               , #{from := 1, to := 2} %% Received outcome; enter commit
+               , #{?snk_kind := classy_test_vote_commit, ref := Ref1, step := 1}
+               , #{?snk_kind := classy_test_vote_on_fail, tag := Ref1, reason := _, id := _}
+                 %% Restarted
+               , #{from := 2, to := 2} %% Restored state into commit stage
+               , #{?snk_kind := classy_test_vote_commit, ref := Ref1, step := 2}
+               , #{?snk_kind := classy_test_vote_commit, ref := Ref1, step := 3}
+               ],
+               ?of_node(N2,
+                        ?of_kind([ ?classy_vote_part_stage
+                                 , classy_test_vote_commit
+                                 , classy_test_vote_on_fail
+                                 ],
+                                 Trace)))
+        end}
+     | classy_vote:trace_props()
+     ]).
+
 t_999_fuzz(_Config) ->
   %% NOTE: we set timeout at the lowest level to capture the trace
   %% and have a nicer error message.
@@ -1430,6 +1597,7 @@ init_per_testcase(TC, Cfg) ->
   ok = familiar:start_link_cluster(
          #{ id => TC
           , fixtures => familiar:default_fixtures() ++ Fixtures
+          , peer => #{args => ["-kernel", "prevent_overlapping_partitions", "false"]}
           }),
   put(classy_SUITE_cluster, {ok, TC}),
   Cfg.
@@ -1447,6 +1615,7 @@ create_start_site(Cluster, Site, CustomConf) ->
               , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site]}
                         , cleanup_check_interval => 100
                         , vote_retry_interval => 100
+                        , rpc_timeout => 100
                         }
               }},
   Fixtures = maps:get(fixtures, CustomConf, []),
@@ -1544,6 +1713,9 @@ make_vote(HowToPreVote, HowToVote, Ref, NCommitSteps) ->
 make_post_vote(Ref) ->
   {?MODULE, post_vote, [Ref]}.
 
+make_vote_on_fail(Ref) ->
+  {?MODULE, vote_on_fail, [Ref]}.
+
 vote_prepare(ForReal, HowToPreVote, HowToVote, Ref) ->
   Result = case ForReal of
              true -> HowToVote;
@@ -1560,6 +1732,9 @@ vote_rollback(Ref) ->
 
 post_vote(Result, Ref) ->
   ?tp(classy_test_post_vote, #{ref => Ref, result => Result}).
+
+vote_on_fail(FailInfo, Ref) ->
+  ?tp(classy_test_vote_on_fail, FailInfo#{test_ref => Ref}).
 
 -spec proper_printout(string(), list()) -> _.
 proper_printout(Char, []) when Char =:= ".";
