@@ -54,7 +54,7 @@
 %%     Data key (opts):
 -record(pk_cd,
         { tag :: classy_vote:tag()
-        , id :: classy_vote:id() | atom()
+        , id  :: classy_vote:id() | atom()
         }).
 %%     State key (stage + remaining replies):
 -record(pk_cs,
@@ -62,7 +62,7 @@
         }).
 %% Coordinator dynamic state:
 -record(ps_c,
-        { stage :: commit_stage()
+        { stage     :: commit_stage()
           %% Bit field where 1s represent sites have to ack commit or rollback.
           %% Bit position is determined by `n' field of `action()'
           %% (set automatically).
@@ -72,17 +72,17 @@
 
 %% This data is stored persistently:
 -record(opts,
-        { tag           :: classy_vote:tag() %% TODO: don't duplicate the tag?
-        , id            :: classy_vote:id()
-        , strategy      :: classy_vote:strategy()
-        , actions       :: #{classy:site() => #act{}}
-        , post_vote     :: [classy_vote:mfargs()]
-        , on_fail       :: [classy_vote:mfargs()]
-        , start_time    :: integer()
+        { strategy   :: classy_vote:strategy()
+        , actions    :: #{classy:site() => #act{}}
+        , post_vote  :: [classy_vote:mfargs()]
+        , on_fail    :: [classy_vote:mfargs()]
+        , start_time :: integer()
         , reserved = []
         }).
 -record(d,
-        { opts :: #opts{}
+        { tag  :: classy_vote:tag()
+        , id   :: classy_vote:id()
+        , opts :: #opts{}
         }).
 -type d() :: #d{}.
 
@@ -221,15 +221,16 @@ init_new_coordinator(ID, Options) ->
       end,
       {0, #{}},
       Actions0),
-  Opts = #opts{ tag = Tag
-              , id = ID
-              , strategy = Strategy
+  Opts = #opts{ strategy = Strategy
               , post_vote = PostVote
               , on_fail = OnFail
               , actions = Actions
               , start_time = os:system_time(millisecond)
               },
-  D = #d{opts = Opts},
+  D = #d{ tag = Tag
+        , id = ID
+        , opts = Opts
+        },
   %% This is a new election.
   %% Perform a pre-vote immediately,
   %% and return pre-vote result to the requester synchronously.
@@ -257,9 +258,9 @@ init_new_coordinator(ID, Options) ->
   end.
 
 -spec restore_coordinator(classy_vote:tag(), classy_vote:id(), #opts{}) -> {ok, commit_stage(), d()}.
-restore_coordinator(_Tag, Id, Opts) ->
+restore_coordinator(Tag, Id, Opts) ->
   [#ps_c{stage = Stage}] = classy_table:lookup(?ptab, #pk_cs{id = Id}),
-  D0 = #d{opts = Opts},
+  D0 = #d{tag = Tag, id = Id, opts = Opts},
   case Stage of
     ?s_vote ->
       %% If voting was aborted, we just rollback:
@@ -273,7 +274,7 @@ restore_coordinator(_Tag, Id, Opts) ->
         {keep_state_and_data, gen_statem:action()} |
         {keep_state, d(), gen_statem:action()}.
 enter(OldStage, Stage, D) ->
-  #d{opts = #opts{id = ID}} = D,
+  #d{id = ID} = D,
   ?tp(debug, ?classy_vote_coord_stage, #{id => ID, to => Stage, from => OldStage}),
   case Stage of
     ?s_vote ->
@@ -294,7 +295,7 @@ perform_vote(D = #d{opts = Opts}) ->
         {next_state, #ps_c{}, d(), gen_statem:action()} |
         {keep_state, d(), gen_statem:action()} |
         {keep_state_and_data, gen_statem:action()}.
-handle_vote(ReplyTo, ?s_vote, Call, #d{opts = #opts{id = Id, actions = Acts}} = D0) ->
+handle_vote(ReplyTo, ?s_vote, Call, #d{id = Id, opts = #opts{actions = Acts}} = D0) ->
   #c_vote{from = From, vote = Vote, id = Id} = Call,
   ?tp(debug, ?classy_vote_coord_recv,
       #{ id => Id
@@ -365,7 +366,7 @@ handle_state_timeout(Stage, D0) ->
   end.
 
 -spec perform_post_commit(boolean(), d()) -> {stop, normal}.
-perform_post_commit(Outcome, #d{opts = #opts{id = ID, tag = Tag, post_vote = PV}} = D) ->
+perform_post_commit(Outcome, #d{id = ID, tag = Tag, opts = #opts{post_vote = PV}} = D) ->
   ?tp(debug, ?classy_vote_coord_post_actions,
       #{ id => ID
        , tag => Tag
@@ -382,7 +383,7 @@ perform_post_commit(Outcome, [{M, F, Args} | Rest], D) ->
     {ok, _} ->
       perform_post_commit(Outcome, Rest, D);
     Err ->
-      #d{opts = #opts{on_fail = OnFail, tag = Tag, id = Id}} = D,
+      #d{opts = #opts{on_fail = OnFail}, tag = Tag, id = Id} = D,
       FailInfo = #{ tag => Tag
                   , id => Id
                   , reason => Err
@@ -394,8 +395,8 @@ perform_post_commit(Outcome, [{M, F, Args} | Rest], D) ->
   end.
 
 -spec broadcast_outcome(boolean(), d()) -> remaining().
-broadcast_outcome(Result, #d{opts = Options} = D) ->
-  #opts{id = Id, tag = Tag, actions = Acts} = Options,
+broadcast_outcome(Result, #d{id = Id, tag = Tag, opts = Options} = D) ->
+  #opts{actions = Acts} = Options,
   Sites = classy:sites(),
   Call = {classy_vote_participant, receive_outcome,
           [ #c_outcome{ id = Id
@@ -446,7 +447,7 @@ prepare_multi(Function, D = #d{opts = #opts{actions = Acts}}) ->
 
 -spec prepare(d(), #act{}) -> #prepare{}.
 prepare(
-  #d{opts = #opts{id = Id, tag = Tag, on_fail = OnFail}},
+  #d{id = Id, tag = Tag, opts = #opts{on_fail = OnFail}},
   #act{prepare = Prep, commit = Commit, rollback = Rollback}
  ) ->
   {ok, Self} = classy_node:the_site(),
@@ -498,13 +499,12 @@ do_fold_ongoing(Fun, Acc0, {Batch, Cont}) ->
 %%--------------------------------------------------------------------------------
 
 -spec remaining(d()) -> remaining().
-remaining(#d{opts = #opts{id = Id}}) ->
+remaining(#d{id = Id}) ->
   [#ps_c{remaining = Rem}] = classy_table:lookup(?ptab, #pk_cs{id = Id}),
   Rem.
 
 -spec db_set_coord_state(commit_stage(), remaining(), d()) -> d().
-db_set_coord_state(Stage, Remaining, D = #d{opts = Opts}) ->
-  #opts{id = Id} = Opts,
+db_set_coord_state(Stage, Remaining, D = #d{id = Id}) ->
   ok = classy_table:write(
          ?ptab,
          #pk_cs{id = Id},
@@ -513,8 +513,7 @@ db_set_coord_state(Stage, Remaining, D = #d{opts = Opts}) ->
 
 %% Write information about the vote to the DB atomically.
 -spec db_establish(commit_stage(), remaining(), d()) -> ok.
-db_establish(Stage, Remaining, #d{opts = Opts}) ->
-  #opts{tag = Tag, id = Id} = Opts,
+db_establish(Stage, Remaining, #d{tag = Tag, id = Id, opts = Opts}) ->
   StateKey = #pk_cs{id = Id},
   StaticDataKey = #pk_cd{tag = Tag, id = Id},
   {ok, _} = classy_table:atomically(
@@ -526,7 +525,7 @@ db_establish(Stage, Remaining, #d{opts = Opts}) ->
 
 %% Atomically delete information about the vote from the DB.
 -spec db_teardown(boolean(), d()) -> ok.
-db_teardown(Outcome, #d{opts = #opts{id = Id, tag = Tag}}) ->
+db_teardown(Outcome, #d{id = Id, tag = Tag}) ->
   StateKey = #pk_cs{id = Id},
   StaticDataKey = #pk_cd{tag = Tag, id = Id},
   {ok, _} = classy_table:atomically(
