@@ -26,7 +26,7 @@
         , from          :: classy:site()
         , reserved = [] :: term()
         }).
-%%   Coordiantor -> Participant
+%%   Coordinator -> Participant
 -record(c_outcome,
         { id            :: classy_vote:id()
         , tag           :: classy_vote:tag()

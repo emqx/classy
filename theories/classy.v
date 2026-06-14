@@ -90,7 +90,7 @@ End repeat_delivery.
 
 (** Here [l''] is a network packet delivery order,
 where eventual delivery of every packet from [l] is guaranteed,
-but packets may be deliveried more than once and in random order.
+but packets may be delivered more than once and in random order.
 
 It's defined in two steps: first we multiply the original packets,
 then shuffle them.
