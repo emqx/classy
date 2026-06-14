@@ -824,11 +824,6 @@ t_400_vote_smoke_abort(_) ->
   S2 = <<"s2">>,
   S3 = <<"s3">>,
   Sites = [S1, S2, S3],
-  VerifyCleanState =
-    fun(Nodes) ->
-        Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
-        [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
-    end,
   Ref1 = vote1,
   Ref2 = vote2,
   Ref3 = vote3,
@@ -853,7 +848,7 @@ t_400_vote_smoke_abort(_) ->
                                   , actions => #{<<"bad_site">> => make_vote(true, true, Ref1, 1)}
                                   , post_vote => make_post_vote(Ref1)
                                   }))),
-       VerifyCleanState(Nodes),
+       verify_no_votes(Nodes),
        %% Pre-vote fail:
        ?assertEqual(
           {error, #{S => {ok, false} || S <- [S1, S2, S3]}},
@@ -862,7 +857,7 @@ t_400_vote_smoke_abort(_) ->
                                   , actions  => #{Site => make_vote(false, false, Ref2, 1) || Site <- [S1, S2, S3]}
                                   , post_vote => make_post_vote(Ref2)
                                   }))),
-       VerifyCleanState(Nodes),
+       verify_no_votes(Nodes),
        %% Vote stage fails:
        {ok, ID3} = ?ON(S1,
                        classy_vote:create(#{ tag => Ref3
@@ -872,7 +867,7 @@ t_400_vote_smoke_abort(_) ->
                                            , post_vote => make_post_vote(Ref3)
                                            })),
        ?assertNot(classy_vote:test_wait_conclude(ID3)),
-       VerifyCleanState(Nodes),
+       verify_no_votes(Nodes),
        Nodes
      end,
      [ fun no_unexpected_events/1
@@ -903,11 +898,6 @@ t_401_vote_timeout(_) ->
   S2 = <<"s2">>,
   S3 = <<"s3">>,
   Sites = [S1, S2, S3],
-  VerifyCleanState =
-    fun(Nodes) ->
-        Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
-        [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
-    end,
   Ref1 = vote1,
   ?check_trace(
      #{timetrap => 15_000},
@@ -935,7 +925,7 @@ t_401_vote_timeout(_) ->
        ct:sleep(200),
        ?tp(test_go, #{}),
        ?assertNot(classy_vote:test_wait_conclude(ID)),
-       VerifyCleanState(Nodes),
+       verify_no_votes(Nodes),
        Nodes
      end,
      [ fun no_unexpected_events/1
@@ -966,11 +956,6 @@ t_403_vote_coord_restart(_) ->
   S2 = <<"s2">>,
   S3 = <<"s3">>,
   Sites = [S1, S2, S3],
-  VerifyCleanState =
-    fun(Nodes) ->
-        Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
-        [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
-    end,
   Ref1 = vote1,
   ?check_trace(
      #{timetrap => 15_000},
@@ -999,7 +984,7 @@ t_403_vote_coord_restart(_) ->
        ok = restart_site(S1),
        ?tp(notice, test_go, #{}),
        ?assertNot(classy_vote:test_wait_conclude(ID)),
-       VerifyCleanState(Nodes),
+       verify_no_votes(Nodes),
        Nodes
      end,
      [ fun no_unexpected_events/1
@@ -1030,14 +1015,6 @@ t_404_vote_part_restart(_) ->
   S2 = <<"s2">>,
   S3 = <<"s3">>,
   Sites = [S1, S2, S3],
-  VerifyCleanState =
-    fun(Nodes) ->
-        ?retry(100, 10,
-           begin
-             Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
-             [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
-           end)
-    end,
   Ref1 = vote1,
   Ref2 = vote2,
   ?check_trace(
@@ -1075,7 +1052,7 @@ t_404_vote_part_restart(_) ->
        ?tp(notice, test_go1, #{}),
        ok = restart_site(S3),
        ?assertNot(classy_vote:test_wait_conclude(ID1)),
-       VerifyCleanState(Nodes),
+       verify_no_votes(Nodes),
        %% Case 2: participant restarts *before* recording the vote
        %% request into the DB. Flow should conclude without that
        %% participant.
@@ -1097,7 +1074,7 @@ t_404_vote_part_restart(_) ->
        ?tp(notice, test_go2, #{}),
        ok = restart_site(S3),
        ?assertNot(classy_vote:test_wait_conclude(ID2)),
-       VerifyCleanState(Nodes),
+       verify_no_votes(Nodes),
        Nodes
      end,
      [ fun no_unexpected_events/1
@@ -1132,11 +1109,6 @@ t_410_vote_commit(_) ->
   S3 = <<"s3">>,
   Ref1 = vote1,
   Sites = [S1, S2, S3],
-  VerifyCleanState =
-    fun(Nodes) ->
-        Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
-        [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
-    end,
   ?check_trace(
      #{timetrap => 15_000},
      begin
@@ -1158,7 +1130,7 @@ t_410_vote_commit(_) ->
                                            , post_vote => make_post_vote(Ref1)
                                            })),
        ?assert(classy_vote:test_wait_conclude(ID3)),
-       VerifyCleanState(Nodes),
+       verify_no_votes(Nodes),
        Nodes
      end,
      [ fun no_unexpected_events/1
@@ -1187,11 +1159,6 @@ t_411_commit_actions_after_restart(_) ->
   S2 = <<"s2">>,
   Ref1 = vote1,
   Sites = [S1, S2],
-  VerifyCleanState =
-    fun(Nodes) ->
-        Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
-        [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
-    end,
   ?check_trace(
      #{timetrap => 30_000},
      begin
@@ -1218,7 +1185,7 @@ t_411_commit_actions_after_restart(_) ->
        ?tp(notice, test_go, #{}),
        [ok = restart_site(S) || S <- Sites],
        ?assert(classy_vote:test_wait_conclude(ID)),
-       VerifyCleanState(Nodes),
+       verify_no_votes(Nodes),
        Nodes
      end,
      [ fun no_unexpected_events/1
@@ -1257,18 +1224,12 @@ t_411_commit_actions_after_restart(_) ->
      | classy_vote:trace_props()
      ]).
 
-
 %% Verify that failed commit flows are retried after node restart.
 t_412_commit_action_crash(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   Ref1 = vote1,
   Sites = [S1, S2],
-  VerifyCleanState =
-    fun(Nodes) ->
-        Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
-        [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
-    end,
   ?check_trace(
      #{timetrap => 30_000},
      begin
@@ -1303,7 +1264,7 @@ t_412_commit_action_crash(_) ->
        ?tp(notice, test_restarted, #{}),
        [ok = restart_site(S) || S <- Sites],
        ?assert(classy_vote:test_wait_conclude(ID)),
-       VerifyCleanState(Nodes),
+       verify_no_votes(Nodes),
        Nodes
      end,
      [ fun no_unexpected_events/1
@@ -1325,7 +1286,6 @@ t_412_commit_action_crash(_) ->
                            , classy_test_vote_on_fail
                            ],
                            Trace)))
-
         end}
      , {"participant history",
         fun([_N1, N2], Trace) ->
@@ -1348,6 +1308,90 @@ t_412_commit_action_crash(_) ->
                                  Trace)))
         end}
      | classy_vote:trace_props()
+     ]).
+
+%% Verify classy_vote:ls_votes functions (implicitly verify `classy_vote:fold_ongoing')
+t_413_fold_votes(_) ->
+  S1 = <<"s1">>,
+  Ref1 = vote1,
+  Ref2 = vote2,
+  ?check_trace(
+     #{timetrap => 30_000},
+     begin
+       N1 = create_start_site(S1, #{peer => #{shutdown => halt}}),
+       %% Make sure votes hang long enough for us to inspect them:
+       ?force_ordering(
+          #{?snk_kind := test_go},
+          #{?snk_kind := K} when K =:= classy_test_vote_commit;
+                                 K =:= classy_test_post_vote),
+       {ok, ID1} = ?ON(S1,
+                       classy_vote:create(#{ tag => Ref1
+                                           , actions => #{S1 => make_vote(true, true, Ref1, 1)}
+                                           , post_vote => make_post_vote(Ref1)
+                                           })),
+       {ok, ID2} = ?ON(S1,
+                       classy_vote:create(#{ tag => Ref2
+                                           , actions => #{S1 => make_vote(true, true, Ref2, 1)}
+                                           , post_vote => make_post_vote(Ref2)
+                                           })),
+       ct:sleep(100),
+       ?assertMatch(
+          [ #{ id := _
+             , tag := Ref1
+             , role := participant
+             , coordinator := <<"s1">>
+             }
+          , #{ id := _
+             , tag := Ref1
+             , role := coordinator
+             , start_time := _
+             , participants := [<<"s1">>]
+             }
+          ],
+          ?ON(S1, lists:sort(classy_vote:ls_votes(Ref1)))),
+       ?assertMatch(
+          [ #{ id := _
+             , tag := Ref2
+             , role := participant
+             , coordinator := <<"s1">>
+             }
+          , #{ id := _
+             , tag := Ref2
+             , role := coordinator
+             , start_time := _
+             , participants := [<<"s1">>]
+             }
+          ],
+          ?ON(S1, lists:sort(classy_vote:ls_votes(Ref2)))),
+       ?assertMatch(
+          [ #{ id := _
+             , tag := Ref1
+             , role := participant
+             , coordinator := <<"s1">>
+             }
+          , #{ id := _
+             , tag := Ref2
+             , role := participant
+             , coordinator := <<"s1">>
+             }
+          , #{ id := _
+             , tag := Ref1
+             , role := coordinator
+             , start_time := _
+             , participants := [<<"s1">>]
+             }
+          , #{ id := _
+             , tag := Ref2
+             , role := coordinator
+             , start_time := _
+             , participants := [<<"s1">>]
+             }
+          ],
+          ?ON(S1, lists:sort(classy_vote:ls_votes()))),
+       ok
+     end,
+     [ fun no_unexpected_events/1
+     , fun events_on_all_sites/1
      ]).
 
 t_999_fuzz(_Config) ->
@@ -1774,6 +1818,10 @@ post_vote(Result, Ref) ->
 
 vote_on_fail(FailInfo, Ref) ->
   ?tp(classy_test_vote_on_fail, FailInfo#{test_ref => Ref}).
+
+verify_no_votes(Nodes) ->
+  Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
+  [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)].
 
 -spec proper_printout(string(), list()) -> _.
 proper_printout(Char, []) when Char =:= ".";

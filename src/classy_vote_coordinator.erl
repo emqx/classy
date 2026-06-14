@@ -10,6 +10,7 @@
 %% API:
 -export([ new/2
         , restore/0
+        , fold_ongoing/3
         ]).
 
 %% Behavior callbacks:
@@ -136,6 +137,14 @@ restore() ->
         classy_sup:ensure_vote_coordinator([false, StartArgs])
     end,
     Ongoing).
+
+-spec fold_ongoing(fun((classy_vote:vote_info(), Acc) -> Acc), Acc, _TagPattern) -> Acc.
+fold_ongoing(Fun, Acc0, TagPattern) ->
+  MS = { #classy_kv{k = #pk_cd{tag = TagPattern, _ = '_'}, _ = '_'}
+       , []
+       , ['$_']
+       },
+  do_fold_ongoing(Fun, Acc0, ets:select(?ptab, [MS], ?fold_batch_size)).
 
 %%================================================================================
 %% behavior callbacks
@@ -469,6 +478,25 @@ decide_pre_vote_result(Strategy, Iter0) ->
     none ->
       true
   end.
+
+do_fold_ongoing(_Fun, Acc, '$end_of_table') ->
+  Acc;
+do_fold_ongoing(Fun, Acc0, {Batch, Cont}) ->
+  Acc = lists:foldl(
+          fun(#classy_kv{k = #pk_cd{tag = Tag, id = Id}, v = Opts}, Acc1) ->
+              #opts{start_time = StartTime, actions = Acts} = Opts,
+              Fun(
+                #{ tag => Tag
+                 , id => Id
+                 , start_time => StartTime
+                 , role => coordinator
+                 , participants => maps:keys(Acts)
+                 },
+                Acc1)
+          end,
+          Acc0,
+          Batch),
+  do_fold_ongoing(Fun, Acc, ets:select(Cont)).
 
 %%--------------------------------------------------------------------------------
 %% Database access

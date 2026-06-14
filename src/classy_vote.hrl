@@ -42,4 +42,10 @@
 
 -define(state_timeout, state_timeout).
 
+-ifndef(TEST).
+-define(fold_batch_size, 100).
+-else.
+-define(fold_batch_size, 1).
+-endif.
+
 -endif.

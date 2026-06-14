@@ -6,7 +6,7 @@
 -behavior(gen_statem).
 
 %% API:
--export([restore/0, start_link/1]).
+-export([restore/0, start_link/1, fold_ongoing/3]).
 
 %% Behavior callbacks:
 -export([callback_mode/0, init/1, terminate/3, handle_event/4]).
@@ -89,6 +89,14 @@ restore() ->
         vote(Prep)
     end,
     ets:select(?ptab, [MS])).
+
+-spec fold_ongoing(fun((classy_vote:vote_info(), Acc) -> Acc), Acc, _TagPattern) -> Acc.
+fold_ongoing(Fun, Acc0, TagPattern) ->
+  MS = { #classy_kv{k = #pk_pd{tag = TagPattern, _ = '_'}, _ = '_'}
+       , []
+       , ['$_']
+       },
+  do_fold_ongoing(Fun, Acc0, ets:select(?ptab, [MS], ?fold_batch_size)).
 
 %%================================================================================
 %% Internal exports
@@ -398,6 +406,24 @@ get_prepare(Tag, Id) ->
     [] ->
       undefined
   end.
+
+do_fold_ongoing(_Fun, Acc, '$end_of_table') ->
+  Acc;
+do_fold_ongoing(Fun, Acc0, {Batch, Cont}) ->
+  Acc = lists:foldl(
+          fun(#classy_kv{k = #pk_pd{tag = Tag, id = Id}, v = Prepare}, Acc1) ->
+              #prepare{coordinator = Coord} = Prepare,
+              Fun(
+                #{ tag => Tag
+                 , id => Id
+                 , role => participant
+                 , coordinator => Coord
+                 },
+                Acc1)
+          end,
+          Acc0,
+          Batch),
+  do_fold_ongoing(Fun, Acc, ets:select(Cont)).
 
 nthtail(NComplete, Actions) ->
   lists:nthtail(

@@ -56,6 +56,9 @@
 
 %% API:
 -export([ create/1
+        , ls_votes/0
+        , ls_votes/1
+        , fold_ongoing/3
         ]).
 
 %% internal exports:
@@ -69,7 +72,18 @@
         , on_fail/2
         ]).
 
--export_type([id/0, tag/0, lock/0, mfargs/0, strategy/0, actions/0, options/0, vote/0, outcome/0, fail_info/0]).
+-export_type([ id/0
+             , tag/0
+             , lock/0
+             , mfargs/0
+             , strategy/0
+             , actions/0
+             , options/0
+             , vote/0
+             , outcome/0
+             , fail_info/0
+             , vote_info/0
+             ]).
 
 -include("classy.hrl").
 -include("classy_vote.hrl").
@@ -128,30 +142,41 @@
          , _      => _
          }.
 
+-type vote_info() ::
+        #{ tag  := tag()
+         , id   := id()
+         , role := coordinator | participant
+         , _    => _
+         }.
+
 %%================================================================================
 %% API functions
 %%================================================================================
 
-%% %% @doc List ongoing commit actions.
-%% %%
-%% %% Argument: match specification for the tag.
-%% -spec ls_votes(_TagMatch) -> #{id() => vote_info()}.
-%% ls_votes(TagMatch) ->
-%%   fold_votes(
-%%     TagMatch,
-%%     fun(ID, Action, Acc) -> Acc#{ID => Action} end).
+%% @doc List all ongoing commit actions.
+-spec ls_votes() -> [vote_info()].
+ls_votes() ->
+  ls_votes('_').
+
+%% @doc List ongoing commit actions.
+%%
+%% Argument: match specification for the tag.
+-spec ls_votes(_TagMatch) -> [vote_info()].
+ls_votes(TagMatch) ->
+  fold_ongoing(
+    fun(VoteInfo, Acc) -> [VoteInfo | Acc] end,
+    [],
+    TagMatch).
 
 %% @doc Fold over ongoing commit actions.
 %%
 %% Argument: match specification for the tag.
-%% -spec fold_votes(_TagMatch, fun((id(), vote_info(), Acc) -> Acc)) -> Acc.
-%% fold_votes(TagMatch, Fun) ->
-%%   BatchSize = 100,
-%%   MS = { #classy_kv{k = #pk_p{tag = TagMatch, _ = '_'}, _ = '_'}
-%%        , []
-%%        , ['$_']
-%%        },
-%%   do_fold_votes(ets:select(?ptab, [MS], BatchSize), Fun, #{}).
+-spec fold_ongoing(fun((vote_info(), Acc) -> Acc), Acc, _TagMatchPattern) -> Acc.
+fold_ongoing(Fun, Acc0, TagMatch) ->
+  classy_vote_participant:fold_ongoing(
+    Fun,
+    classy_vote_coordinator:fold_ongoing(Fun, Acc0, TagMatch),
+    TagMatch).
 
 %% @doc Initiate a new vote.
 %%
