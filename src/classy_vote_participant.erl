@@ -95,7 +95,7 @@ restore() ->
 %%================================================================================
 
 %% @private Coordinator -> Participant
--spec pre_vote(#prepare{}) -> boolean() | {error, _}.
+-spec pre_vote(#prepare{}) -> boolean().
 pre_vote(Prepare) ->
   case do_prepare(Prepare, false) of
     {ok, Bool} when is_boolean(Bool) ->
@@ -264,7 +264,7 @@ perform_actions(Stage, [MFA | Rest], D0 = #d{completed_actions = CA, vote = Vote
                   , stage => Stage
                   , completed_actions => CA
                   },
-      ?tp(critical, "Commit action failed", FailInfo),
+      ?tp(critical, classy_vote_participant_action_crash, FailInfo),
       classy_vote:on_fail(FailInfo, OnFail),
       {stop, normal, D0}
   end.

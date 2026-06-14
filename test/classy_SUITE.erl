@@ -473,8 +473,7 @@ t_080_desync(_) ->
      , fun events_on_all_sites/1
      ]).
 
-%% This testcase verifies `classy:info()' and
-%% `classy_node:cluster_info/0' and `classy:clusters/1' functions.
+%% This testcase verifies `classy:info/0' and `classy:info/1'
 t_090_info(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,

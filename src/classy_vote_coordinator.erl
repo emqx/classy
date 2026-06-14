@@ -157,7 +157,6 @@ init([false, {Tag, ID, Options}]) ->
 handle_event(enter, OldStage, Stage, D) ->
   enter(OldStage, Stage, D);
 handle_event({call, ReplyTo}, VoteData = #c_vote{}, Stage, D) ->
-  ?tp(foo, #{v => VoteData, s => Stage}),
   handle_vote(ReplyTo, Stage, VoteData, D);
 handle_event(state_timeout, ?state_timeout, Stage, D) ->
   handle_state_timeout(Stage, D);
@@ -437,7 +436,6 @@ broadcast_outcome(Result, #d{opts = Options} = D) ->
 
 -spec prepare_multi(atom(), d()) -> map().
 prepare_multi(Function, D = #d{opts = #opts{actions = Acts}}) ->
-  ?tp(warning, #{prepare_multi => Acts}),
   #{Site => {classy_vote_participant, Function, [prepare(D, Act)]} ||
     Site := Act <- Acts}.
 
