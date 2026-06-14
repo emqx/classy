@@ -11,7 +11,6 @@
 -record(prepare,
         { id            :: classy_vote:id()
         , tag           :: classy_vote:tag()
-        , lock          :: classy_vote:lock()
         , prepare       :: classy_vote:mfargs()
         , commit        :: [classy_vote:mfargs()]
         , rollback      :: [classy_vote:mfargs()]

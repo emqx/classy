@@ -74,7 +74,6 @@
 
 -export_type([ id/0
              , tag/0
-             , lock/0
              , mfargs/0
              , strategy/0
              , actions/0
@@ -108,8 +107,6 @@
 -type tag() :: term().
 %% Unique ID of the vote.
 -type id() :: classy_uid:cu_tuple().
-%% Arbitrary lock information that business logic can use to detect conflicts.
--type lock() :: term().
 
 %% Strategy used to decide when to commit
 %%
@@ -128,7 +125,6 @@
          , actions   := #{classy:site() => actions()}
          , post_vote => mfargs()
          , strategy  => strategy()
-         , lock      => lock()
          , on_fail   => mfargs()
          }.
 
@@ -269,14 +265,12 @@ on_fail(FailInfo, Funs) ->
 -spec with_defaults(options()) -> {ok, options()} | {error, _}.
 with_defaults(UserOpts) when is_map(UserOpts) ->
   Defaults = #{ strategy  => {all, classy_lib:rpc_timeout()}
-              , lock      => []
               },
   Merged = maps:merge(Defaults, UserOpts),
   case Merged of
     #{ tag       := _
      , actions   := Actions0
      , strategy  := Strategy0
-     , lock      := _
      } ->
       maybe
         {ok, Actions} ?= verify_actions(Actions0),

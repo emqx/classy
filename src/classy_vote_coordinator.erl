@@ -73,7 +73,6 @@
 %% This data is stored persistently:
 -record(opts,
         { tag           :: classy_vote:tag() %% TODO: don't duplicate the tag?
-        , lock          :: classy_vote:lock()
         , id            :: classy_vote:id()
         , strategy      :: classy_vote:strategy()
         , actions       :: #{classy:site() => #act{}}
@@ -208,7 +207,6 @@ init_new_coordinator(ID, Options) ->
    , strategy := Strategy
    , post_vote := PostVote
    , on_fail := OnFail
-   , lock := Lock
    } = Options,
   {_, Actions} =
     maps:fold(
@@ -224,7 +222,6 @@ init_new_coordinator(ID, Options) ->
       {0, #{}},
       Actions0),
   Opts = #opts{ tag = Tag
-              , lock = Lock
               , id = ID
               , strategy = Strategy
               , post_vote = PostVote
@@ -246,7 +243,6 @@ init_new_coordinator(ID, Options) ->
   ?tp(debug, ?classy_vote_pre_results,
       #{ id      => ID
        , tag     => Tag
-       , lock    => Lock
        , results => PreVoteResults
        }),
   case decide_pre_vote_result(Strategy, maps:iterator(PreVoteResults)) of
@@ -450,13 +446,12 @@ prepare_multi(Function, D = #d{opts = #opts{actions = Acts}}) ->
 
 -spec prepare(d(), #act{}) -> #prepare{}.
 prepare(
-  #d{opts = #opts{id = Id, tag = Tag, lock = Lock, on_fail = OnFail}},
+  #d{opts = #opts{id = Id, tag = Tag, on_fail = OnFail}},
   #act{prepare = Prep, commit = Commit, rollback = Rollback}
  ) ->
   {ok, Self} = classy_node:the_site(),
   #prepare{ id = Id
           , tag = Tag
-          , lock = Lock
           , prepare = Prep
           , commit = Commit
           , rollback = Rollback
