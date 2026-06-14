@@ -387,7 +387,6 @@ db_restore(Tag, Id) ->
           , vote = i2b(VoteI)
           , completed_actions = CompletedActions
           },
-    ?tp(warning, "OHAYO", #{d => D, s => Stage}),
     {ok, Stage, D}
   end.
 

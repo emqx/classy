@@ -123,7 +123,7 @@ multicall(SitesWithArgs) ->
 %% Multicall target could be a site ID that is automatically translated to node name by `multicall',
 %% or a tuple containing site ID and an arbitrary term.
 %% The latter form allows to make multiple requests towards the same site.
-%% Each multicall target can have a distinct set of function argements.
+%% Each multicall target can have a distinct set of function arguments.
 -spec multicall(multicall_args(), timeout()) -> multicall_result(term()).
 multicall(SitesWithArgs, Timeout) ->
   {ReqIdCollection, Sent, NotSent} =
@@ -163,7 +163,7 @@ multicall(SitesWithArgs, Timeout) ->
 -spec count_up_peers(#{classy:site() => classy:peer_info()}) -> non_neg_integer().
 count_up_peers(Peers) ->
   maps:fold(
-    fun(_, #{up := Up}, Acc) ->
+    fun(_, #{connected := Up}, Acc) ->
         case Up of
           true  -> Acc + 1;
           false -> Acc
