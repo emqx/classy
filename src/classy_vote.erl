@@ -278,7 +278,7 @@ verify_post_vote(#{}) ->
 
 verify_on_fail(#{on_fail := OnFail}) ->
   maybe
-    ok = verify_mfa(bad_post_vote, 1, OnFail),
+    ok = verify_mfa(bad_on_fail, 1, OnFail),
     {ok, [OnFail]}
   end;
 verify_on_fail(#{}) ->
