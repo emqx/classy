@@ -208,7 +208,7 @@ atomically(_Tab, []) ->
 atomically(Tab, Ops) ->
   try
     {Writes, Effects} =
-      lists:foldl(
+      lists:foldr(
         fun(?w(_, _) = W, {AccW, AccE}) -> {[W | AccW], AccE};
            (?d(_) = W,    {AccW, AccE}) -> {[W | AccW], AccE};
            ({then, E},    {AccW, AccE}) -> {AccW, [E | AccE]};
@@ -221,7 +221,7 @@ atomically(Tab, Ops) ->
                 ?via(Tab),
                 #call_atomically{ops = Writes},
                 ?call_timeout),
-        {ok, lists:reverse(Effects)}
+        {ok, Effects}
       end
   catch
     badarg ->
