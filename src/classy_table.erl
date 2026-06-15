@@ -661,15 +661,18 @@ handle_flush(S0 = #s{log = Log, dirty = Dirty, buffer = Buf, auto_flush_timer = 
   case Log of
     undefined ->
       %% Log is closed due to previous error, do not flush:
-      S1;
+      S = S1,
+      Reply = {error, log_failed};
     _ when N =:= 0 ->
       %% No pending operations to flush:
-      S1;
+      S = S1,
+      Reply = ok;
     _ ->
       S = do_flush(N, S1),
-      erlang:garbage_collect(),
-      S
-  end.
+      Reply = ok
+  end,
+  erlang:garbage_collect(),
+  send_pending_replies(Reply, S).
 
 do_flush(N, S = #s{ets = ETS, log = Log, buffer = Buf, dirty = DirtyKeys, log_size = LogSize0}) ->
   Marker = LogSize0,
@@ -705,12 +708,10 @@ do_flush(N, S = #s{ets = ETS, log = Log, buffer = Buf, dirty = DirtyKeys, log_si
   ok = disk_log:log_terms(Log, DirtyOps),
   ok = disk_log:sync(Log),
   LogSize = LogSize0 + N + NMarkers,
-  send_pending_replies(
-    ok,
-    S#s{ dirty = #{}
-       , buffer = queue:new()
-       , log_size = LogSize
-       }).
+  S#s{ dirty = #{}
+     , buffer = queue:new()
+     , log_size = LogSize
+     }.
 
 -spec exec_on_update_open(s()) -> ok.
 exec_on_update_open(#s{on_update = undefined}) ->
