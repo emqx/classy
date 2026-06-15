@@ -8,6 +8,17 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 -include("classy_internal.hrl").
+-include("classy.hrl").
+
+-define(ignore(BODY),
+        (fun() ->
+             try
+               BODY
+             catch
+               EC:Err:Stack ->
+                 logger:warning("~p:~p:~p", [EC, Err, Stack])
+             end
+         end)()).
 
 %%================================================================================
 %% Tests
@@ -26,7 +37,7 @@ smoke_open_test() ->
        ?assertEqual(ok, classy_table:open(T, #{})),
        ?assertEqual(ok, classy_table:open(T, #{}))
      after
-       classy_table:drop(T),
+       ?ignore(classy_table:drop(T)),
        cleanup(Clean)
      end,
      fun classy_SUITE:no_unexpected_events/1).
@@ -125,7 +136,7 @@ smoke_dirty_write_delete_test() ->
        ?assertEqual(ok, classy_table:dirty_delete(T, foo)),
        ?assertEqual([], classy_table:lookup(T, foo))
      after
-       classy_table:drop(T),
+       ?ignore(classy_table:drop(T)),
        cleanup(Clean)
      end,
      [ fun classy_SUITE:no_unexpected_events/1
@@ -136,6 +147,64 @@ smoke_dirty_write_delete_test() ->
                , {w, foo, foo}
                , {w, foo, bar}
                , {d, foo}
+                 %% Effects of drop:
+               , close
+               ],
+               ?projection(op, ?of_kind(classy_table_update, Trace)))
+        end}
+     ]).
+
+%% Verify atomic batches
+atomically_test() ->
+  Clean = setup(?FUNCTION_NAME),
+  T = ?FUNCTION_NAME,
+  Opts = opts(#{ets_options => [ordered_set]}),
+  ?check_trace(
+     try
+       ?assertEqual(ok, classy_table:open(T, Opts)),
+       ?assertEqual(
+          {ok, [eff0, eff1]},
+          classy_table:atomically(
+            T,
+            [ {then, eff0}
+            , {w, foo, 1}
+            , {then, eff1}
+            ])),
+       ?assertEqual(
+          {ok, []},
+          classy_table:atomically(
+            T,
+            [ {w, foo, 2}
+            , {w, foo, 3}
+            , {w, bar, 1}
+            , {d, bar}
+            ])),
+       ?assertEqual(ok, classy_table:stop(T, infinity)),
+       ?assertMatch(
+          {ok, [ {v, 1}
+               , {w, foo, 1}  %% Single atomic op is not wrapped in flush guards
+               , {f, 0, 1}
+               , {w, foo, 2}
+               , {w, foo, 3}
+               , {w, bar, 1}
+               , {d, bar}
+               , {f, 1, 1}
+               ]},
+          classy_table:dump_wal(T)),
+       ok
+     after
+       cleanup(Clean)
+     end,
+     [ fun classy_SUITE:no_unexpected_events/1
+     , {"events",
+        fun(Trace) ->
+            ?assertMatch(
+               [ open
+               , {w, foo, 1}
+               , {w, foo, 2}
+               , {w, foo, 3}
+               , {w, bar, 1}
+               , {d, bar}
                  %% Effects of drop:
                , close
                ],
@@ -165,7 +234,7 @@ smoke_restore_test() ->
        ?assertEqual([100], classy_table:lookup(T, bar)),
        ?assertEqual([], classy_table:lookup(T, baz))
      after
-       classy_table:drop(T),
+       ?ignore(classy_table:drop(T)),
        cleanup(Clean)
      end,
      fun classy_SUITE:no_unexpected_events/1).
@@ -186,7 +255,7 @@ smoke_snapshot_test() ->
        %% Verify data:
        [?assertEqual([N], classy_table:lookup(T, N)) || N <- lists:seq(1, 100)]
      after
-       classy_table:drop(T),
+       ?ignore(classy_table:drop(T)),
        cleanup(Clean)
      end,
      fun classy_SUITE:no_unexpected_events/1).
@@ -216,7 +285,7 @@ clear_test() ->
           [],
           ets:match(T, '$1'))
      after
-       classy_table:drop(T),
+       ?ignore(classy_table:drop(T)),
        cleanup(Clean)
      end,
      [ fun classy_SUITE:no_unexpected_events/1
@@ -273,7 +342,7 @@ reopen_effects_test() ->
        ?tp(test_reopen, #{}),
        ?assertEqual(ok, classy_table:open(T, Opts))
      after
-       classy_table:drop(T),
+       ?ignore(classy_table:drop(T)),
        cleanup(Clean)
      end,
      [ fun classy_SUITE:no_unexpected_events/1
