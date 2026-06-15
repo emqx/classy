@@ -11,16 +11,16 @@
 %% == Limitations ==
 %% <itemize>
 %% <li>
-%% All "dirty" operation are volatile:
+%% All "dirty" operations are volatile:
 %% they update only RAM cache and do not get persisted on disk until `flush' is called or the table server terminates.
 %% They are meant for the situations where some keys are frequently updated,
 %% but these updates can be lost.
 %%
 %% There is no automatic flushing,
-%% the business code must flush explicitly.
+%% the business code must call `flush' function explicitly.
 %%
 %% If it fails to do so,
-%% all work for persisting the data will be done on terminate,
+%% all work for persisting the data will be done on terminate or a regular `write'/`delete',
 %% which may be risky due to various timeouts.
 %% </li>
 %%
@@ -38,7 +38,12 @@
 %%
 %% <li>
 %% Likewise, `on_update' callback is executed <i>before</i> operations are persisted to the WAL.
-%% As such, it is <b>not</b> a reliable way to mirror state of a classy table to other storage.
+%% As such, it is <b>not</b> a reliable way to mirror the state of a classy table to other storage.
+%% </li>
+%%
+%% <li>
+%% `on_update' operations block the table server.
+%% They must not contain any sort of heavy or long-running tasks.
 %% </li>
 %%
 %% </itemize>
@@ -651,17 +656,19 @@ log_effects(Context, ?d(K), S = #s{ets = ETS, dirty = Dirty}) ->
      }.
 
 handle_flush(S0 = #s{log = Log, dirty = Dirty, buffer = Buf, auto_flush_timer = AutoFlush}) ->
-  S = S0#s{auto_flush_timer = classy_lib:cancel_wakeup(AutoFlush)},
+  S1 = S0#s{auto_flush_timer = classy_lib:cancel_wakeup(AutoFlush)},
   N = queue:len(Buf) + map_size(Dirty),
   case Log of
     undefined ->
       %% Log is closed due to previous error, do not flush:
-      S;
+      S1;
     _ when N =:= 0 ->
       %% No pending operations to flush:
-      S;
+      S1;
     _ ->
-      do_flush(N, S)
+      S = do_flush(N, S1),
+      erlang:garbage_collect(),
+      S
   end.
 
 do_flush(N, S = #s{ets = ETS, log = Log, buffer = Buf, dirty = DirtyKeys, log_size = LogSize0}) ->
