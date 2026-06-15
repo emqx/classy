@@ -157,7 +157,6 @@
 %% API functions
 %%================================================================================
 
-
 %% @doc Open a table named `Tab'.
 %%
 %% Note: this function is idempotent.
@@ -310,7 +309,7 @@ dump_wal(Tab) when is_atom(Tab) ->
   dump_wal(application:get_env(classy, table_dir, "."), Tab).
 
 %% @doc Dump WAL for debugging.
--spec dump_wal(file:filename(), tab()) -> {ok, list(), disk_log:continuation() | eof} | {error, _}.
+-spec dump_wal(file:filename(), tab()) -> {ok, list()} | {error, _}.
 dump_wal(Dir, Tab) ->
   File = filename:join(Dir, atom_to_list(Tab)),
   maybe
@@ -554,13 +553,13 @@ replay_wal_chunk(Op, {S, expect_header}) ->
 replay_wal_chunk(Op, {S, none}) ->
   case Op of
     ?flush_begin(Marker) ->
-      {S, #restore_state{marker = Marker, ops = []}};
+      {inc_log_size(S), #restore_state{marker = Marker, ops = []}};
     ?clear ->
-      {log_effects(replay, Op, S), none};
+      {inc_log_size(log_effects(replay, Op, S)), none};
     ?w(_, _) ->
-      {log_effects(replay, Op, S), none};
+      {inc_log_size(log_effects(replay, Op, S)), none};
     ?d(_) ->
-      {log_effects(replay, Op, S), none};
+      {inc_log_size(log_effects(replay, Op, S)), none};
     _ ->
       ?tp(error, ?classy_table_anomaly,
           #{ type  => unexpected_operation
@@ -568,7 +567,7 @@ replay_wal_chunk(Op, {S, none}) ->
            , op    => Op
            , state => none
            }),
-      {S, none}
+      {inc_log_size(S), none}
   end;
 replay_wal_chunk(Op, {S, RS0 = #restore_state{marker = Marker, ops = OpsAcc}}) ->
   %% There is an ongoing flush:
@@ -577,7 +576,7 @@ replay_wal_chunk(Op, {S, RS0 = #restore_state{marker = Marker, ops = OpsAcc}}) -
       %% Flush was complete. Apply buffered operations:
       { lists:foldr(
           fun(I, Acc) -> log_effects(replay, I, Acc) end,
-          S,
+          inc_log_size(S),
           OpsAcc)
       , none
       };
@@ -588,11 +587,11 @@ replay_wal_chunk(Op, {S, RS0 = #restore_state{marker = Marker, ops = OpsAcc}}) -
            , table  => S#s.name
            , marker => Marker
            }),
-      {S, #restore_state{marker = NewMarker, ops = []}};
+      {inc_log_size(S), #restore_state{marker = NewMarker, ops = []}};
     ?w(_, _) = Op ->
-      {S, RS0#restore_state{ops = [Op | OpsAcc]}};
+      {inc_log_size(S), RS0#restore_state{ops = [Op | OpsAcc]}};
     ?d(_) = Op ->
-      {S, RS0#restore_state{ops = [Op | OpsAcc]}};
+      {inc_log_size(S), RS0#restore_state{ops = [Op | OpsAcc]}};
     Other ->
       ?tp(error, ?classy_table_anomaly,
           #{ type  => aborted_flush
@@ -600,7 +599,7 @@ replay_wal_chunk(Op, {S, RS0 = #restore_state{marker = Marker, ops = OpsAcc}}) -
            , op    => Other
            , state => RS0
            }),
-      {S, none}
+      {inc_log_size(S), none}
   end.
 
 -spec log_name(s(), string()) -> file:filename().
@@ -686,22 +685,19 @@ do_flush(N, S = #s{ets = ETS, log = Log, buffer = Buf, dirty = DirtyKeys, log_si
   %% buffered ops, since adding operations to the buffer clears the
   %% dirty flags. So if the dirty flag is set, then any persistent
   %% operation with the key precedes the last dirty one.
-  {NDirtyOps, DirtyOps} =
+  DirtyOps =
     maps:fold(
-      fun(K, _, {AccNW, AccOps}) ->
-          Op = case ets:lookup(ETS, K) of
-                 [#classy_kv{v = V}] -> ?w(K, V);
-                 []                  -> ?d(K)
-               end,
-          { AccNW + 1
-          , [Op | AccOps]
-          }
+      fun(K, _, Acc) ->
+          [case ets:lookup(ETS, K) of
+             [#classy_kv{v = V}] -> ?w(K, V);
+             []                  -> ?d(K)
+           end | Acc]
       end,
-      {0, EndMarker},
+      EndMarker,
       DirtyKeys),
   ok = disk_log:log_terms(Log, DirtyOps),
   ok = disk_log:sync(Log),
-  LogSize = LogSize0 + queue:len(Buf) + NDirtyOps + NMarkers,
+  LogSize = LogSize0 + N + NMarkers,
   send_pending_replies(
     ok,
     S#s{ dirty = #{}
@@ -868,13 +864,7 @@ rename_log(From, To) ->
 
 -spec is_log(file:filename()) -> boolean().
 is_log(Filename) ->
-  case filelib:is_regular(Filename) of
-    true ->
-      %% TODO: read version.
-      true;
-    false ->
-      false
-  end.
+  filelib:is_regular(Filename).
 
 open_log(Filename, Mode) ->
   Opts = [ {name, make_ref()}
@@ -923,6 +913,9 @@ do_dump_wal(Log, Cont0) ->
     {Cont, Terms, BadBytes} ->
       Terms ++ [{'$bad_bytes', BadBytes} | do_dump_wal(Log, Cont)]
   end.
+
+inc_log_size(S = #s{log_size = N}) ->
+  S#s{log_size = N + 1}.
 
 read_log_chunk(Log, Cont, Size) ->
   case disk_log:chunk(Log, Cont, Size) of

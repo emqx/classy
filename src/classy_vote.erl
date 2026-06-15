@@ -380,15 +380,15 @@ trace_props() ->
 
 prop_every_vote_concludes(Trace) ->
   ?strict_causality(
-     #{?snk_kind := ?classy_vote_flow_start, id := Id},
-     #{?snk_kind := K, id := Id} when K =:= ?classy_vote_coord_flow_complete;
-                                      K =:= ?classy_vote_coord_early_abort,
+     #{?snk_kind := ?classy_vote_flow_start, id := _Id},
+     #{?snk_kind := K, id := _Id} when K =:= ?classy_vote_coord_flow_complete;
+                                       K =:= ?classy_vote_coord_early_abort,
      Trace).
 
 prop_coord_receives_votes(Trace) ->
   ?strict_causality(
-     #{?snk_kind := ?classy_vote_part_send_vote, id := Id, vote := Vote, from := From, ?snk_span := start},
-     #{?snk_kind := ?classy_vote_coord_recv, id := Id, vote := Vote, from := From},
+     #{?snk_kind := ?classy_vote_part_send_vote, id := _Id, vote := _Vote, from := _From, ?snk_span := start},
+     #{?snk_kind := ?classy_vote_coord_recv, id := _Id, vote := _Vote, from := _From},
      Trace).
 
 -endif.
