@@ -42,7 +42,15 @@ smoke_write_delete_test() ->
        ?assertEqual(ok, classy_table:write(T, foo, bar)),
        ?assertEqual([bar], classy_table:lookup(T, foo)),
        ?assertEqual(ok, classy_table:delete(T, foo)),
-       ?assertEqual([], classy_table:lookup(T, foo))
+       ?assertEqual([], classy_table:lookup(T, foo)),
+       ?assertEqual(ok, classy_table:stop(T, infinity)),
+       ?assertEqual(
+          {ok, [ {v, 1}
+               , {w, foo, foo}
+               , {w, foo, bar}
+               , {d, foo}
+               ]},
+          classy_table:dump_wal(T))
      after
        cleanup(Clean)
      end,
@@ -83,7 +91,20 @@ smoke_write_vs_dirty_test() ->
        ?assertEqual([], classy_table:lookup(T, bar)),
        ?assertEqual(ok, classy_table:flush(T)),
        ?assertEqual([], classy_table:lookup(T, foo)),
-       ?assertEqual([], classy_table:lookup(T, bar))
+       ?assertEqual([], classy_table:lookup(T, bar)),
+       ?assertEqual(ok, classy_table:stop(T, infinity)),
+       ?assertMatch(
+          {ok, [ {v, 1}
+               , {f, 0, M1}
+               , {w, foo, good}
+               , {w, bar, good}
+               , {f, 1, M1}
+               , {f, 0, M2}
+               , {d, bar}
+               , {d, foo}
+               , {f, 1, M2}
+               ]},
+          classy_table:dump_wal(T))
      after
        cleanup(Clean)
      end,
