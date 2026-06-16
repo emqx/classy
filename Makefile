@@ -31,13 +31,13 @@ smoke-test: eunit
 	$(REBAR) ct --name ct@127.0.0.1 --verbose --cover --readable false
 	$(REBAR) cover -v
 
+.PHONY: prop-membership
+prop-membership:
+	$(REBAR) proper -m fuzz_membership -n 10 --max_size 200
+
 .PHONY: coveralls
 coveralls:
 	@rebar3 as test coveralls send
-
-.PHONY: fuzz
-fuzz:
-	$(REBAR) ct --name ct@127.0.0.1 --verbose --cover --suite classy_SUITE --case t_999_fuzz --readable false
 
 ##########################################################################################
 # Concuerror
