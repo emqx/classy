@@ -2,11 +2,10 @@
 %% Copyright (c) 2025-2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
 
-%% @doc A gen_server that implements automatic peer discovery.
-%%
-%% Autocluster logic is active only on singleton sites.
-%% Sites that have peers (up or down) don't run it.
 -module(classy_autocluster).
+-moduledoc """
+A server responsible for automatic peer discovery.
+""".
 
 -behavior(gen_server).
 
@@ -41,7 +40,7 @@
 
 -define(SERVER, ?MODULE).
 
-%% @private
+-doc false.
 -spec start_link() -> {ok, pid()}.
 start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
@@ -54,7 +53,10 @@ enable() ->
 disable() ->
   gen_server:cast(?SERVER, #cast_enable{enable = false}).
 
-%% @doc Helper function that returns prefix of the local node name.
+-doc """
+Helper function that returns prefix of the local node name.
+E.g. @code{'foo@@127.0.0.1'} -> @code{'foo'}.
+""".
 -spec app_name() -> string().
 app_name() ->
   [Name | _] = string:tokens(atom_to_list(node()), "@"),
@@ -68,13 +70,13 @@ app_name() ->
         { t :: classy_lib:wakeup_timer()
         }).
 
-%% @private
+-doc false.
 init(_) ->
   process_flag(trap_exit, true),
   S = #s{},
   {ok, wakeup_if_single(0, S)}.
 
-%% @private
+-doc false.
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => call
@@ -84,7 +86,7 @@ handle_call(Call, From, S) ->
        }),
   {reply, {error, unknown_call}, S}.
 
-%% @private
+-doc false.
 handle_cast(#cast_enable{enable = Enable}, S0 = #s{t = T}) ->
   S = case Enable of
         true  -> wakeup(0, S0);
@@ -99,7 +101,7 @@ handle_cast(Cast, S) ->
        }),
   {noreply, S}.
 
-%% @private
+-doc false.
 handle_info(#to_discover{}, S) ->
   {noreply, handle_discover(S)};
 handle_info({'EXIT', _, shutdown}, S) ->
@@ -112,7 +114,7 @@ handle_info(Info, S) ->
        }),
   {noreply, S}.
 
-%% @private
+-doc false.
 terminate(Reason, _S) ->
   classy_lib:is_normal_exit(Reason) orelse
     ?tp(warning, ?classy_abnormal_exit,
@@ -199,7 +201,7 @@ rank_nodes(Candidates, ClusterInfo = #{infos := SiteInfos}) ->
                #{Node := #{site := S, cluster := C, peers := Peers}} when is_binary(S),
                                                                           is_binary(C),
                                                                           Node =/= node() ->
-                 [{-classy_lib:count_up_peers(Peers), S, C, Node} | Acc];
+                 [{-classy_lib:n_connected_peers(Peers), S, C, Node} | Acc];
                _ ->
                  Acc
              end
@@ -242,7 +244,7 @@ wakeup(After, S = #s{t = T0}) ->
   S#s{t = T}.
 
 with_strategy(Fun) ->
-  case classy_lib:discovery_strategy() of
+  case classy_discovery_strategy:get() of
     {manual, _} ->
       ignore;
     {singleton, _} ->

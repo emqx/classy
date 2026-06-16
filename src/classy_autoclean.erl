@@ -142,7 +142,7 @@ check_down_sites() ->
 -spec last_alive_at(classy:site()) -> {ok, classy_lib:unix_time_s() | alive} | {error, no_quorum}.
 last_alive_at(Site) ->
   Ret = erpc:multicall(
-          classy:nodes(running),
+          classy:nodes(connected),
           ?MODULE, site_down_since, [classy_lib:time_s(), Site],
           classy_lib:rpc_timeout()),
   Results = [I || {ok, I} <- Ret],

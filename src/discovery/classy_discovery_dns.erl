@@ -26,6 +26,15 @@
         , unregister/1
         ]).
 
+-export_type([ opts/0
+             ]).
+
+-type opts() ::
+    #{ name := string()
+     , type => a | aaaa | srv
+     , app  => string() | atom()
+     }.
+
 discover(Options) ->
   Defaults = #{ app  => undefined
               , type => a

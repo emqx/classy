@@ -58,6 +58,7 @@ command(#{open := true, tab := Tab}) ->
   oneof([ {call, classy_table, stop, [Tab, infinity]}
         , {call, classy_table, open, [Tab, tab_opts()]}
         , {call, classy_table, flush, [Tab]}
+        , {call, classy_table, force_compaction, [Tab]}
         , {call, classy_table, drop, [Tab]}
           %% Writes
         , {call, classy_table, write, [Tab, key(), value()]}
@@ -74,6 +75,8 @@ next_state(S, _V, {call, _, open, _}) ->
 next_state(S, _V, {call, _, stop, _}) ->
   S#{open := false};
 next_state(S, _V, {call, _, flush, _}) ->
+  S;
+next_state(S, _V, {call, _, force_compaction, _}) ->
   S;
 next_state(S, _V, {call, _, drop, _}) ->
   S#{open := false, data := #{}};
@@ -142,6 +145,8 @@ check_result(_, {call, _, open, _}, ok) ->
 check_result(_, {call, _, stop, _}, ok) ->
   true;
 check_result(_, {call, _, flush, _}, ok) ->
+  true;
+check_result(_, {call, _, force_compaction, _}, ok) ->
   true;
 check_result(_, {call, _, drop, _}, ok) ->
   true;

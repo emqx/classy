@@ -2,8 +2,10 @@
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
 
-%% @doc Module responsible for managing the hooks.
 -module(classy_hook).
+-moduledoc """
+Module responsible for managing the hooks.
+""".
 
 %% API:
 -export([ init/0
@@ -29,17 +31,27 @@
 
 -define(tab, ?MODULE).
 
+-doc """
+Identifier of a hookpoint.
+""".
 -type hookpoint() :: atom().
 
+-doc """
+Functions registered into a hookpoint with higher priority are executed first.
+""".
 -type prio() :: integer().
 
+-doc """
+A handle of a hook.
+It can be used to unregister the hook.
+""".
 -opaque hook() :: tuple().
 
 %%================================================================================
 %% API functions
 %%================================================================================
 
-%% @private
+-doc false.
 init() ->
   ets:new(?tab, [named_table, ordered_set, public, {keypos, 1}]),
   %% Default initialization:
@@ -62,22 +74,26 @@ init() ->
       ok
   end.
 
-%% @private
+-doc false.
 -spec insert(hookpoint(), fun(), prio()) -> hook().
 insert(Hookpoint, Hook, Prio) when is_atom(Hookpoint), is_integer(Prio), is_function(Hook) ->
   Key = {Hookpoint, -Prio, Hook},
   ets:insert(?tab, {Key}),
   Key.
 
-%% @doc Remove a previously inserted hook
+-doc """
+Remove a previously inserted hook.
+""".
 -spec unhook(hook()) -> ok.
 unhook(Key) ->
   ets:delete(?tab, Key),
   ok.
 
-%% @doc Execute all functions hooked into `Hookpoint'.
-%%
-%% Errors are ignored (logged).
+-doc """
+Apply all functions hooked into @code{Hookpoint} to arguments @code{Args}.
+
+Errors are ignored (logged).
+""".
 -spec foreach(hookpoint(), list()) -> ok.
 foreach(Hookpoint, Args) ->
   lists:foreach(
@@ -86,10 +102,12 @@ foreach(Hookpoint, Args) ->
     end,
     hooks(Hookpoint)).
 
-%% @doc Fold over all functions registered in `Hookpoint'.
-%% Accumulator argument is appended to the `Args' list.
-%%
-%% Errors are ignored (logged).
+-doc """
+Fold over all functions registered in @code{Hookpoint}.
+Accumulator argument is appended to the @code{Args} list.
+
+Errors are ignored (logged).
+""".
 -spec fold(hookpoint(), list(), A) -> A.
 fold(Hookpoint, Args, Acc0) ->
   try
@@ -109,10 +127,12 @@ fold(Hookpoint, Args, Acc0) ->
       Result
   end.
 
-%% @doc Ensure that all functions hooked into `Hookpoint' return `ok'.
-%%
-%% If any of the function returns `{error, _}' or throws an exception,
-%% this function returns `{error, _}'.
+-doc """
+Ensure that all functions hooked into @code{Hookpoint} return @code{ok}.
+
+If any function returns other value or throws an exception,
+this function returns @code{@{error, _@}}.
+""".
 -spec all(hookpoint(), list()) -> ok | {error, _}.
 all(Hookpoint, Args) ->
   try
@@ -131,8 +151,10 @@ all(Hookpoint, Args) ->
     {found, Err} -> {error, Err}
   end.
 
-%% @doc Return result of the first hook that returned `{ok, _}' for
-%% a given set of arguments.
+-doc """
+Return result of the first hook that returned @code{@{ok, _@}} for
+a given set of arguments.
+""".
 -spec first_match(hookpoint(), list()) -> {ok, _Val} | undefined.
 first_match(Hookpoint, Args) ->
   try

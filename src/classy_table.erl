@@ -2,52 +2,76 @@
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
 
-%% @doc
-%% This module implements a standalone minimalist analogue of mnesia's `local_data' table with `disc_copies' storage.
-%%
-%% It is used to persistently save classy's own data.
-%% Other applications can also use it for data that doesn't require replication and is not written too frequently.
-%%
-%% == Limitations ==
-%% <itemize>
-%% <li>
-%% All "dirty" operations are volatile:
-%% they update only RAM cache and do not get persisted on disk until `flush' is called or the table server terminates.
-%% They are meant for the situations where some keys are frequently updated,
-%% but these updates can be lost.
-%%
-%% There is no automatic flushing,
-%% the business code must call `flush' function explicitly.
-%%
-%% If it fails to do so,
-%% all work for persisting the data will be done on terminate or a regular `write'/`delete',
-%% which may be risky due to various timeouts.
-%% </li>
-%%
-%% <li>
-%% This module is meant for small volumes of data and infrequent updates.
-%% It's optimized for simplicity, not storage efficiency or performance.
-%% </li>
-%%
-%% <li>
-%% While this module guarantees that `write', `delete' and `flush' calls don't return until the data is committed to WAL,
-%% it is possible to <i>read</i> uncommitted writes via `lookup' or `ets:select'.
-%%
-%% So, do not use classy tables as a synchronization mechanism between different processes.
-%% </li>
-%%
-%% <li>
-%% Likewise, `on_update' callback is executed <i>before</i> operations are persisted to the WAL.
-%% As such, it is <b>not</b> a reliable way to mirror the state of a classy table to other storage.
-%% </li>
-%%
-%% <li>
-%% `on_update' operations block the table server.
-%% They must not contain any sort of heavy or long-running tasks.
-%% </li>
-%%
-%% </itemize>
 -module(classy_table).
+
+-moduledoc """
+This module implements a standalone minimalist analogue of mnesia's @code{local_data} table with @code{disc_copies} storage.
+
+It is used to store classy's own persistent data.
+Other applications can also use it for data that doesn't require replication and is not written too frequently.
+
+@section Implementation
+
+Classy tables consist of a RAM cache backed by ETS and a durable write ahead log.
+Durable operations (write, delete, atomically) are immediately appended to the WAL,
+while dirty mutations (dirty_write, dirty_delete) only mark certain keys as dirty.
+All dirtied keys are flushed to WAL only when table is flushed.
+
+@anchor{table_badness}
+The WAL is periodically compacted when its ``badness'' exceeds the configured threshold.
+Badness is calculated as a difference between the number of table elements and length of the log.
+WAL compaction is a blocking operation:
+all table mutations get blocked while it goes on.
+Compaction time is proportional to the number of elements stored in the table.
+
+Because of this design,
+frequent mutations of the same key, e.g.
+
+@example
+classy_table:write(Tab, foo, 1),
+classy_table:write(Tab, foo, 2),
+classy_table:write(Tab, foo, 3),
+...
+@end example
+
+are rather inefficient.
+
+@section Limitations
+
+@itemize
+@item
+All dirty operations are volatile:
+they update only RAM cache and do not get persisted on disk until @code{flush} is called or the table server terminates.
+They are meant for the situations where some keys are frequently updated,
+but these updates can be lost.
+
+There is no automatic flushing of dirty operations,
+the business code must call @ref{classy_table:flush/1} function explicitly.
+
+If it fails to do so,
+all work for persisting the data will be done on terminate or after a durable mutation,
+which may be risky or lead to unexpected results.
+
+@item
+This module is meant for small volumes of data and infrequent updates.
+It's optimized for simplicity, not storage efficiency or performance.
+
+@item
+While this module guarantees that durable mutations don't return until the data is committed to WAL,
+it is currently possible to @emph{read} uncommitted writes via @ref{classy_table:lookup/2} or plain ets queries.
+
+So, do not use classy tables as a synchronization mechanism between different processes.
+
+@item
+Likewise, @code{on_update} callback is executed @emph{before} operations are persisted to the WAL.
+As such, it is @emph{not} a reliable way to mirror the state of a classy table to other storage.
+
+@item
+@code{on_update} operations block the table server.
+They must not contain any sort of heavy or long-running tasks.
+
+@end itemize
+""".
 
 -behavior(gen_server).
 
@@ -94,6 +118,10 @@
 -define(name(TAB), {n, l, {?MODULE, TAB}}).
 -define(via(TAB), {via, gproc, ?name(TAB)}).
 
+-doc """
+Table name that is used as a table identifier for both classy and ETS.
+All classy tables are named ETS tables.
+""".
 -type tab() :: atom().
 
 %% Maximum supported WAL version:
@@ -108,6 +136,23 @@
 -define(d(K), {d, K}).
 -define(clear, clear).
 
+-doc """
+A type of operation in a batch accepted by @link{classy_table:atomically/2,atomically}.
+
+@itemize
+@item @code{@{w, Key, Value@}}
+equivalent to @code{classy_table:write(Tab, Key, Value)}
+
+@item @code{@{d, Key@}}
+equivalent to @code{classy_table:delete(Tab, Key)}
+
+@item @code{@{then, Any@}}
+ignored by classy.
+If atomic batch was successfully committed,
+then batch elements like this are returned as is.
+
+@end itemize
+""".
 -type atomic_op(Effect) :: ?w(_, _) | ?d(_) | {then, Effect}.
 
 -type on_update_op() :: open
@@ -117,12 +162,30 @@
 
 -type on_update_callback() :: fun((tab(), on_update_op()) -> _).
 
+-doc """
+Table creation options.
+
+@itemize
+@item @b{ets_options}
+List of options passed to ETS.
+
+@item @b{badness_threshold}
+@xref{table_badness}
+
+@item @b{on_update}
+Add a callback executed on every table mutation.
+
+@end itemize
+""".
 -type options() ::
         #{ ets_options => list()
          , badness_threshold => pos_integer()
          , on_update => on_update_callback()
          }.
 
+-doc """
+All classy tables contain key-value data wrapped in @code{#classy_kv} record.
+""".
 -type rec() :: #classy_kv{ k :: term()
                          , v :: term()
                          }.
@@ -162,9 +225,11 @@
 %% API functions
 %%================================================================================
 
-%% @doc Open a table named `Tab'.
-%%
-%% Note: this function is idempotent.
+-doc """
+Open a table named @code{Tab} and block the caller until all data is fully restored.
+
+Note: this function is idempotent.
+""".
 -spec open(tab(), options()) -> ok | {error, _}.
 open(Tab, Options) when is_atom(Tab), is_map(Options) ->
   case classy_sup:start_table(Tab, Options) of
@@ -176,7 +241,11 @@ open(Tab, Options) when is_atom(Tab), is_map(Options) ->
       Err
   end.
 
-%% @doc Close the table.
+-doc """
+Close the table.
+
+Warning: any process reading the table will become blocked.
+""".
 -spec stop(tab(), timeout()) -> ok | {error, timeout}.
 stop(Tab, Timeout) ->
   case gproc:where(?name(Tab)) of
@@ -194,8 +263,17 @@ stop(Tab, Timeout) ->
       ok
   end.
 
-%% @doc Update the RAM representation of the record and mark it as dirty.
-%% No writes to disk are made until `flush' is called explicitly or implicitly.
+-doc """
+Update the RAM representation of the record and mark it as dirty.
+No writes to disk are made until any of the following calls complete:
+@itemize
+@item @ref{classy_table:flush/1}
+@item @ref{classy_table:stop/2}
+@item @ref{classy_table:write/3}
+@item @ref{classy_table:delete/2}
+@item  @ref{classy_table:atomically/2}
+@end itemize
+""".
 -spec dirty_write(tab(), _Key, _Val) -> ok.
 dirty_write(Tab, Key, Val) ->
   gen_server:call(
@@ -203,9 +281,18 @@ dirty_write(Tab, Key, Val) ->
     #call_write{k = Key, v = Val, wal = false},
     ?call_timeout).
 
-%% @doc Write operation to WAL, sync WAL and then update RAM representation of the record.
-%%
-%% Note: this is a heavy operation.
+-doc """
+Update RAM representation of a record,
+write operation to WAL,
+sync WAL and then return.
+
+Warning: this is a heavy operation.
+While this module batches writes,
+writes or deletes coming from a single process are always interleaved with a datasync.
+
+If some process needs to reliably update a large number of records at once,
+it's better to use @ref{classy_table:atomically/2}.
+""".
 -spec write(tab(), _Key, _Val) -> ok.
 write(Tab, Key, Val) ->
   gen_server:call(
@@ -213,7 +300,11 @@ write(Tab, Key, Val) ->
     #call_write{k = Key, v = Val, wal = true},
     ?call_timeout).
 
-%% @doc Mark record as deleted and dirty.
+-doc """
+Dirty version of @ref{classy_table:delete/2}.
+From durability perspective,
+it has the same properties as @ref{classy_table:dirty_write/3}.
+""".
 -spec dirty_delete(tab(), _Key) -> ok.
 dirty_delete(Tab, Key) ->
   gen_server:call(
@@ -221,7 +312,11 @@ dirty_delete(Tab, Key) ->
     #call_delete{k = Key, wal = false},
     ?call_timeout).
 
-%% @doc Write to the WAL that the record has been deleted and update the RAM representation.
+-doc """
+Delete a record from the table.
+From durability perspective,
+it has the same properties as @ref{classy_table:write/3}.
+""".
 -spec delete(tab(), _Key) -> ok.
 delete(Tab, Key) ->
   gen_server:call(
@@ -229,7 +324,12 @@ delete(Tab, Key) ->
     #call_delete{k = Key, wal = true},
     ?call_timeout).
 
-%% @doc Write a number of operations atomically
+-doc """
+Commit a number of operations into a table atomically:
+either all or none of operations are durably stored by the time this function returns.
+
+Operations are denoted via @ref{t:classy_table:atomic_op/1} type.
+""".
 -spec atomically(tab(), [atomic_op(Effect)]) -> {ok, [Effect]} | {error, _}.
 atomically(_Tab, []) ->
   {ok, []};
@@ -256,11 +356,13 @@ atomically(Tab, Ops) ->
       {error, {badarg, Tab, Ops}}
   end.
 
-%% @doc Persist all records that got dirtied prior to this call to WAL.
-%%
-%% Flush is atomic, meaning either all or none dirty operations are restored.
-%% However, if multiple processes perform unsynchronized dirty writes and flushes in parallel,
-%% data can be restored partially.
+-doc """
+Persist all records that got dirtied prior to this call to WAL.
+
+Flush is atomic, meaning either all or none dirty operations are restored.
+However, if multiple processes perform unsynchronized dirty writes and flushes in parallel,
+data can be restored partially.
+""".
 -spec flush(tab()) -> ok.
 flush(Tab) ->
   gen_server:call(
@@ -268,7 +370,9 @@ flush(Tab) ->
     #call_flush{},
     ?call_timeout).
 
-%% @doc Make a checkpoint and truncate the WAL.
+-doc """
+Make a checkpoint and truncate the WAL.
+""".
 -spec force_compaction(tab()) -> ok.
 force_compaction(Tab) ->
   gen_server:call(
@@ -276,7 +380,9 @@ force_compaction(Tab) ->
     #call_force_compaction{},
     ?call_timeout).
 
-%% @doc Drop the table (it must be open)
+-doc """
+Drop the table (it must be open)
+""".
 -spec drop(tab()) -> ok.
 drop(Tab) ->
   gen_server:call(
@@ -284,9 +390,11 @@ drop(Tab) ->
     #call_drop{},
     ?call_timeout).
 
-%% @doc Lookup a value from the table.
-%%
-%% WARNING: this function can block the caller until the table is fully restored.
+-doc """
+Lookup a value from the table.
+
+WARNING: this function can block the caller until the table is fully restored.
+""".
 -spec lookup(tab(), _Key) -> [_Val].
 lookup(Tab, Key) ->
   case ets:whereis(Tab) of
@@ -300,7 +408,12 @@ lookup(Tab, Key) ->
       [V || #classy_kv{v = V} <- ets:lookup(Tab, Key)]
   end.
 
-%% @doc Delete all data in the table.
+-doc """
+Delete all data in the table.
+This is a durable operation.
+
+@code{on_update} callback sees effects of this operation as series of regular deletes.
+""".
 -spec clear(tab()) -> ok.
 clear(Tab) ->
   gen_server:call(
@@ -308,12 +421,18 @@ clear(Tab) ->
     #call_clear{},
     ?call_timeout).
 
-%% @doc Dump WAL for debugging.
+-doc """
+@xref{classy_table:dump_wal/2}, uses the default directory.
+""".
 -spec dump_wal(tab()) -> {ok, list()} | {error, _}.
 dump_wal(Tab) when is_atom(Tab) ->
   dump_wal(application:get_env(classy, table_dir, "."), Tab).
 
-%% @doc Dump WAL for debugging.
+-doc """
+Dump WAL for debugging.
+
+Warning: this function reads the entire WAL into memory.
+""".
 -spec dump_wal(file:filename(), tab()) -> {ok, list()} | {error, _}.
 dump_wal(Dir, Tab) ->
   File = filename:join(Dir, atom_to_list(Tab)),
@@ -328,7 +447,7 @@ dump_wal(Dir, Tab) ->
 %% Internal exports
 %%================================================================================
 
-%% @private
+-doc false.
 -spec start_link(tab(), options()) -> {ok, pid()}.
 start_link(Tab, Options) ->
   gen_server:start_link(?via(Tab), ?MODULE, [Tab, Options], []).
@@ -354,7 +473,7 @@ start_link(Tab, Options) ->
 
 -type s() :: #s{}.
 
-%% @private
+-doc false.
 init([TabName, Options]) ->
   process_flag(trap_exit, true),
   optvar:unset(?optvar(TabName)),
@@ -371,7 +490,7 @@ init([TabName, Options]) ->
   exec_on_update(open, S),
   {ok, S, {continue, restore}}.
 
-%% @private
+-doc false.
 handle_continue(restore, S0 = #s{name = Name}) ->
   T0 = os:system_time(microsecond),
   S = restore(S0),
@@ -386,7 +505,7 @@ handle_continue(restore, S0 = #s{name = Name}) ->
   optvar:set(?optvar(Name), true),
   {noreply, S}.
 
-%% @private
+-doc false.
 handle_call(#call_ensure_open{}, _From, S) ->
   {reply, ok, S};
 handle_call(#call_atomically{ops = Ops}, From, S) ->
@@ -418,7 +537,7 @@ handle_call(Call, From, S) ->
        }),
   {reply, {error, unknown_call}, S}.
 
-%% @private
+-doc false.
 handle_cast(Cast, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => cast
@@ -427,7 +546,7 @@ handle_cast(Cast, S) ->
        }),
   {noreply, S}.
 
-%% @private
+-doc false.
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
 handle_info(?to_auto_flush, S0) ->
@@ -445,7 +564,7 @@ handle_info(Info, S) ->
        }),
   {noreply, S}.
 
-%% @private
+-doc false.
 terminate(Reason, S) ->
   classy_lib:is_normal_exit(Reason) orelse
     ?tp(warning, ?classy_abnormal_exit,

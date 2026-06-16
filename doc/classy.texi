@@ -1,0 +1,367 @@
+\input texinfo   @c -*-texinfo-*-
+@c %**start of header
+@setfilename classy.info
+@settitle Classy
+@c %**end of header
+@copying
+An application that helps manage a cluster of Erlang nodes.
+
+Copyright @copyright{} 2026 EMQ Technologies Co., Ltd
+
+The document was typeset with
+@uref{https://www.gnu.org/software/texinfo/, GNU Texinfo}.
+
+@end copying
+
+@titlepage
+@title Classy
+@subtitle An application that helps manage a cluster of Erlang nodes.
+@author  EMQ Technologies Co., Ltd.
+@page
+@vskip 0pt plus 1filll
+@insertcopying
+@end titlepage
+
+@c Output the table of the contents at the beginning.
+@contents
+
+@node Top
+@top Classy
+
+  Feature overview:
+
+  @itemize
+  @item @emph{Cluster management}:
+  sites can join together to form clusters or be removed from the cluster.
+  Peer information is propagated using gossip protocol.
+
+  @item @emph{Persistent node identities}:
+  nodes are assigned persistent identities that survive host name changes.
+
+  @item @emph{Service discovery}:
+  sites can automatically discover one another using one of cluster discovery strategies.
+
+  @item @emph{Automatic clean up}:
+  sites that remain down for a long time are automatically removed.
+
+  @item @emph{Persistence layer}:
+  classy implements a standalone persistent table similar to mnesia `local_content` `disk_copies` table,
+  that can be used by 3rd party applications.
+
+  @item @emph{Unique ID generation}:
+  @xref{api/classy/classy_uid, classy_uid}
+
+  @item @emph{Two-Phase Commit}:
+  @xref{api/classy/classy_vote, classy_vote}
+  @end itemize
+
+@node Introduction
+@chapter Introduction
+
+  @section Concepts
+  @cindex Site ID
+  @anchor{Site ID}
+  @b{Site ID} is a random unique identifier of the node that persists between restarts and host name changes.
+  Each node creates this identifier once and then never changes it.
+
+  By default, classy initializes site with a random value.
+  Business applications can override this behavior by registering @ref{classy:on_node_init/2} hook
+  containing a call to @ref{classy_node:maybe_init_the_site/1}:
+
+  @example erlang
+  classy:on_node_init(
+    fun() ->
+       classy_node:maybe_init_the_site(MySiteId)
+    end,
+    0)
+  @end example
+
+  @cindex Cluster ID
+  @anchor{Cluster ID}
+  @b{Cluster ID} is a unique random identifier of the cluster.
+
+  Each site starts in its very own cluster with a random ID.
+  When a site joins a remote node,
+  it inherits its cluster ID of the remote.
+
+  @cindex Run level
+  @anchor{Run level}
+  @b{Run level} is global system state derived from the configuration and the number of peers.
+  It indicates ``readiness'' of the local site.
+
+  @enumerate
+    @item @code{stopped}:
+    Classy application itself is not running or is not ready.
+
+    @item @code{single}:
+    Classy application is ready to process cluster membership information,
+    but the number of known peers is less than @ref{n_sites}.
+
+    @item @code{cluster}:
+    the number of @emph{known} peers is >= @ref{n_sites},
+    but the number of @emph{connected} peers is less than @ref{quorum}.
+
+    @item @code{quorum}:
+    the number of connected peers satisfies the configuration.
+    Site is fully connected and operational.
+  @end enumerate
+
+  @node Network Partition
+  @section Network Partitions
+
+  Classy guarantees that all cluster members will eventually converge to the same state,
+  but earlier join and leave commands @emph{may} override later commands.
+
+  These adverse side effects can be observed when conflicting commands are issued on different nodes faster than the nodes sync with each other.
+  This is most likely to happen during a network partition.
+
+@node Autocluster
+@chapter Autocluster
+
+  @cindex Peer discovery
+  Autocluster is a mechanism for automatic peer discovery.
+  Peer discovery is done with a help of several modules implementing
+  @ref{api/classy/classy_discovery_strategy, discovery_strategy} behavior.
+
+  Active strategy is selected by @ref{discovery_strategy} OTP application environment variable.
+  This variable has a form of 2-tuple with the following elements:
+
+  @enumerate
+    @item Strategy
+    @item Strategy-specific parameters
+  @end enumerate
+
+  Autocluster logic runs only on singleton sites.
+  It is inactive on sites that already have peers (up or down).
+
+  The following strategies are available:
+
+  @node manual autocluster
+  @section manual
+    `Manual'' strategy disables automatic peer discovery.
+    When it is selected,
+    the site simply waits until the operator manually calls @ref{classy:join_node/2}.
+
+    Example configuration:
+
+    @example
+    @{manual, []@}
+    @end example
+
+  @node static autocluster
+  @section static
+     Join to one of the nodes explicitly pre-configured in the list.
+
+     Example configuration:
+
+     @example
+     @verbatim
+     {static, #{seeds => ['foo@example.com', 'bar@example.com']}}
+     @end verbatim
+     @end example
+
+  @node dns autocluster
+  @section dns
+    Discover peers via DNS query.
+
+    Configuration parameters:
+
+    @table @code
+      @item name
+      Domain name (Required)
+      @item type
+      type of the DNS record (default: A).
+
+      Allowed values: @code{A}, @code{AAAA}, @code{SRV}.
+      @item app
+      Node name prefix (default: @ref{classy_autocluster:app_name/0})
+    @end table
+
+    Node names are derived using the following template @code{App@@Hostname},
+    where @code{App} is the value of @code{app} configuration option,
+    and @code{Hostname} is derived from the DNS response.
+
+    When @code{a} or @code{aaaa} type is used, host names become IP addresses.
+    It's recommended to use SRV records.
+
+  @node k8s autocluster
+  @section k8s
+
+    This discovery strategy relies on Kubernetes API server.
+    It queries the Kubernetes API endpoint @code{/api/v1/namespaces/@{namespace@}/endpoints/@{app@}}
+    to retrieve the IP addresses or hostnames of all pods associated with that service,
+    which are then converted into Erlang node names.
+
+    Configuration Parameters:
+    @table @code
+      @item apiserver
+      Type: string (Required)
+
+      The URL of the Kubernetes API server.
+
+      @item service_name
+      Type: string (Required)
+
+      The name of the Kubernetes Service used for discovery.
+
+      @item app_name
+      Type: string, default: @ref{classy_autocluster:app_name/0}.
+
+      The application name used as a prefix for the generated node names.
+
+      @item address_type
+      Type: Atom, default: @code{ip}.
+
+      Determines the address extraction and node naming format.
+      Supported values: @code{ip}, @code{hostname}, @code{dns}.
+
+      @item namespace
+      Type: string, default: @code{"default"}
+
+      The Kubernetes namespace where the service is located.
+
+      @item suffix
+      Type: string, default: @code{""}
+
+      An optional DNS suffix appended to the node name.
+    @end table
+
+  @node etcd autocluster
+  @section etcd
+
+    Discover peers by querying ETCD service.
+
+    Configuration parameters:
+
+    @table @code
+      @item endpoints
+      Type: @code{[string()]} (Required).
+
+      List of etcd endpoints to connect to.
+
+      @item prefix
+      Type: String (Required).
+
+      Key prefix to use for service discovery
+    @end table
+
+@node Configuration
+@chapter Configuration
+
+  @code{classy} is configured via OTP application environment variables and callbacks.
+
+@macro defenv{NAME, TYPE}
+@anchor{\NAME\}
+@unnumberedsubsec \NAME\
+@vindex \NAME\
+@emph{Type}: \TYPE\
+@end macro
+
+@macro defen{NAME, TYPE, DEFAULT}
+@defenv{\NAME\, \TYPE\}
+
+@emph{Default}: \DEFAULT\
+@end macro
+
+  @section General
+    @defenv{setup_hooks, @ref{t:classy_lib:mfargs/0,mfargs()}}
+
+      A callback that classy executes during startup.
+      It allows business applications to set up other hooks using a more type-safe API.
+
+    @defen{table_dir, @code{file:filename()}, @code{"."}}
+
+      Directory where persistent data is stored.
+      It should be writable.
+
+    @defen{rpc_timeout, @code{timeout()}, 5000}
+
+      @emph{Unit}: ms
+
+      Default timeout for remote procedure calls.
+  @section Peer
+
+    @defen{sync_timeout, @code{non_neg_integer()}, 1000}
+
+      @emph{Unit}: ms
+
+      Maximum interval of time that can pass between the membership CRDT server receiving an update
+      and the moment it propagates it to the peers.
+
+    @defen{n_sites, @code{pos_integer()}, 1}
+
+      Minimum number of known peers necessary to advance @ref{t:classy:run_level/0,run level}
+      from @code{single} to @code{cluster}.
+
+    @defen{quorum, @code{pos_integer()}, 1}
+
+      Minimum number of known peers necessary to advance @ref{t:classy:run_level/0,run level}
+      from @code{cluster} to @code{quorum}.
+
+  @section Two-phase commit
+    @defen{vote_retry_interval, @code{pos_integer()}, 5000}
+
+      @emph{Unit}: ms
+
+      2PC coordinator re-sends outcome of a transaction to the participants at this interval.
+
+  @section Autoclean
+    @defen{max_site_downtime, @code{pos_integer() | infinity}, @code{infinity}}
+
+      @emph{Unit}: s.
+
+      Automatically kick sites that have been down longer than this value from the cluster.
+
+      Note: to prevent network-isolated nodes from kicking their peers,
+      quorum among the running nodes is required to perform the act.
+
+    @defen{cleanup_check_interval, @code{pos_integer()}, 30_000}
+
+      @emph{Unit}: ms.
+
+      Autoclean check interval.
+
+    @defen{forget_after, @code{pos_integer()}, 1w}
+
+      @emph{Unit}: s
+
+      Forget information about inactive (kicked) sites after this period of time.
+
+      Note: cleanup procedure may lead to the following situation:
+
+      @enumerate
+      @item Site A goes down
+      @item Site B kicks A
+      @item Information about event 2 propagates throughout the cluster.
+      @item Cleanup. All active peers delete data about A.
+      @item A goes back up
+      @end enumerate
+
+      Since at step 4 we removed the data about event 2, A will reappear in the cluster.
+
+      So @code{forget_after} should be set to a fairly large value to make sure it doesn't cover nodes that can go back online.
+
+  @section Autocluster
+    @defen{discovery_interval, @code{pos_integer()}, 5_000}
+
+      @emph{Unit}: ms.
+
+      Peer discovery retry interval.
+
+    @defenv{discovery_strategy, @ref{t:classy_discovery_strategy:t/0, classy_discovery_strategy:t/0}}
+
+      Peer discovery method, @xref{Autocluster}.
+
+@node API Reference
+@chapter API Reference
+@include _anvl_build/doc/classy/app.texi
+
+@node Index
+@unnumbered Index
+
+@syncodeindex vr cp
+@syncodeindex fn cp
+@syncodeindex tp cp
+@printindex cp
+
+@bye

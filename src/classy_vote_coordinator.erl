@@ -2,8 +2,8 @@
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
 
-%% @private
 -module(classy_vote_coordinator).
+-moduledoc false.
 
 -behavior(gen_statem).
 
@@ -35,9 +35,9 @@
 
 -record(act,
         { site_bit :: non_neg_integer()
-        , prepare  :: classy_vote:mfargs()
-        , commit   :: [classy_vote:mfargs()]
-        , rollback :: [classy_vote:mfargs()]
+        , prepare  :: classy_lib:mfargs()
+        , commit   :: [classy_lib:mfargs()]
+        , rollback :: [classy_lib:mfargs()]
         , reserved = []
         }).
 
@@ -74,8 +74,8 @@
 -record(opts,
         { strategy   :: classy_vote:strategy()
         , actions    :: #{classy:site() => #act{}}
-        , post_vote  :: [classy_vote:mfargs()]
-        , on_fail    :: [classy_vote:mfargs()]
+        , post_vote  :: [classy_lib:mfargs()]
+        , on_fail    :: [classy_lib:mfargs()]
         , start_time :: integer()
         , reserved = []
         }).
@@ -99,7 +99,6 @@ new(ID, Options = #{tag := Tag}) ->
 %% Internal exports
 %%================================================================================
 
-%% @private
 -spec start_link(true, {classy_vote:id(), map()}) -> gen_statem:start_ret();
                 (false, {classy_vote:tag(), classy_vote:id(), #opts{}}) -> gen_statem:start_ret().
 start_link(true, {ID, Options}) ->
@@ -115,14 +114,14 @@ start_link(false, {_Tag, ID, _Opts} = StartOpts) ->
     [false, StartOpts],
     []).
 
-%% @private Coordinator <- Participant
+%% Coordinator <- Participant
 -spec receive_vote(classy_vote:vote()) -> ok | {error, _}.
 receive_vote(#c_vote{id = ID} = Vote) ->
   gen_statem:call(
     ?via(?coordinator(ID)),
     Vote).
 
-%% @private Restore votes that were ongoing before the node shut down
+%% Restore votes that were ongoing before the node shut down
 restore() ->
   %% Note: This call ensures that table is restored & safe to read:
   ok = classy_vote:create_table(),
@@ -149,11 +148,9 @@ fold_ongoing(Fun, Acc0, TagPattern) ->
 %% behavior callbacks
 %%================================================================================
 
-%% @private
 callback_mode() ->
   [handle_event_function, state_enter].
 
-%% @private
 init([true, ID, Options]) ->
   process_flag(trap_exit, true),
   init_new_coordinator(ID, Options);
@@ -161,7 +158,6 @@ init([false, {Tag, ID, Options}]) ->
   process_flag(trap_exit, true),
   restore_coordinator(Tag, ID, Options).
 
-%% @private
 handle_event(enter, OldStage, Stage, D) ->
   enter(OldStage, Stage, D);
 handle_event({call, ReplyTo}, VoteData = #c_vote{}, Stage, D) ->
@@ -184,7 +180,6 @@ handle_event(ET, Event, State, _Data) ->
        }),
   keep_state_and_data.
 
-%% @private
 terminate(Reason, State, _Data) ->
   %% TODO: put ID and MFAs into error messages
   classy_lib:is_normal_exit(Reason) orelse
@@ -374,7 +369,7 @@ perform_post_commit(Outcome, #d{id = ID, tag = Tag, opts = #opts{post_vote = PV}
        }),
   perform_post_commit(Outcome, PV, D).
 
--spec perform_post_commit(boolean(), [classy_vote:mfargs()], d()) -> {stop, normal}.
+-spec perform_post_commit(boolean(), [classy_lib:mfargs()], d()) -> {stop, normal}.
 perform_post_commit(Outcome, [], D) ->
   ok = db_teardown(Outcome, D),
   {stop, normal};

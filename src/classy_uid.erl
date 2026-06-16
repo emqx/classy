@@ -2,9 +2,11 @@
 %% Copyright (c) 2025-2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
 
-%% @doc This module contains utilities for constructing unique IDs
-%% using various algorithms.
 -module(classy_uid).
+-moduledoc """
+This module contains utilities for constructing unique IDs
+using various algorithms.
+""".
 
 -behavior(gen_server).
 
@@ -37,13 +39,13 @@
                           , n_restarts := non_neg_integer()
                           }.
 
-%% Site-unique tuple
+-doc "Site-unique tuple".
 -type su_tuple() :: {non_neg_integer(), pos_integer()}.
 
-%% Cluster-unique tuple
+-doc "Cluster-unique tuple".
 -type cu_tuple() :: {classy:site(), non_neg_integer(), pos_integer()}.
 
-%% Identifier of a volatile sequence.
+-doc "Identifier of a volatile sequence".
 -type sequence() :: term().
 
 %%================================================================================
@@ -52,48 +54,57 @@
 
 -define(SERVER, ?MODULE).
 
-%% @private
+-doc false.
 -spec start_link() -> {ok, pid()}.
 start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-%% @doc Return a tuple that is unique within the site (across
-%% restarts), but is NOT unique in a cluster.
-%%
-%% SeqTuple returned by this function consists of a number of node
-%% restarts followed by a `erlang:unique_integer'.
-%%
-%% Site-unique tuples can be used to order events within the site.
+-doc """
+Return a tuple that is unique within the site (across restarts),
+but is NOT unique in a cluster.
+
+SeqTuple returned by this function consists of a number of node
+restarts followed by a @code{erlang:unique_integer}.
+
+Site-unique tuples can be used to order events within the site.
+""".
 -spec site_unique_tuple() -> su_tuple().
 site_unique_tuple() ->
   #{n_restarts := NRestarts} = get_pterm(),
   {NRestarts, erlang:unique_integer([positive, monotonic])}.
 
-%% @doc Return a tuple similar to `new_seq_tuple/0', but also
-%% including site id, which makes it unique within the cluster.
-%%
-%% Cluster-unique tuples can be used to order events on the originator site,
-%% but not globally.
+-doc """
+Return a tuple similar to @ref{classy_uid:site_unique_tuple/0},
+but also including site id,
+which makes it unique within the cluster.
+
+Cluster-unique tuples can be used to order events on the originator site,
+but not globally.
+""".
 -spec cluster_unique_tuple() -> cu_tuple().
 cluster_unique_tuple() ->
   #{n_restarts := NRestarts, site := Site} = get_pterm(),
   {Site, NRestarts, erlang:unique_integer([positive, monotonic])}.
 
-%% @doc Return a tuple that is guaranteed to be unique within
-%% sequence ID and site.
-%%
-%% It consists of number of restarts followed by a value of a volatile
-%% counter identified by sequence ID. Sequence counter gets reset on
-%% node restart.
-%%
-%% This function is expected to be slower than `site_unique_tuple',
-%% but its values form a monotonic sequence.
+-doc """
+Return a tuple that is guaranteed to be unique within sequence ID and site.
+
+It consists of number of restarts
+followed by a value of a volatile counter identified by sequence ID.
+Sequence counter gets reset on node restart.
+
+This function is expected to be slower than @code{classy_uid:site_unique_tuple/0},
+but its values form a monotonic sequence.
+""".
 -spec site_unique_seq_tuple(sequence()) -> su_tuple().
 site_unique_seq_tuple(Sequence) ->
   #{n_restarts := NRestarts} = get_pterm(),
   {NRestarts, volatile_counter(Sequence)}.
 
-%% @doc Similar to `site_unique_seq_tuple', but includes site name.
+-doc """
+Similar to @ref{classy_uid:site_unique_seq_tuple/1},
+but includes site name.
+""".
 -spec cluster_unique_seq_tuple(sequence()) -> cu_tuple().
 cluster_unique_seq_tuple(Sequence) ->
   #{n_restarts := NRestarts, site := Site} = get_pterm(),
@@ -105,6 +116,7 @@ cluster_unique_seq_tuple(Sequence) ->
 
 -record(s, {}).
 
+-doc false.
 init(_) ->
   process_flag(trap_exit, true),
   {ok, NRestarts} = classy_node:n_restarts(),
@@ -116,6 +128,7 @@ init(_) ->
   S = #s{},
   {ok, S}.
 
+-doc false.
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => call
@@ -125,6 +138,7 @@ handle_call(Call, From, S) ->
        }),
   {reply, {error, unknown_call}, S}.
 
+-doc false.
 handle_cast(Cast, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => cast
@@ -133,6 +147,7 @@ handle_cast(Cast, S) ->
        }),
   {noreply, S}.
 
+-doc false.
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
 handle_info(Info, S) ->
@@ -143,6 +158,7 @@ handle_info(Info, S) ->
        }),
   {noreply, S}.
 
+-doc false.
 terminate(_Reason, _S) ->
   persistent_term:erase(?pterm_uid_gen),
   ok.

@@ -2,8 +2,10 @@
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
 
-%% @doc This module contains various algorithms for calculating network partitions.
 -module(classy_partition).
+-moduledoc """
+This module contains various algorithms for calculating network partitions.
+""".
 
 %% API:
 -export([ bidi_link/3
@@ -27,10 +29,13 @@
 %% API functions
 %%================================================================================
 
-%% @doc Return `{ok, true}' if nodes are mutually connected to each other,
-%% or `{ok, false}' when either node considers the other down.
-%%
-%% Both nodes should be present in the `cluster_info()'.
+-doc """
+Return @code{@{ok, true@}} if nodes are mutually connected to each other,
+or @code{@{ok, false@}} when either node considers the other disconnected.
+
+If either node is absent in the @code{ClusterInfo},
+then an error tuple is returned.
+""".
 -spec bidi_link(classy:cluster_info(), node(), node()) -> {ok, boolean()} | {error, _}.
 bidi_link(ClusterInfo, NodeA, NodeB) ->
   case ClusterInfo of
@@ -49,13 +54,15 @@ bidi_link(ClusterInfo, NodeA, NodeB) ->
        {error, insufficient_data}
   end.
 
-%% @doc This greedy algorithm finds full meshes in the network.
-%% Each site appears in exactly one full mesh.
-%%
-%% Note: because of that property,
-%% this function will return ambiguous results when partitions are overlapping.
-%% More specifically, it will be overly eager in detecting partitions,
-%% and will ignore some existing links.
+-doc """
+This greedy algorithm finds full meshes in the network.
+Each site appears in exactly one full mesh.
+
+Note: because of that property,
+this function returns ambiguous results when network partitions are overlapping.
+More specifically, it will be overly eager in detecting partitions,
+and will ignore some existing links.
+""".
 -spec full_meshes(classy:cluster_info()) -> #{classy:cluster_id() => [partition()]}.
 full_meshes(ClusterInfo) ->
   Res = classy_lib:fold_per_cluster(

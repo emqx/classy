@@ -2,6 +2,9 @@
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
 -module(classy_node).
+-moduledoc """
+Management of the local site and node.
+""".
 
 -behavior(gen_server).
 
@@ -69,10 +72,33 @@
 %% API functions
 %%================================================================================
 
-%% @doc Initialize the local site.
-%%
-%% Values that are not persistently stored are set to the given values.
-%% Any `undefined' argument is replaced with a sufficiently unique random string.
+-doc """
+Initialize local site and cluster.
+
+Initialization of the site ID is done as following:
+
+@enumerate
+@item If the site ID is already stored in the DB,
+then it is kept as is and nothing is done.
+
+@item If the value not stored,
+and is provided as a binary argument,
+then the argument is used as the new site ID.
+
+@item If the value is not stored,
+and the argument is @code{undefined},
+then site ID is initialized to a random value.
+@end enumerate
+
+When site ID changes,
+@ref{classy:on_create_site/2} callback runs.
+
+Cluster ID initialization logic is similar,
+but there's no way to customize the initial value.
+That has to do with the classy's requirement
+that cluster IDs change to an entirely new value when site is kicked.
+@code{classy:on_create_cluster/2} hook is called for the new clusters.
+""".
 -spec maybe_init_the_site(classy:site() | undefined) -> ok.
 maybe_init_the_site(MaybeSite) ->
   {_IsNewSite, Site, Ops1} = ensure_the_id(?the_site, ?on_create_site, [], MaybeSite),
@@ -85,12 +111,14 @@ maybe_init_the_site(MaybeSite) ->
   [Fun() || Fun <- Effects],
   ok.
 
-%% @private
+-doc false.
 -spec start_link() -> {ok, pid()}.
 start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-%% @doc Return ID of the cluster that the node currently belongs to.
+-doc """
+Return ID of the cluster that the local site currently belongs to.
+""".
 -spec the_cluster() -> {ok, classy:cluster_id()} | undefined.
 the_cluster() ->
   case classy_table:lookup(?ptab, ?the_cluster) of
@@ -98,7 +126,9 @@ the_cluster() ->
     []   -> undefined
   end.
 
-%% @doc Return ID of the local site.
+-doc """
+Return ID of the local site.
+""".
 -spec the_site() -> {ok, classy:site()} | undefined.
 the_site() ->
   case classy_table:lookup(?ptab, ?the_site) of
@@ -106,10 +136,12 @@ the_site() ->
     []  -> undefined
   end.
 
-%% @doc Return ID of the site that invited us to `the_cluster'.
-%%
-%% The return value could be equal to `{ok, the_site()}' for the site that originally created the cluster.
-%% `undefined' return value means the local site is not initialized.
+-doc """
+Return ID of the site that invited us to @code{the_cluster}.
+
+The return value could be equal to @code{@{ok, the_site()@}} for the site that originally created the cluster.
+@code{undefined} return value means the local site is not initialized.
+""".
 -spec parent_site() -> {ok, classy:site()} | undefined.
 parent_site() ->
   case classy_table:lookup(?ptab, ?parent_site) of
@@ -117,9 +149,7 @@ parent_site() ->
     []  -> undefined
   end.
 
-%% @doc Join to the cluster that `Node' belongs to.
-%%
-%% This function performs all necessary checks before making any changes.
+-doc false.
 -spec join_node(node(), _Intent, classy:cluster_id() | any) -> ok | {error, _}.
 join_node(Node, Intent, ExpectedCluster) ->
   case node() of
@@ -132,10 +162,7 @@ join_node(Node, Intent, ExpectedCluster) ->
         infinity)
   end.
 
-%% @doc Kick a site from the cluster.
-%%
-%% This function performs all necessary checks before making any changes.
-%% It can be used with the local site as well.
+-doc false.
 -spec kick_site(classy:site(), _Intent) -> ok | {error, _}.
 kick_site(Site, Intent) ->
   gen_server:call(
@@ -143,7 +170,7 @@ kick_site(Site, Intent) ->
     #call_kick{site = Site, intent = Intent},
     infinity).
 
-%% @doc Lower the run level to the given value and run the specified function.
+-doc false.
 -spec at_lower_level(run_level_atom(), fun(() -> Ret)) ->
         {ok, Ret} |
         {error | exit | throw, _Reason, _Stacktrace}.
@@ -153,12 +180,13 @@ at_lower_level(RunLevel, Fun) ->
     #call_at_run_level{level = RunLevel, function = Fun},
     infinity).
 
--spec nodes(all | running | stopped) -> [node()].
+-doc false.
+-spec nodes(all | connected | disconnected) -> [node()].
 nodes(Query) ->
   Filter = case Query of
-             all     -> [];
-             running -> [{'=:=', '$2', true}];
-             stopped -> [{'=:=', '$2', false}]
+             all          -> [];
+             connected    -> [{'=:=', '$2', true}];
+             disconnected -> [{'=:=', '$2', false}]
            end,
   MS = { #classy_kv{ v = #site_info{ node = '$1'
                                    , isconn = '$2'
@@ -184,6 +212,7 @@ peer_info() ->
     #{},
     ?site_info).
 
+-doc false.
 -spec node_of_site(classy:site(), boolean()) -> {ok, node()} | undefined.
 node_of_site(Site, OnlyConnected) ->
   case classy_table:lookup(?site_info, Site) of
@@ -193,7 +222,11 @@ node_of_site(Site, OnlyConnected) ->
       undefined
   end.
 
-%% @doc Return number of node restarts since creation of the site.
+-doc """
+Return number of node restarts since creation of the site.
+
+This value is monotonically increasing.
+""".
 -spec n_restarts() -> {ok, non_neg_integer()} | {error, nodedown}.
 n_restarts() ->
   case classy_table:lookup(?ptab, ?n_restarts) of
@@ -214,7 +247,7 @@ n_restarts() ->
         , peer_state = #{} :: #{classy:site() => {node(), boolean()}}
         }).
 
-%% @private
+-doc false.
 init(_) ->
   process_flag(trap_exit, true),
   net_kernel:monitor_nodes(
@@ -234,7 +267,7 @@ init(_) ->
       {stop, Reason, undefined}
   end.
 
-%% @private
+-doc false.
 handle_call(#call_join{} = Call, _From, S0) ->
   case handle_join(S0, Call) of
     {ok, S} ->
@@ -271,7 +304,7 @@ handle_call(Call, From, S) ->
        }),
   {reply, {error, unknown_call}, S}.
 
-%% @private
+-doc false.
 handle_cast(#cast_membership_change{} = Cast, S) ->
   handle_membership_change_event(Cast, S);
 handle_cast(Cast, S) ->
@@ -282,7 +315,7 @@ handle_cast(Cast, S) ->
        }),
   {noreply, S}.
 
-%% @private
+-doc false.
 handle_info({NodeUpOrDown, _Node, _}, S) when NodeUpOrDown =:= nodeup; NodeUpOrDown =:= nodedown ->
   {noreply, update_runtime(S)};
 handle_info({'EXIT', _, shutdown}, S) ->
@@ -295,7 +328,7 @@ handle_info(Info, S) ->
        }),
   {noreply, S}.
 
-%% @private
+-doc false.
 terminate(Reason, S) ->
   classy_lib:is_normal_exit(Reason) orelse
     ?tp(warning, ?classy_abnormal_exit,
@@ -313,7 +346,8 @@ terminate(Reason, S) ->
 %% Internal exports
 %%================================================================================
 
-%% @private RPC target, called by remote node during `join'.
+%%  RPC target, called by remote node during `join'.
+-doc false.
 %% Returns information about the local site, used for bootstrapping the remote.
 hello() ->
   maybe
@@ -588,10 +622,10 @@ ensure_the_id(Key, OnCreateHook, HookArgs, Default) ->
 -spec adjust_run_level(#s{}) -> #s{}.
 adjust_run_level(S = #s{cluster = Cluster, site = Site}) ->
   NKnown = length(classy_membership:members(Cluster, Site)),
-  NRunning = length(nodes(running)),
+  NConnected = length(nodes(connected)),
   RunLevel = case NKnown >= classy_lib:n_sites() of
                true  ->
-                 case NRunning >= classy:quorum(config) of
+                 case NConnected >= classy:quorum(config) of
                    true  -> run_level(?quorum);
                    false -> run_level(?cluster)
                  end;

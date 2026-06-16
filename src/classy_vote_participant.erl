@@ -2,6 +2,7 @@
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
 -module(classy_vote_participant).
+-moduledoc false.
 
 -behavior(gen_statem).
 
@@ -250,7 +251,7 @@ perform_rollback(D = #d{completed_actions = CA, prep = Prep}) ->
     nthtail(CA, RollbackActions),
     D).
 
--spec perform_actions(stage(), [classy_vote:mfargs()], d()) -> {stop, normal, d()}.
+-spec perform_actions(stage(), [classy_lib:mfargs()], d()) -> {stop, normal, d()}.
 perform_actions(_, [], D) ->
   db_teardown(D),
   {stop, normal, D};

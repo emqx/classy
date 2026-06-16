@@ -2,8 +2,8 @@
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
 
-%% @private
 -module(classy_sup).
+-moduledoc false.
 
 -behavior(supervisor).
 
