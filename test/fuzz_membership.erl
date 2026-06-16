@@ -24,14 +24,7 @@ prop_fuzz() ->
                    , {<<"quux">>, #{}}
                    ]
         }),
-     try
-       run_cmds(Cmds),
-       true
-     catch
-       EC:Err:Stack ->
-         ?LOG_CRITICAL("!!!! Property failed ~p:~p:~p", [EC, Err, Stack]),
-         false
-     end).
+     run_cmds(Cmds)).
 
 run_cmds(Cmds) ->
   Cluster = classy_test_fuzzer:familiar_cluster(),
@@ -50,15 +43,22 @@ run_cmds(Cmds) ->
        {_History, State, Result} = proper_statem:run_commands(
                                      classy_test_fuzzer,
                                      classy_test_fuzzer:wrap_commands(Cmds)),
-       ?LOG_INFO("*** Model state:~n  ~p~n", [State]),
-       ?LOG_INFO("*** Result:~n  ~p~n", [Result]),
-       Result =:= ok orelse error({invalid_result, Result}),
-       familiar:stop_cluster(Cluster, true)
+       ?LOG_NOTICE("*** Model state:~n  ~p~n", [State]),
+       ?LOG_NOTICE("*** Result:~n  ~p~n", [Result]),
+       case Result of
+         ok ->
+           true;
+         _ ->
+           familiar_cluster:set_fail(Cluster),
+           false
+       end
      catch
        EC:Err:Stack ->
-         ?LOG_ERROR("*** ~p:~p~n Stack:~p", [EC, Err, Stack])
+         ?LOG_ERROR("*** ~p:~p~n Stack:~p", [EC, Err, Stack]),
+         familiar_cluster:set_fail(Cluster),
+         false
      after
-       familiar:stop_cluster(Cluster, false)
+       familiar:stop_cluster(Cluster, true)
      end,
      [ fun classy_SUITE:no_unexpected_events/1
      , fun classy_SUITE:events_on_all_sites/1

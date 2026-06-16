@@ -18,11 +18,14 @@ prop_table() ->
           ?TRAPEXIT(
              begin
                Cleanup = classy_table_tests:setup(?FUNCTION_NAME),
-               {History, State, Result} = run_commands(?MODULE, Cmds),
-               classy_table_tests:cleanup(Cleanup),
-               ?WHENFAIL(io:format("History: ~w~nState: ~w\nResult: ~w~n",
-                                   [History, State, Result]),
-                         Result =:= ok)
+               try
+                 {History, State, Result} = run_commands(?MODULE, Cmds),
+                 ?WHENFAIL(io:format("History: ~w~nState: ~w\nResult: ~w~n",
+                                     [History, State, Result]),
+                           Result =:= ok)
+               after
+                 classy_table_tests:cleanup(Cleanup)
+               end
              end)).
 
 key() ->
