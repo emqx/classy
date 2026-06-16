@@ -4,9 +4,9 @@
 @settitle Classy
 @c %**end of header
 @copying
-An application that helps manage a cluster of Erlang nodes..
+An application that helps manage a cluster of Erlang nodes.
 
-Copyright @copyright{} 2026 EMQ Technologies Inc., Ltd
+Copyright @copyright{} 2026 EMQ Technologies Co., Ltd
 
 The document was typeset with
 @uref{https://www.gnu.org/software/texinfo/, GNU Texinfo}.
@@ -136,7 +136,7 @@ The document was typeset with
 
   The following strategies are available:
 
-  @node manual, Autocluster
+  @node manual autocluster
   @section manual
     `Manual'' strategy disables automatic peer discovery.
     When it is selected,
@@ -148,7 +148,7 @@ The document was typeset with
     @{manual, []@}
     @end example
 
-  @node static, Autocluster
+  @node static autocluster
   @section static
      Join to one of the nodes explicitly pre-configured in the list.
 
@@ -160,7 +160,7 @@ The document was typeset with
      @end verbatim
      @end example
 
-  @node dns, Autocluster
+  @node dns autocluster
   @section dns
     Discover peers via DNS query.
 
@@ -184,7 +184,7 @@ The document was typeset with
     When @code{a} or @code{aaaa} type is used, host names become IP addresses.
     It's recommended to use SRV records.
 
-  @node k8s, Autocluster
+  @node k8s autocluster
   @section k8s
 
     This discovery strategy relies on Kubernetes API server.
@@ -226,7 +226,7 @@ The document was typeset with
       An optional DNS suffix appended to the node name.
     @end table
 
-  @node etcd, Autocluster
+  @node etcd autocluster
   @section etcd
 
     Discover peers by querying ETCD service.

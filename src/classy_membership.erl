@@ -243,7 +243,7 @@ node_of_site(Cluster, Local) ->
 
 -doc """
 Delete sites that have been kicked for longer than
-@code{ForgetAfter} seconds ago the local state.
+@code{ForgetAfter} seconds ago from the local state.
 """.
 -spec cleanup(classy:cluster_id(), classy:site(), pos_integer()) -> ok.
 cleanup(Cluster, Local, ForgetAfter) ->

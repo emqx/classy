@@ -156,7 +156,7 @@ or an error tuple @ref{t:classy_lib:multicall_error/0}.
 @example
 classy_lib:multicall(
   #@{S => @{erlang, node, []@} || S <- [S1, S2, SBad]@},
-  5_000)))
+  5_000)
 @end example
 
 returns

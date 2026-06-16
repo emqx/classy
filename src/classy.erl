@@ -403,7 +403,7 @@ status from connected (@code{true}) to disconnected (@code{false}) and vice vers
 Note: this hook runs in the classy main process.
 Hence it should avoid blocking it.
 
-WARNING: status change to @code{false} it not indicative of the remote site being actually down.
+WARNING: status change to @code{false} is not indicative of the remote site being actually down.
 This can happen during a network partition.
 """.
 -spec on_peer_connection_status_change(Fun, classy_hook:prio()) -> classy_hook:hook()

@@ -130,7 +130,7 @@ fold(Hookpoint, Args, Acc0) ->
 -doc """
 Ensure that all functions hooked into @code{Hookpoint} return @code{ok}.
 
-If any of the function returns other value or throws an exception,
+If any function returns other value or throws an exception,
 this function returns @code{@{error, _@}}.
 """.
 -spec all(hookpoint(), list()) -> ok | {error, _}.
