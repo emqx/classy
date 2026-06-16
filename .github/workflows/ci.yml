@@ -1,5 +1,4 @@
 name: Run test case
-
 on:
   push:
     branches:
@@ -7,6 +6,9 @@ on:
   pull_request:
     branches:
       - master
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -38,6 +40,12 @@ jobs:
       run: |
         ~/.local/bin/anvl
 
+    - name: Upload HTML files as artifact
+      id: html
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: _anvl_build/doc/classy_html
+
     - name: Smoke tests
       run: |
         make smoke-test
@@ -47,12 +55,17 @@ jobs:
         make prop-membership
 
   deploy:
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
