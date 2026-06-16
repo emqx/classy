@@ -13,14 +13,9 @@
               BODY
           end)).
 
--include_lib("stdlib/include/assert.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
--include_lib("proper/include/proper.hrl").
 -include("src/classy_internal.hrl").
--include_lib("familiar/include/familiar.hrl").
-
--define(assertSameSet(EXP, GOT), ?assertEqual(lists:sort(EXP), lists:sort(GOT))).
--define(assertSameSet(EXP, GOT, COMMENT), ?assertEqual(lists:sort(EXP), lists:sort(GOT), COMMENT)).
+-include("classy_test_macros.hrl").
 
 %%================================================================================
 %% Tests
@@ -1394,124 +1389,6 @@ t_413_fold_votes(_) ->
      , fun events_on_all_sites/1
      ]).
 
-t_999_fuzz(_Config) ->
-  %% NOTE: we set timeout at the lowest level to capture the trace
-  %% and have a nicer error message.
-  %%
-  %% By default the number of tests and max_size are set to low
-  %% values to avoid blowing up CI. Hence it's recommended to
-  %% increase the max_size and numtests when doing local
-  %% development using "apps/emqx/test/sessds.cfg"
-  NTests = ct:get_config({fuzzer, n_tests}, 20),
-  MaxSize = ct:get_config({fuzzer, max_size}, 100),
-  NCommandsFactor = ct:get_config({fuzzer, command_multiplier}, 1),
-  ?assertMatch(
-     true,
-     proper:quickcheck(
-       ?FORALL(
-          Cmds,
-          classy_test_fuzzer:cmds(
-            NCommandsFactor,
-            #{ module => ?MODULE
-             , sites => [ {<<"foo">>, #{}}
-                        , {<<"bar">>, #{}}
-                        , {<<"baz">>, #{}}
-                        , {<<"quux">>, #{}}
-                        ]
-             }),
-          try
-            fuzz_prop(Cmds),
-            true
-          catch
-            EC:Err:Stack ->
-              ct:pal("!!!! Property failed ~p:~p:~p", [EC, Err, Stack]),
-              false
-          end)
-      , [ {numtests, NTests}
-        , {max_size, MaxSize}
-        , {on_output, fun proper_printout/2}
-          %% TODO: Shrinking is currently broken
-        , {max_shrinks, 0}
-        ]
-      )).
-
-fuzz_prop(Cmds) ->
-  Cluster = classy_test_fuzzer:familiar_cluster(),
-  ?check_trace(
-     #{timetrap => 5_000 * length(Cmds) + 30_000},
-     try
-       %% Print information about the run:
-       ct:pal("*** Commands:~n~s~n", [classy_test_fuzzer:format_cmds(Cmds)]),
-       %% Initialize the system:
-       ok = familiar:start_link_cluster(
-              #{ id => Cluster
-               , peer => #{args => ["-kernel", "prevent_overlapping_partitions", "false"]}
-               , fixtures => familiar_fixture:defaults() ++ [{familiar_snabbkaffe, #{}}]
-               }),
-       %% Run test:
-       {_History, State, Result} = proper_statem:run_commands(
-                                     classy_test_fuzzer,
-                                     classy_test_fuzzer:wrap_commands(Cmds)),
-       ct:log(info, "*** Model state:~n  ~p~n", [State]),
-       ct:log("*** Result:~n  ~p~n", [Result]),
-       Result =:= ok orelse error({invalid_result, Result}),
-       familiar:stop_cluster(Cluster, true)
-     catch
-       EC:Err:Stack ->
-         ct:pal(error, "*** ~p:~p~n Stack:~p", [EC, Err, Stack])
-     after
-       familiar:stop_cluster(Cluster, false)
-     end,
-     [ fun no_unexpected_events/1
-     , fun events_on_all_sites/1
-     ]).
-
-postcondition({init, _}, _Call, _Result) ->
-  true;
-postcondition(S, _Call, _Result) ->
-  lists:foreach(
-    fun(Site) ->
-        ?retry(1000, 10, fuzz_verify_site(Site, S))
-    end,
-    classy_test_fuzzer:running_sites(S)),
-  true.
-
-fuzz_verify_site(Site, S = #{sites := Sites}) ->
-  #{Site := #{cluster := Cluster}} = Sites,
-  no_stopped_nodes_reported_as_running(Site, S),
-  %% Verify list of peer sites:
-  ExpectedSites = classy_test_fuzzer:sites_of_cluster(Cluster, S),
-  ?assertSameSet(
-     ExpectedSites,
-     classy_test_fuzzer:call(Site, classy, sites, []),
-     #{ on            => Site
-      , msg           => "View of the cluster"
-      , '~diagnostic' => classy_test_fuzzer:diagnostic(S)
-      , model_state   => S
-      }),
-  %% Verify list of all nodes:
-  ?assertSameSet(
-     [Node || I <- ExpectedSites, {ok, Node} <- [fuzz_node_name(I)]],
-     classy_test_fuzzer:call(Site, classy, nodes, [all]),
-     #{ on            => Site
-      , msg           => "View of all nodes"
-      , '~diagnostic' => classy_test_fuzzer:diagnostic(S)
-      , model_state   => S
-      }),
-  %% Check running nodes:
-  ?assertSameSet(
-     [Node
-      || I <- ExpectedSites,
-         {ok, Node} <- [fuzz_node_name(I)],
-         classy_test_fuzzer:is_running(I, S)],
-     classy_test_fuzzer:call(Site, classy, nodes, [running]),
-     #{ on            => Site
-      , msg           => "View of running nodes"
-      , '~diagnostic' => classy_test_fuzzer:diagnostic(S)
-      , model_state   => S
-      }),
-  ok.
-
 %% This function fails if `Site' reports any site that must be stopped
 %% according to the spec as running.
 no_stopped_nodes_reported_as_running(Site, #{sites := Sites}) ->
@@ -1672,8 +1549,6 @@ end_per_suite(Cfg) ->
 next_state(_S, _Ret, Call) ->
   error({unknown_call, Call}).
 
-init_per_testcase(t_999_fuzz, Cfg) ->
-  Cfg;
 init_per_testcase(TC, Cfg) ->
   Fixtures = [ {familiar_snabbkaffe, #{}}
              ],

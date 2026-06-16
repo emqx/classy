@@ -40,10 +40,14 @@ jobs:
           run: |
             cd anvl && ./bootstrap.escript
 
-        - name: Compile
+        - name: Static checks
           run: |
             ~/.local/bin/anvl
 
-        - name: Run tests
+        - name: Smoke tests
           run: |
-            make test
+            make smoke-test
+
+        - name: Long-running property-based tests
+          run: |
+            make prop-membership
