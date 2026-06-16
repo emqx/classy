@@ -26,11 +26,22 @@
         , unregister/1
         ]).
 
+-export_type([opts/0]).
+
 -import(proplists, [get_value/2, get_value/3]).
 
 -define(SERVICE_ACCOUNT_PATH, "/var/run/secrets/kubernetes.io/serviceaccount/").
 
 -define(LOG(Level, Format, Args), logger:Level("Classy(k8s): " ++ Format, Args)).
+
+-type opts() ::
+        #{ apiserver    := string()
+         , service_name := string()
+         , app_name     => string()
+         , address_type => ip | hostname | dns
+         , namespace    => string()
+         , suffix       => string()
+         }.
 
 %%--------------------------------------------------------------------
 %% classy_discovery_strategy callbacks

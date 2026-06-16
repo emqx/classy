@@ -15,6 +15,7 @@
 %%--------------------------------------------------------------------
 
 -module(classy_autocluster_sup).
+-moduledoc false.
 
 -behaviour(supervisor).
 

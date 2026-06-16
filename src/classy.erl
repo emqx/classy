@@ -69,12 +69,13 @@ This MFA can contain calls to various @code{classy:on_...} functions.
 
 -doc """
 Unique random persistent identifier of the cluster.
+@xref{Cluster ID}.
 """.
 -type cluster_id() :: binary().
 
 -doc """
 Unique random persistent identifier of the site.
-Each node creates this identifier once and then never changes it.
+@xref{Site ID}.
 """.
 -type site() :: binary().
 
@@ -133,25 +134,7 @@ Site is kicked by the autoclean logic.
 -type kick_intent() :: term().
 
 -doc """
-Run level indicates site's ``readiness''.
-
-@enumerate
-@item @code{stopped}:
-Classy application itself is not running or is not ready.
-
-@item @code{single}:
-Classy application is ready to process cluster membership changes,
-but the number of discovered peers is less than @ref{n_sites}.
-
-@item @code{cluster}:
-the number of @emph{known} peers is >= @ref{n_sites},
-but the number of @emph{connected} peers is less than @ref{quorum}.
-
-@item @code{quorum}:
-the number of connected peers satisfies the configuration.
-Site is fully connected and operational.
-
-@end enumerate
+@xref{Run level}
 """.
 -type run_level() :: stopped | single | cluster | quorum.
 
