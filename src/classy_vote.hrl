@@ -11,11 +11,11 @@
 -record(prepare,
         { id            :: classy_vote:id()
         , tag           :: classy_vote:tag()
-        , prepare       :: classy_vote:mfargs()
-        , commit        :: [classy_vote:mfargs()]
-        , rollback      :: [classy_vote:mfargs()]
+        , prepare       :: classy_lib:mfargs()
+        , commit        :: [classy_lib:mfargs()]
+        , rollback      :: [classy_lib:mfargs()]
         , coordinator   :: classy:site()
-        , on_fail       :: [classy_vote:mfargs()]
+        , on_fail       :: [classy_lib:mfargs()]
         , reserved = [] :: term()
         }).
 %%   Coordinator <- Participant

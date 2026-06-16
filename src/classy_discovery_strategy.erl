@@ -15,16 +15,21 @@
 %%--------------------------------------------------------------------
 
 -module(classy_discovery_strategy).
+-moduledoc """
+This module defines a behavior of discovery strategy.
+""".
 
--export([discover/2, lock/2, unlock/2, register/2, unregister/2]).
+-export([get/0, discover/2, lock/2, unlock/2, register/2, unregister/2]).
 
--export_type([options/0]).
+-export_type([options/0, t/0]).
 
 -include_lib("snabbkaffe/include/trace.hrl").
 
 %%================================================================================
 %% Callback and type declarations
 %%================================================================================
+
+-type t() :: {module(), options()}.
 
 -type options() :: term().
 
@@ -42,22 +47,37 @@
 %% API functions
 %%================================================================================
 
+-doc """
+Read value of @ref{discovery_strategy} environment variable (with default).
+""".
+get() ->
+  application:get_env(classy, discovery_strategy, {manual, []}).
+
+%%================================================================================
+%% Internal exports
+%%================================================================================
+
+-doc false.
 -spec discover(module(), options()) -> {ok, [node()]} | {error, term()}.
 discover(Mod, Options) ->
   safe_call(Mod, ?FUNCTION_NAME, Options).
 
+-doc false.
 -spec lock(module(), options()) -> ok | ignore | {error, term()}.
 lock(Mod, Options) ->
   safe_call(Mod, ?FUNCTION_NAME, Options).
 
+-doc false.
 -spec unlock(module(), options()) -> ok | ignore | {error, term()}.
 unlock(Mod, Options) ->
   safe_call(Mod, ?FUNCTION_NAME, Options).
 
+-doc false.
 -spec register(module(), options()) -> ok | ignore | {error, term()}.
 register(Mod, Options) ->
   safe_call(Mod, ?FUNCTION_NAME, Options).
 
+-doc false.
 -spec unregister(module(), options()) -> ok | ignore | {error, term()}.
 unregister(Mod, Options) ->
   safe_call(Mod, ?FUNCTION_NAME, Options).

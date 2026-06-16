@@ -2,13 +2,15 @@
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
 
-%% @doc Main interface module of `classy'.
-%%
-%% Note: business releases can install hooks by setting
-%% `classy:setup_hooks' application environment variable to a tuple
-%% `{Module, Function, Args}'. This MFA can contain calls to various
-%% `classy:on_...' functions.
 -module(classy).
+-moduledoc """
+Main interface module of Classy application.
+
+Note: business releases can install hooks by setting
+@code{classy:setup_hooks} application environment variable to a tuple
+@code{@{Module, Function, Args@}}.
+This MFA can contain calls to various @code{classy:on_...} functions.
+""".
 
 %% API:
 -export([ info/0
@@ -43,6 +45,9 @@
 -export_type([ cluster_id/0
              , site/0
 
+             , join_intent/0
+             , kick_intent/0
+
              , peer_info/0
              , info/0
              , cluster_info/0
@@ -62,8 +67,15 @@
 %% Type declarations
 %%================================================================================
 
+-doc """
+Unique random persistent identifier of the cluster.
+""".
 -type cluster_id() :: binary().
 
+-doc """
+Unique random persistent identifier of the site.
+Each node creates this identifier once and then never changes it.
+""".
 -type site() :: binary().
 
 -type peer_info() ::
@@ -87,15 +99,60 @@
 
 -type membership_change_hook() :: fun((cluster_id(), _Local :: site(), _Remote :: site(), _IsMember :: boolean()) -> _).
 
--type join_intent() :: join
-                     | autocluster
-                     | _.
+-doc """
+Join intent is an arbitrary term passed to @ref{classy:pre_join/2} and @ref{classy:post_join/2} hooks.
+@code{pre_join} may match on intent to prevent join in certain cases,
+while to @code{post_join} this value is merely informational.
 
--type kick_intent() :: join       %% Intent set by system when site leaves the cluster to join another one
-                     | kicked     %% Intent set by system when site is kicked by a third party
-                     | autoclean  %% Intent set by the system when the site is kicked by autoclean
-                     | _.
+Classy itself uses the following intents:
+@itemize
+@item @code{autocluster}:
+When join is triggered by autocluster.
+@end itemize
+""".
+-type join_intent() :: term().
 
+-doc """
+Kick intent is an arbitrary term passed to @ref{classy:pre_kick/2} and @ref{classy:post_kick/2} hooks.
+@code{pre_kick} may match on intent to prevent node from leaving the cluster in certain cases,
+while to @code{post_kick} this value is merely informational.
+
+Classy itself uses the following intents:
+@itemize
+@item @code{join}:
+Site is leaving the cluster to immediately join a different one.
+
+@item @code{kicked}:
+Site detects that it got kicked from the cluster by a third party.
+
+@item @code{autoclean}:
+Site is kicked by the autoclean logic.
+
+@end itemize
+""".
+-type kick_intent() :: term().
+
+-doc """
+Run level indicates site's ``readiness''.
+
+@enumerate
+@item @code{stopped}:
+Classy application itself is not running or is not ready.
+
+@item @code{single}:
+Classy application is ready to process cluster membership changes,
+but the number of discovered peers is less than @ref{n_sites}.
+
+@item @code{cluster}:
+the number of @emph{known} peers is >= @ref{n_sites},
+but the number of @emph{connected} peers is less than @ref{quorum}.
+
+@item @code{quorum}:
+the number of connected peers satisfies the configuration.
+Site is fully connected and operational.
+
+@end enumerate
+""".
 -type run_level() :: stopped | single | cluster | quorum.
 
 %%================================================================================
@@ -103,7 +160,9 @@
 %%================================================================================
 
 %% RPC target
-%% @doc Provide general information about the local node.
+-doc """
+Provide general information about the local node.
+""".
 -spec info() -> info().
 info() ->
   %% Note: this is an RPC target.
@@ -130,17 +189,21 @@ info() ->
          },
   classy_hook:fold(?on_enrich_site_info, [], Acc).
 
-%% @doc Gather `info/0' from a set of nodes.
-%%
-%% The nodes don't have to be in the same cluster.
-%%
-%% WARNING: as a side effect of calling this function,
-%% the current node will establish Erlang distribution connection to all nodes in the list.
+-doc """
+Gather @ref{classy:info/0} from a set of nodes.
+
+The nodes don't have to be in the same cluster.
+
+WARNING: as a side effect of calling this function,
+the current node will establish Erlang distribution connection to all nodes in the list.
+While this won't affect code using @code{@link{classy:nodes/1,classy:nodes}(connected)} API,
+it may confuse code using plain @code{erlang:nodes()}.
+""".
 -spec info([node()]) -> cluster_info().
 info(Nodes) ->
   info(1, Nodes).
 
-%% @hidden
+-doc false.
 -spec info(non_neg_integer(), [node()]) -> cluster_info().
 info(_Hops, Nodes) ->
   RPCRet = erpc:multicall(
@@ -169,35 +232,70 @@ info(_Hops, Nodes) ->
    , bad_nodes => BadNodes
    }.
 
-%% @doc Locate a node that is currently hosting a site.
-%%
-%% If `OnlyLive' flag is set, undefined is returned when the site is
-%% down (even if its node is otherwise known).
+-doc """
+Locate a node that is currently hosting a site.
+
+If @code{OnlyConnected} flag is set,
+@code{undefined} is returned when the site is locally unreachable
+(even if its node is otherwise known).
+""".
 -spec node_of_site(site(), boolean()) -> {ok, node()} | undefined.
-node_of_site(Site, OnlyLive) ->
-  classy_node:node_of_site(Site, OnlyLive).
+node_of_site(Site, OnlyConnected) ->
+  classy_node:node_of_site(Site, OnlyConnected).
 
 %%--------------------------------------------------------------------------------
 %% Cluster management
 %%--------------------------------------------------------------------------------
 
-%% @doc Join the local site to the cluster of a remote node.
-%%
-%% This function allows a node to join a cluster by connecting to a known peer.
-%%
-%% @param Node The node to join to
-%% @param Intent The intent of the join operation.
-%% Intent is an arbitrary term passed to `pre_join' callback.
-%% The callback is free to interpret it according to the business
-%% logic requirements.
+-doc """
+Join the local site to the cluster of a remote node.
+
+This function allows a node to join a cluster by connecting to a known peer.
+
+Arguments:
+
+@enumerate
+@item Name of a node to join.
+
+Note: while the majority of classy APIs work with @ref{t:classy:site/0, site IDs},
+joining a cluster is always done via regular Erlang node name.
+
+@item Join intent, @pxref{t:classy:join_intent/0, join_intent()}
+@end enumerate
+""".
 -spec join_node(node(), join_intent()) -> ok | {error, _}.
 join_node(Node, Intent) ->
   classy_node:join_node(Node, Intent, any).
 
+-doc """
+Remove a site from the cluster.
+Target site can be local or remote:
+it is allowed for a site to kick itself from the cluster.
+
+The kicked site creates an entirely new @ref{t:classy:cluster_id/0, cluster_id()},
+and joins it as a singleton member.
+
+Local site (one that initiates kick) runs the following hooks
+with @code{Intent} equal to the value of the argument:
+@enumerate
+@item @ref{classy:pre_kick/2}.
+It can decide that removing a site is unsafe and abort the command.
+
+@item @ref{classy:post_kick/2}.
+This hook is executed after the target is successfully kicked.
+@end enumerate
+
+If the target site is not the same as the local site,
+then it also runs @ref{classy:post_kick/2} with pre-defined intent @code{kicked}.
+
+""".
 -spec kick_site(site(), kick_intent()) -> ok | {error, _}.
 kick_site(Site, Intent) ->
   classy_node:kick_site(Site, Intent).
 
+-doc """
+Translate node name to a site ID and kick it via @ref{classy:kick_site/2}.
+""".
 -spec kick_node(node(), kick_intent()) -> ok | {error, _}.
 kick_node(Node, Intent) ->
   case {classy_node:the_cluster(), classy_node:the_site()} of
@@ -212,7 +310,9 @@ kick_node(Node, Intent) ->
       {error, local_not_in_cluster}
   end.
 
-%% @doc List all peers
+-doc """
+List IDs of peer sites.
+""".
 -spec sites() -> [site()].
 sites() ->
   maybe
@@ -224,14 +324,24 @@ sites() ->
       []
   end.
 
--spec nodes(all | running | stopped) -> [node()].
+-doc """
+List all peer nodes.
+
+Important to note: this function returns node names of @emph{peer sites}.
+Random connected nodes,
+such as shells or classy sites that are not member of the current cluster,
+are excluded.
+""".
+-spec nodes(all | connected | disconnected) -> [node()].
 nodes(Query) ->
   classy_node:nodes(Query).
 
-%% @doc Lower the run level to the given value and run the specified function.
-%%
-%% This function can be used to implement migrations that require
-%% business applications to be stopped.
+-doc """
+Lower the run level to the given value and run the specified function.
+
+This function can be used to implement migrations that
+require business applications to be stopped.
+""".
 -spec at_lower_level(classy_node:run_level_atom(), fun(() -> Ret)) ->
         {ok, Ret} |
         {error | exit | throw, _Reason, _Stacktrace}.
@@ -242,13 +352,20 @@ at_lower_level(RunLevel, Fun) ->
 %% Misc.
 %%--------------------------------------------------------------------------------
 
-%% @doc Calculate the number of nodes required for the quorum:
-%%
-%% <itemize>
-%% <li>`Integer': any integer value</li>
-%% <li>`config': Return value of `classy.quorum' application environment variable</li>
-%% <li>`running': Quorum among the running sites, not less than `quorum(config)'</li>
-%% </itemize>
+-doc """
+Calculate the number of nodes required for the quorum:
+
+@itemize
+@item @code{Integer}:
+any integer value
+
+@item @code{config}:
+Return value of `classy.quorum' application environment variable
+
+@item @code{running}:
+Quorum among the running sites, not less than @code{quorum(config)}
+@end itemize
+""".
 -spec quorum(config | running | non_neg_integer()) -> pos_integer().
 quorum(N) when is_integer(N), N >= 0 ->
   N div 2 + 1;
@@ -256,10 +373,12 @@ quorum(config) ->
   max(1, application:get_env(classy, quorum, 1));
 quorum(running) ->
   max(
-    quorum(length(nodes(running))),
+    quorum(length(nodes(connected))),
     quorum(config)).
 
-%% @doc Calculate how many nodes can be down, while cluster still maintains quorum.
+-doc """
+Calculate how many nodes can be down while cluster still can maintain quorum.
+""".
 fault_tolerance(N) ->
   N - quorum(N).
 
@@ -267,35 +386,43 @@ fault_tolerance(N) ->
 %% Hooks
 %%--------------------------------------------------------------------------------
 
-%% @doc Register a hook that is executed when the node (not the site)
-%% starts. It is called before `the_site' and `the_cluster' are
-%% initialized and can be used to override the default cluster and
-%% site initialization logic.
+-doc """
+Register a hook that is executed when the node (not the site) starts.
+
+It is called before @ref{classy_node:the_site/0} and @code{classy_node:the_cluster/0}
+are initialized,
+and can be used to override the default cluster and site initialization logic.
+""".
 -spec on_node_init(fun(() -> _), classy_hook:prio()) -> classy_hook:hook().
 on_node_init(Hook, Prio) ->
   classy_hook:insert(?on_node_init, Hook, Prio).
 
-%% @doc This callback is called once per cluster by the site that
-%% originally creates the cluster.
+-doc """
+This callback is executed once per cluster by the site that originally creates the cluster.
+""".
 -spec on_create_cluster(fun((cluster_id(), Local) -> _), classy_hook:prio()) ->
         classy_hook:hook()
   when Local :: site().
 on_create_cluster(Hook, Prio) ->
   classy_hook:insert(?on_create_cluster, Hook, Prio).
 
-%% @doc This callback is called once per site.
+-doc """
+This callback is called once per site.
+""".
 -spec on_create_site(fun((site()) -> _), classy_hook:prio()) -> classy_hook:hook().
 on_create_site(Hook, Prio) ->
   classy_hook:insert(?on_create_site, Hook, Prio).
 
-%% @doc Register a hook that is executed when a site changes
-%% status from connected (`true') to disconnected (`false') and vice versa.
-%%
-%% Note: this hook runs in the classy main process.
-%% Hence it should avoid blocking it.
-%%
-%% Note: status change to `false' it not indicative of the remote node
-%% being actually down. This can happen during a network partition.
+-doc """
+Register a hook that is executed when a site changes
+status from connected (@code{true}) to disconnected (@code{false}) and vice versa.
+
+Note: this hook runs in the classy main process.
+Hence it should avoid blocking it.
+
+WARNING: status change to @code{false} it not indicative of the remote site being actually down.
+This can happen during a network partition.
+""".
 -spec on_peer_connection_status_change(Fun, classy_hook:prio()) -> classy_hook:hook()
    when Fun :: fun((cluster_id(), Local, Remote, node(), _IsConnected :: boolean()) -> _),
         Local :: site(),
@@ -303,14 +430,19 @@ on_create_site(Hook, Prio) ->
 on_peer_connection_status_change(Hook, Prio) ->
   classy_hook:insert(?on_peer_connection_status_change, Hook, Prio).
 
-%% @doc Register a hook that is executed when a site joins or leaves a cluster.
+-doc """
+Register a hook that is executed when a site joins or leaves a cluster.
+""".
 -spec on_membership_change(membership_change_hook(), classy_hook:prio()) -> classy_hook:hook().
 on_membership_change(Hook, Prio) ->
   classy_hook:insert(?on_membership_change, Hook, Prio).
 
-%% @doc Register a hook that is executed before the local node joins a
-%% remote site and/or cluster. WARNING: this hook should not have side
-%% effects. It should only check if it is ok to join.
+-doc """
+Register a hook that is executed before the local node joins a different cluster.
+
+WARNING: this hook should not have side effects.
+It should only check if it is ok to join.
+""".
 -spec pre_join(
         fun((cluster_id(), Remote, node(), join_intent()) -> ok | {error, _}),
         classy_hook:prio()
@@ -319,8 +451,12 @@ on_membership_change(Hook, Prio) ->
 pre_join(Hook, Prio) ->
   classy_hook:insert(?on_pre_join, Hook, Prio).
 
-%% @doc Register a hook that is executed after the local site joins a
-%% cluster.
+-doc """
+Register a hook that is executed after the local site joins a cluster.
+
+It is guaranteed to be called @emph{at least} once,
+and must be idempotent.
+""".
 -spec post_join(
         fun((cluster_id(), Local, JoinedTo) -> _),
         classy_hook:prio()
@@ -330,11 +466,12 @@ pre_join(Hook, Prio) ->
 post_join(Hook, Prio) ->
   classy_hook:insert(?on_post_join, Hook, Prio).
 
-%% @doc Register a hook that verifies whether or not a site can be
-%% kicked from the cluster. This hook runs on the node that initiates
-%% the kick.
-%%
-%% WARNING: this hook cannot have side effects.
+-doc """
+Register a hook that verifies whether or not a site can be kicked from the cluster.
+This hook runs on the node that initiates the kick.
+
+WARNING: this hook cannot have side effects.
+""".
 -spec pre_kick(
         fun((cluster_id(), Remote, kick_intent()) -> ok | {error, _}),
         classy_hook:prio()
@@ -343,9 +480,10 @@ post_join(Hook, Prio) ->
 pre_kick(Hook, Prio) ->
   classy_hook:insert(?on_pre_kick, Hook, Prio).
 
-%% @doc Register a hook that is executed after the local site leaves a
-%% cluster. This hook can perform destructive actions associated with
-%% cleanup.
+-doc """
+Register a hook that is executed after the local site leaves a cluster.
+This hook can perform destructive actions associated with cleanup.
+""".
 -spec post_kick(
         fun((OldCluster, Local, kick_intent()) -> _),
         classy_hook:prio()
@@ -355,10 +493,11 @@ pre_kick(Hook, Prio) ->
 post_kick(Hook, Prio) ->
   classy_hook:insert(?on_post_kick, Hook, Prio).
 
-%% @doc Register a hook that runs before autoclean finalizes the
-%% decision to kick a down site.
-%%
-%% WARNING: this hook cannot have side effects.
+-doc """
+Register a hook that runs before autoclean finalizes the decision to kick a down site.
+
+WARNING: this hook cannot have side effects.
+""".
 -spec pre_autoclean(
         fun((Remote) -> ok | {error, _}),
         classy_hook:prio()
@@ -367,10 +506,12 @@ post_kick(Hook, Prio) ->
 pre_autoclean(Hook, Prio) ->
   classy_hook:insert(?on_pre_autoclean, Hook, Prio).
 
-%% @doc Register a hook that filters and ranks nodes for autocluster.
-%% It allows the business code to pick the most appropriate cluster for automatic join.
-%%
-%% WARNING: this hook cannot have side effects.
+-doc """
+Register a hook that filters and ranks nodes for autocluster.
+It allows the business code to pick the most appropriate cluster for automatic join.
+
+WARNING: this hook cannot have side effects.
+""".
 -spec pre_autocluster(
         fun((cluster_info(), Discovered) -> Discovered),
         classy_hook:prio()
@@ -379,8 +520,9 @@ pre_autoclean(Hook, Prio) ->
 pre_autocluster(Hook, Prio) ->
   classy_hook:insert(?on_pre_autocluster, Hook, Prio).
 
-%% @doc Register a hook that is executed on change of the run level of
-%% the local site.
+-doc """
+Register a hook that is executed on change of the run level of the local site.
+""".
 -spec run_level(
         fun((run_level(), run_level()) -> _),
         classy_hook:prio()
@@ -388,7 +530,9 @@ pre_autocluster(Hook, Prio) ->
 run_level(Hook, Prio) ->
   classy_hook:insert(?on_change_run_level, Hook, Prio).
 
-%% @doc Register a hook that can add entries to the map returned by `info/0'.
+-doc """
+Register a hook that can add entries to the map returned by @ref{classy:info/0}.
+""".
 -spec enrich_site_info(
         fun((info()) -> info()),
         classy_hook:prio()

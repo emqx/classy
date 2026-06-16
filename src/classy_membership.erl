@@ -2,11 +2,13 @@
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
 
-%% @doc Cluster Membership CRDT
-%%
-%% This module provides a low-level API for maintaining and updating cluster membership information.
-%% Business code should not use it directly.
 -module(classy_membership).
+-moduledoc """
+Cluster Membership CRDT.
+
+This module provides a low-level API for maintaining and updating cluster membership information.
+Business code should not use it directly.
+""".
 
 -behavior(gen_server).
 
@@ -66,10 +68,10 @@
 -record(host, {s :: classy:site() | atom()}).
 -type key() :: #mem{} | #host{}.
 
-%% Arbitrary term used to break ties between commands with the same logical timestamp.
+-doc "Arbitrary term used to break ties between commands with the same logical timestamp.".
 -type magic() :: term().
 
-%% The following command is used to update status of `target' site:
+%% The following command is used to update status of `target' site
 -record(op_set, {origin, k, c, m, val, owt, reserved}).
 
 -type op() ::
@@ -84,7 +86,7 @@
                , reserved :: term()
                }.
 
-%% Projection of `op()` fields used to establish total order of logs.
+-doc "Projection of `op()` fields used to establish total order of logs.".
 -type ord() :: {clock(), magic(), classy:site()}.
 
 %% `site' sends a portion of its logs that is newer than `since':
@@ -148,7 +150,7 @@
 %% API functions
 %%================================================================================
 
-%% @doc Return collection of clusters where site is or was peer.
+-doc "Return collection of clusters where site is or was peer.".
 -spec known_clusters(classy:site()) -> #{classy:cluster_id() => [classy:site()]}.
 known_clusters(Site) ->
   ets:foldl(
@@ -167,13 +169,15 @@ known_clusters(Site) ->
     #{},
     ?ptab).
 
-%% @doc Low-level call that sets `Target''s membership state to `true'.
-%%
-%% WARNING: this function does not check if target site exists and/or is part of cluster.
-%% When called with invalid `Target',
-%% it will create a new entry that will eventually make its way to the entire cluster.
-%% This fictitious site will become a member until kicked,
-%% and even then some records about it may be kept around.
+-doc """
+Low-level call that sets @code{Target}'s membership state to @code{true}.
+
+WARNING: this function does not check if target site exists and/or is part of cluster.
+When called with invalid @code{Target},
+it will create a new entry that will eventually make its way to the entire cluster.
+This fictitious site will become a member until kicked,
+and even then some records about it may be kept around.
+""".
 -spec set_member(classy:cluster_id(), classy:site(), classy:site(), boolean()) -> ok | {error, _}.
 set_member(Cluster, Local, Target, IsMember) when is_boolean(IsMember) ->
   try
@@ -185,12 +189,14 @@ set_member(Cluster, Local, Target, IsMember) when is_boolean(IsMember) ->
     EC:Err -> {error, {EC, Err}}
   end.
 
-%% @doc Return active members of the `Cluster`,
-%% as perceived by `Local` site.
-%%
-%% WARNING: if `Local` is not a member of the returned list,
-%% then the local system may be permanently out of sync with the `Cluster` or `{Cluster,Local}` server may be inactive.
-%% In both cases the result value can't be trusted.
+-doc """
+Return active members of the @code{Cluster},
+as perceived by @code{Local} site.
+
+WARNING: if @code{Local} is not a member of the returned list,
+then the local system may be permanently out of sync with the @code{Cluster} or @code{@{Cluster,Local@}} server may be inactive.
+In both cases the result value can't be trusted.
+""".
 -spec members(classy:cluster_id(), classy:site()) -> [classy:site()].
 members(Cluster, Local) ->
   MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, k = #mem{s = '$1', _ = '_'}, _ = '_'}
@@ -202,7 +208,7 @@ members(Cluster, Local) ->
        },
   ets:select(?ptab, [MS]).
 
-%% @doc List local sites and clusters.
+-doc "List local sites and clusters.".
 -spec list_local_sites(running | all) -> [{classy:cluster_id(), classy:site()}].
 list_local_sites(running) ->
   MS = {{?name('$1', '$2'), '_', '_'}, [], [{{'$1', '$2'}}]},
@@ -217,22 +223,28 @@ list_local_sites(all) ->
        },
   ets:select(?ptab, [MS]).
 
-%% @doc Return mapping of nodes to sites.
-%%
-%% WARNING: it includes kicked members.
+-doc """
+Return mapping of nodes to sites.
+
+WARNING: it includes kicked members.
+""".
 -spec site_of_node(classy:cluster_id(), classy:site()) -> #{node() => classy:site()}.
 site_of_node(Cluster, Local) ->
   maps:from_list(select_nodes(Cluster, Local, {{'$2', '$1'}})).
 
-%% @doc Return mapping of sites to nodes.
-%%
-%% WARNING: it includes kicked members.
+-doc """
+Return mapping of sites to nodes.
+
+WARNING: it includes kicked members.
+""".
 -spec node_of_site(classy:cluster_id(), classy:site()) -> #{classy:site() => node()}.
 node_of_site(Cluster, Local) ->
   maps:from_list(select_nodes(Cluster, Local, {{'$1', '$2'}})).
 
-%% @doc Delete sites that have been kicked for longer than
-%% `ForgetAfter' from the local state.
+-doc """
+Delete sites that have been kicked for longer than
+@code{ForgetAfter} seconds ago the local state.
+""".
 -spec cleanup(classy:cluster_id(), classy:site(), pos_integer()) -> ok.
 cleanup(Cluster, Local, ForgetAfter) ->
   gen_server:call(
@@ -240,7 +252,7 @@ cleanup(Cluster, Local, ForgetAfter) ->
     #call_cleanup{forget_after = ForgetAfter},
     ?call_timeout).
 
-%% @doc Force sending of events and execution of hooks.
+-doc "Force sending of events and execution of hooks.".
 -spec flush(classy:cluster_id(), classy:site()) -> ok.
 flush(Cluster, Local) ->
   gen_server:call(
@@ -248,7 +260,7 @@ flush(Cluster, Local) ->
     #call_flush{},
     ?call_timeout).
 
-%% @doc Format full state of the membership CRDT in human-readable form for tests and debugging.
+-doc "Format full state of the membership CRDT in human-readable form for tests and debugging.".
 -spec dump() -> #{{classy:cluster_id(), classy:site()} => map()}.
 dump() ->
   ets:foldl(
@@ -311,7 +323,7 @@ reset_acked_out(Cluster, Local, Remote, Clock) ->
 %% Internal exports
 %%================================================================================
 
-%% @private
+-doc false.
 -spec start_link(classy:cluster_id(), classy:site()) -> {ok, pid()}.
 start_link(Cluster, Local) ->
   Args = #{cluster => Cluster, site => Local},
@@ -332,7 +344,7 @@ call_sync(Cluster, Site, SyncData) ->
        }),
   gen_server:call(?via(Cluster, Site), SyncData, ?call_timeout).
 
-%% @doc Get membership data
+-doc "Get membership data".
 -spec get_data(classy:cluster_id(), classy:site(), clock(), clock()) -> {ok, sync_data()} | {error, _}.
 get_data(Cluster, Local, Since, Acked) ->
   try
@@ -349,7 +361,7 @@ get_data(Cluster, Local, Since, Acked) ->
 %% behavior callbacks
 %%================================================================================
 
-%% @private
+-doc false.
 -spec init(start_args()) -> {ok, #s{}}.
 init(#{cluster := Cluster, site := Site}) when is_binary(Site), is_binary(Cluster) ->
   process_flag(trap_exit, true),
@@ -383,7 +395,7 @@ init(#{cluster := Cluster, site := Site}) when is_binary(Site), is_binary(Cluste
         S1),
   {ok, need_sync(0, S)}.
 
-%% @private
+-doc false.
 handle_call(#call_set{} = CMD, _From, S0) ->
   S = local_command(CMD, S0),
   {reply, ok, S};
@@ -408,7 +420,7 @@ handle_call(Call, From, S) ->
        }),
   {reply, {error, unknown_call}, S}.
 
-%% @private
+-doc false.
 handle_cast(#cast_sync{} = Req, S0) ->
   S = handle_sync_in(Req, S0),
   {noreply, S};
@@ -420,7 +432,7 @@ handle_cast(Cast, S) ->
        }),
   {noreply, S}.
 
-%% @private
+-doc false.
 handle_info({'EXIT', _, shutdown}, S) ->
   {stop, shutdown, S};
 handle_info(#to_sync_out{}, S0) ->
@@ -434,7 +446,7 @@ handle_info(Info, S) ->
        }),
   {noreply, S}.
 
-%% @private
+-doc false.
 terminate(Reason, #s{cluster = Cluster, site = Site}) ->
   classy_lib:is_normal_exit(Reason) orelse
     ?tp(warning, ?classy_abnormal_exit,
@@ -462,18 +474,20 @@ handle_flush(S0) ->
   run_hooks(S),
   S.
 
-%% @doc Total order of the operation.
-%%
-%% Note that this total order is *not* strictly causal,
-%% because Lamport clocks don't provide such guarantee.
-%%
-%% Practically, lack of strict causality means the cluster will eventually converge to the same state,
-%% but earlier join/leave commands may override later commands.
-%%
-%% These adverse side effects can be observed when conflicting commands are issued on different nodes faster than the nodes sync with each other.
-%% This is most likely to happen during a network partition.
-%%
-%% Please see `theories/classy.v` for more details and some intricate requirements for `ord' function.
+-doc """
+Total order of the operation.
+
+Note that this total order is @b{not} strictly causal,
+because Lamport clocks don't provide such guarantee.
+
+Practically, lack of strict causality means the cluster will eventually converge to the same state,
+but earlier join/leave commands may override later commands.
+
+These adverse side effects can be observed when conflicting commands are issued on different nodes faster than the nodes sync with each other.
+This is most likely to happen during a network partition.
+
+Please see theories/classy.v file for more details and some intricate requirements for this function.
+""".
 -spec ord(op()) -> ord().
 ord(#op_set{c = C, m = M, origin = O}) ->
   {C, M, O}.
@@ -705,16 +719,13 @@ select_nodes(Cluster, Local, Action) ->
        },
   ets:select(?ptab, [MS]).
 
-%% @private Find minimal Lamport clock, such that:
-%%
-%% <ul>
-%% <li>
-%% All hooks for the events preceding it are executed locally.
-%% </li>
-%% <li>
-%% All sites from the list have acked it.
-%% </li>
-%% </ul>
+-doc """
+Find minimal Lamport clock, such that:
+@itemize
+@item All hooks for the events preceding it are executed locally.
+@item All sites from the list have acked it.
+@end itemize
+""".
 -spec min_acked([classy:site()], #s{}) -> clock() | undefined.
 min_acked(Sites, S = #s{site = Local}) ->
   lists:foldl(

@@ -1,8 +1,8 @@
 -include("anvl.hrl").
 
 conf() ->
-  #{ plugins => [anvl_git, anvl_erlc, anvl_hex_pm, anvl_rebar3]
-   , conditions => [all, static_checks, compile]
+  #{ plugins => [anvl_git, anvl_erlc, anvl_hex_pm, anvl_rebar3, anvl_texinfo]
+   , conditions => [all, docs, static_checks, compile]
    , erlang =>
        #{ bdeps => [proper, familiar]
         , compile =>
@@ -31,10 +31,19 @@ conf() ->
             [ #{kind => otp_application, dir => "_checkouts/*"}
             ]
         }
+   , texinfo =>
+       #{ sources => ["doc/classy.texi"]
+        , formats => [html, info]
+        , compile =>
+            [#{ format => html
+              , options => ["-c", "INFO_JS_DIR=js"]
+              }
+            ]
+        }
    }.
 
 ?MEMO(all,
-      precondition(static_checks())).
+      precondition([static_checks(), docs()])).
 
 compile() ->
   anvl_erlc:app_compiled(default, classy).
@@ -44,3 +53,9 @@ compile() ->
         [ anvl_erlc_dialyzer:passed(default)
         , anvl_erlc_xref:passed(default)
         ])).
+
+?MEMO(docs,
+      begin
+        precondition(anvl_texinfo:erl_doc(default, classy)) or
+          precondition(anvl_texinfo:compiled(anvl_project:root()))
+      end).

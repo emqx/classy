@@ -59,7 +59,7 @@ init([]) ->
      , restart  => permanent
      , type     => worker
      },
-  ETCD = case classy_lib:discovery_strategy() of
+  ETCD = case classy_discovery_strategy:get() of
            {etcd, Options} ->
              case proplists:get_value(version, Options, v3) of
                v3 ->

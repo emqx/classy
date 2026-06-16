@@ -74,7 +74,6 @@
 
 -export_type([ id/0
              , tag/0
-             , mfargs/0
              , strategy/0
              , actions/0
              , options/0
@@ -101,7 +100,7 @@
 %% Type declarations
 %%================================================================================
 
--type mfargs() :: {module(), atom(), list()}.
+
 %% Lock tag associated with the operation.
 %% It allows business logic to quickly enumerate ongoing votes of certain kind.
 -type tag() :: term().
@@ -114,18 +113,18 @@
 -type strategy() :: {all, timeout()}.
 
 -type actions() ::
-        #{ prepare   := mfargs()
-         , commit    := [mfargs()]
-         , rollback  => mfargs()
+        #{ prepare   := classy_lib:mfargs()
+         , commit    := [classy_lib:mfargs()]
+         , rollback  => classy_lib:mfargs()
          }.
 
 %% Warning: MFA's are persistently stored!
 -type options() ::
         #{ tag       := tag()
          , actions   := #{classy:site() => actions()}
-         , post_vote => mfargs()
+         , post_vote => classy_lib:mfargs()
          , strategy  => strategy()
-         , on_fail   => mfargs()
+         , on_fail   => classy_lib:mfargs()
          }.
 
 -type vote() :: #c_vote{}.
@@ -191,7 +190,7 @@ create(UserOptions) ->
 %% Internal exports
 %%================================================================================
 
-%% @private
+-doc false.
 -spec create_table() -> ok.
 create_table() ->
   classy_table:open(
@@ -199,19 +198,19 @@ create_table() ->
     #{ ets_options => [ordered_set, {read_concurrency, true}]
      }).
 
-%% @private
+-doc false.
 verify_prepare(Prepare) ->
   verify_mfa(bad_prepare, 1, Prepare).
 
-%% @private
+-doc false.
 verify_commit(Commit) ->
   verify_mfas(bad_commit, Commit).
 
-%% @private
+-doc false.
 verify_rollback(Rollback) ->
   verify_mfas(bad_rollback, Rollback).
 
-%% @private
+-doc false.
 verify_mfas(Reason, Commits) when is_list(Commits) ->
   try
     [case verify_mfa(Reason, 0, I) of
@@ -227,7 +226,7 @@ verify_mfas(Reason, Commits) when is_list(Commits) ->
 verify_mfas(Reason, Other) ->
   {error, {Reason, Other}}.
 
-%% @private
+-doc false.
 -spec verify_mfa(atom(), non_neg_integer(), term()) -> ok | {error, {atom(), term()}}.
 verify_mfa(Subject, NExtraArgs, {M, F, Args}) when is_atom(M),
                                                    is_atom(F),
@@ -241,12 +240,12 @@ verify_mfa(Subject, NExtraArgs, {M, F, Args}) when is_atom(M),
 verify_mfa(Subject, _, Other) ->
   {error, {Subject, Other}}.
 
-%% @private
+-doc false.
 retry_interval() ->
   application:get_env(classy, vote_retry_interval, 5_000).
 
-%% @private
--spec on_fail(fail_info(), [mfargs()]) -> ok.
+-doc false.
+-spec on_fail(fail_info(), [classy_lib:mfargs()]) -> ok.
 on_fail(FailInfo, Funs) ->
   lists:foreach(
     fun({M, F, Args}) ->
