@@ -20,10 +20,6 @@
 
 %% Cluster strategy callbacks.
 -export([ discover/1
-        , lock/1
-        , unlock/1
-        , register/1
-        , unregister/1
         ]).
 
 -export_type([opts/0]).
@@ -76,18 +72,6 @@ node_name(App, Addr, _Service, dns, Namespace, Suffix) when length(Suffix) > 0 -
 
 node_name(App, Addr, _, _, _, _) ->
   list_to_atom(App ++ "@" ++ binary_to_list(Addr)).
-
-lock(_Options) ->
-  ok.
-
-unlock(_Options) ->
-  ok.
-
-register(_Options) ->
-  ok.
-
-unregister(_Options) ->
-  ok.
 
 %%--------------------------------------------------------------------
 %% Internal functions

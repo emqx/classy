@@ -20,10 +20,6 @@
 
 %% Cluster strategy callbacks
 -export([ discover/1
-        , lock/1
-        , unlock/1
-        , register/1
-        , unregister/1
         ]).
 
 -export_type([ opts/0
@@ -55,15 +51,3 @@ node_name(undefined, Host) ->
   node_name(classy_autocluster:app_name(), Host);
 node_name(NodeName, Host) ->
   list_to_atom(lists:concat([NodeName, "@", Host])).
-
-lock(_Options) ->
-  ok.
-
-unlock(_Options) ->
-  ok.
-
-register(_Options) ->
-  ok.
-
-unregister(_Options) ->
-  ok.

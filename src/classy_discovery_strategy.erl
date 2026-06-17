@@ -43,6 +43,8 @@ This module defines a behavior of discovery strategy.
 
 -callback unregister(options()) -> ok | ignore | {error, term()}.
 
+-optional_callbacks([lock/1, unlock/1, register/1, unregister/1]).
+
 %%================================================================================
 %% API functions
 %%================================================================================
@@ -65,22 +67,42 @@ discover(Mod, Options) ->
 -doc false.
 -spec lock(module(), options()) -> ok | ignore | {error, term()}.
 lock(Mod, Options) ->
-  safe_call(Mod, ?FUNCTION_NAME, Options).
+  case erlang:function_exported(Mod, ?FUNCTION_NAME, 1) of
+    true ->
+      safe_call(Mod, ?FUNCTION_NAME, Options);
+    false ->
+      ok
+  end.
 
 -doc false.
 -spec unlock(module(), options()) -> ok | ignore | {error, term()}.
 unlock(Mod, Options) ->
-  safe_call(Mod, ?FUNCTION_NAME, Options).
+  case erlang:function_exported(Mod, ?FUNCTION_NAME, 1) of
+    true ->
+      safe_call(Mod, ?FUNCTION_NAME, Options);
+    false ->
+      ok
+  end.
 
 -doc false.
 -spec register(module(), options()) -> ok | ignore | {error, term()}.
 register(Mod, Options) ->
-  safe_call(Mod, ?FUNCTION_NAME, Options).
+  case erlang:function_exported(Mod, ?FUNCTION_NAME, 1) of
+    true ->
+      safe_call(Mod, ?FUNCTION_NAME, Options);
+    false ->
+      ok
+  end.
 
 -doc false.
 -spec unregister(module(), options()) -> ok | ignore | {error, term()}.
 unregister(Mod, Options) ->
-  safe_call(Mod, ?FUNCTION_NAME, Options).
+  case erlang:function_exported(Mod, ?FUNCTION_NAME, 1) of
+    true ->
+      safe_call(Mod, ?FUNCTION_NAME, Options);
+    false ->
+      ok
+  end.
 
 %%================================================================================
 %% Internal functions

@@ -27,15 +27,3 @@ all() ->
 t_discover(_) ->
   Options = #{seeds => ['ekka@127.0.0.1']},
   {ok, ['ekka@127.0.0.1']} = classy_discovery_static:discover(Options).
-
-t_lock(_) ->
-  ok = classy_discovery_static:lock([]).
-
-t_unlock(_) ->
-  ok = classy_discovery_static:unlock([]).
-
-t_register(_) ->
-  ok = classy_discovery_static:register([]).
-
-t_unregister(_) ->
-  ok = classy_discovery_static:unregister([]).
