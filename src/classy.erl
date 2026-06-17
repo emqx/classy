@@ -81,7 +81,7 @@ Unique random persistent identifier of the site.
 
 -type peer_info() ::
         #{ node        := node() | undefined
-         , up          := boolean()
+         , connected   := boolean()
          , last_update := classy_lib:unix_time_s()
          }.
 
