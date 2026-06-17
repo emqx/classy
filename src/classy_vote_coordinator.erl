@@ -374,7 +374,7 @@ perform_post_commit(Outcome, [], D) ->
   ok = db_teardown(Outcome, D),
   {stop, normal};
 perform_post_commit(Outcome, [{M, F, Args} | Rest], D) ->
-  case classy_lib:safe_apply(M, F, [Outcome | Args]) of
+  case classy_lib:safe_apply(M, F, [Outcome, D#d.id | Args]) of
     {ok, _} ->
       perform_post_commit(Outcome, Rest, D);
     Err ->

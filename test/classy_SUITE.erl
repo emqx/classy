@@ -1676,22 +1676,31 @@ make_post_vote(Ref) ->
 make_vote_on_fail(Ref) ->
   {?MODULE, vote_on_fail, [Ref]}.
 
-vote_prepare(ForReal, HowToPreVote, HowToVote, Ref) ->
+vote_prepare(ForReal, Id, HowToPreVote, HowToVote, Ref) ->
   Result = case ForReal of
              true -> HowToVote;
              false -> HowToPreVote
            end,
-  ?tp(classy_test_vote_prep, #{ref => Ref, vote => Result, for_real => ForReal}),
+  ?tp(classy_test_vote_prep,
+      #{ ref => Ref
+       , vote => Result
+       , for_real => ForReal
+       , id => Id
+       }),
   Result.
 
-vote_commit(Step, Ref) ->
-  ?tp(classy_test_vote_commit, #{ref => Ref, step => Step}).
+vote_commit(Id, Step, Ref) ->
+  ?tp(classy_test_vote_commit,
+      #{ ref => Ref
+       , step => Step
+       , id => Id
+       }).
 
-vote_rollback(Ref) ->
-  ?tp(classy_test_vote_rollback, #{ref => Ref}).
+vote_rollback(Id, Ref) ->
+  ?tp(classy_test_vote_rollback, #{ref => Ref, id => Id}).
 
-post_vote(Result, Ref) ->
-  ?tp(classy_test_post_vote, #{ref => Ref, result => Result}).
+post_vote(Result, Id, Ref) ->
+  ?tp(classy_test_post_vote, #{ref => Ref, result => Result, id => Id}).
 
 vote_on_fail(FailInfo, Ref) ->
   ?tp(classy_test_vote_on_fail, FailInfo#{test_ref => Ref}).

@@ -66,7 +66,7 @@
         , verify_prepare/1
         , verify_commit/1
         , verify_rollback/1
-        , verify_mfas/2
+        , verify_mfas/3
         , verify_mfa/3
         , retry_interval/0
         , on_fail/2
@@ -200,30 +200,30 @@ create_table() ->
 
 -doc false.
 verify_prepare(Prepare) ->
-  verify_mfa(bad_prepare, 1, Prepare).
+  verify_mfa(bad_prepare, 2, Prepare).
 
 -doc false.
 verify_commit(Commit) ->
-  verify_mfas(bad_commit, Commit).
+  verify_mfas(bad_commit, 1, Commit).
 
 -doc false.
 verify_rollback(Rollback) ->
-  verify_mfas(bad_rollback, Rollback).
+  verify_mfas(bad_rollback, 1, Rollback).
 
 -doc false.
-verify_mfas(Reason, Commits) when is_list(Commits) ->
+verify_mfas(Reason, NExtraArgs, L) when is_list(L) ->
   try
-    [case verify_mfa(Reason, 0, I) of
+    [case verify_mfa(Reason, NExtraArgs, I) of
        ok ->
          ok;
        Err ->
          throw(Err)
-     end || I <- Commits],
+     end || I <- L],
     ok
   catch
     Err -> Err
   end;
-verify_mfas(Reason, Other) ->
+verify_mfas(Reason, _, Other) ->
   {error, {Reason, Other}}.
 
 -doc false.
@@ -288,7 +288,7 @@ with_defaults(UserOpts) when is_map(UserOpts) ->
 
 verify_post_vote(#{post_vote := PostVote}) ->
   maybe
-    ok = verify_mfa(bad_post_vote, 1, PostVote),
+    ok = verify_mfa(bad_post_vote, 2, PostVote),
     {ok, [PostVote]}
   end;
 verify_post_vote(#{}) ->
