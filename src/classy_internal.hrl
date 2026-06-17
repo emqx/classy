@@ -63,7 +63,13 @@
 
 %% Site information:
 -define(site_info, classy_site_status_tab).
--record(site_info, {isconn, node, last_update}).
+-record(site_info,
+        { isconn
+        , liveness
+        , node
+        , last_update
+        , reserved = []
+        }).
 %%    Number of restarts since creation of the site
 -define(n_restarts, n_restarts).
 
