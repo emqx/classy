@@ -154,7 +154,7 @@ Per-participant set of commit actions.
 -type actions() ::
         #{ prepare   := classy_lib:mfargs()
          , commit    := [classy_lib:mfargs()]
-         , rollback  => classy_lib:mfargs()
+         , rollback  => [classy_lib:mfargs()]
          }.
 
 -doc """
@@ -190,7 +190,7 @@ Common vote options.
 
 @item on_fail
   Executed on both coordinator and participant if commit / rollback / post_commit actions fail.
-  This callback may be used signal failures to the business logic.
+  This callback may be used to signal failures to the business logic.
   Classy prepends an argument of type @ref{t:classy_vote:fail_info/0} to the user-specified argument list.
 @end table
 """.
