@@ -106,6 +106,14 @@ The document was typeset with
     Site is fully connected and operational.
   @end enumerate
 
+  Unless the node is stopped abruptly
+  (@code{erlang:halt}, @code{kill}, power loss),
+  run levels always advance and retard in sequence.
+
+  Business applications can track the run level via @ref{classy:run_level/2} hook.
+  This hook can, for example,
+  activate or deactivate some business applications.
+
   @node Network Partition
   @section Network Partitions
 
