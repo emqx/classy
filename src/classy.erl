@@ -30,7 +30,7 @@ This MFA can contain calls to various @code{classy:on_...} functions.
 -export([ on_node_init/2
         , on_create_cluster/2
         , on_create_site/2
-        , on_peer_connection_status_change/2
+        , on_peer_connection_change/2
         , on_membership_change/2
         , pre_join/2
         , post_join/2
@@ -406,11 +406,11 @@ Hence it should avoid blocking it.
 WARNING: status change to @code{false} is not indicative of the remote site being actually down.
 This can happen during a network partition.
 """.
--spec on_peer_connection_status_change(Fun, classy_hook:prio()) -> classy_hook:hook()
+-spec on_peer_connection_change(Fun, classy_hook:prio()) -> classy_hook:hook()
    when Fun :: fun((cluster_id(), Local, Remote, node(), _IsConnected :: boolean()) -> _),
         Local :: site(),
         Remote :: site().
-on_peer_connection_status_change(Hook, Prio) ->
+on_peer_connection_change(Hook, Prio) ->
   classy_hook:insert(?on_peer_connection_status_change, Hook, Prio).
 
 -doc """

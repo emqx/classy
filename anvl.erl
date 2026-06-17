@@ -1,7 +1,7 @@
 -include("anvl.hrl").
 
 conf() ->
-  #{ plugins => [anvl_git, anvl_erlc, anvl_hex_pm, anvl_rebar3, anvl_texinfo]
+  #{ plugins => [anvl_git, anvl_hex_pm, anvl_rebar3, anvl_erlc, anvl_texinfo]
    , conditions => [all, docs, static_checks, compile]
    , erlang =>
        #{ bdeps => [proper, familiar]
