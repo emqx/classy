@@ -208,7 +208,13 @@ terminate(Reason, State, _Data) ->
 %% Internal functions
 %%================================================================================
 
-do_receive_outcome(From, #c_outcome{result = Result}, D0 = #d{vote = MyVote}) ->
+do_receive_outcome(From, #c_outcome{result = Result}, D0 = #d{vote = MyVote, prep = Prep}) ->
+  {ok, Self} = classy_node:the_site(),
+  ?tp(debug, ?classy_vote_part_recv_outcome,
+      #{ outcome => Result
+       , id => Prep#prepare.id
+       , site => Self
+       }),
   NextStage = case Result of
                 true -> ?s_commit;
                 false -> ?s_rollback
@@ -255,14 +261,14 @@ perform_rollback(D = #d{completed_actions = CA, prep = Prep}) ->
 perform_actions(_, [], D) ->
   db_teardown(D),
   {stop, normal, D};
-perform_actions(Stage, [MFA | Rest], D0 = #d{completed_actions = CA, vote = Vote, prep = Prep}) ->
+perform_actions(Stage, [{Mod, Fun, Args} | Rest], D0 = #d{completed_actions = CA, vote = Vote, prep = Prep}) ->
   #prepare{id = ID, tag = Tag, on_fail = OnFail} = Prep,
   ?tp(debug, ?classy_vote_part_perform_action,
       #{ id => ID
        , stage => Stage
        , action_ctr => CA
        }),
-  case classy_lib:safe_apply(MFA) of
+  case classy_lib:safe_apply({Mod, Fun, [ID | Args]}) of
     {ok, _} ->
       {ok, D} = db_update(Stage, Vote, CA + 1, D0),
       perform_actions(Stage, Rest, D);
@@ -296,7 +302,8 @@ do_real_vote(#d{prep = Prep} = D0) ->
 
 -spec do_prepare(#prepare{}, boolean()) -> {ok, boolean()} | {error, _}.
 do_prepare(
-  #prepare{ prepare     = Prep
+  #prepare{ id          = ID
+          , prepare     = Prep
           , commit      = Commit
           , rollback    = Rollback
           , coordinator = Coordinator
@@ -309,7 +316,7 @@ do_prepare(
     ok ?= classy_vote:verify_rollback(Rollback),
     ok ?= verify_coordinator(Coordinator),
     {M, F, Args} = Prep,
-    {ok, Vote} ?= classy_lib:safe_apply(M, F, [ForReal | Args]),
+    {ok, Vote} ?= classy_lib:safe_apply(M, F, [ForReal, ID | Args]),
     true ?= is_boolean(Vote) orelse {error, {bad_result, Vote}},
     {ok, Vote}
   end.
@@ -347,7 +354,8 @@ db_establish(Stage, Vote, CompletedActions, Prep) ->
                  [ {w, DataKey, Prep}
                  , {w, StateKey, State}
                  ]),
-    ?tp(debug, ?classy_vote_part_established, #{id => ID, tag => Tag}),
+    {ok, Site} = classy_node:the_site(),
+    ?tp(debug, ?classy_vote_part_established, #{id => ID, tag => Tag, site => Site}),
     {ok, #d{ prep = Prep
            , vote = Vote
            , completed_actions = CompletedActions

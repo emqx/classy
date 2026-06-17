@@ -2,57 +2,62 @@
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
 
-%% @doc This module implements a variation of 2-phase commit.
-%%
-%% Note: vote is rather heavy operation.
-%% Do not use it when frequent coordination is needed.
-%%
-%% Each voting action uses the following following callbacks:
-%%
-%% <itemize>
-%% <li>
-%% <b>prepare</b>: Executed on the participant sites.
-%% Classy prepends an additional argument indicating whether the prepare action can have side effects.
-%% Return value is a boolean indicating the participant's vote (`true' = `yes').
-%% </li>
-%%
-%% <li>
-%% <b>commit</b>: List of actions executed on the participant sites
-%% when the coordinator decides to go ahead with the commit.
-%% Classy doesn't add additional arguments.
-%% Return value is ignored.
-%%
-%% Un-executed or failed actions are retried after node restart.
-%% </li>
-%%
-%% <li>
-%% <b>rollback</b>: Executed on the participant sites
-%% when the coordinator decides to abort the commit.
-%% Classy doesn't add additional arguments.
-%% Return value is ignored.
-%% This callback can be retried on node restart.
-%% </li>
-%%
-%% <li>
-%% <b>post_vote</b>: Executed on the coordinator.
-%% Classy prepends a boolean indicating result of the vote to the argument list.
-%% Return value is ignored.
-%% It's NOT guaranteed that all commit actions on the participants are finished by this time.
-%% This callback can be retried on node restart.
-%% </li>
-%%
-%% <li>
-%% <b>on_fail</b>: Executed on both coordinator and participant if commit / rollback / post_commit actions fail.
-%% This callback may be used signal failures to the business logic.
-%% Classy prepends an argument of type `fail_info'.
-%% </li>
-%% </itemize>
-%%
-%% WARNING: when `commit', `rollback' or `post_vote' actions fail,
-%% coordinator or participant processes stop, but pending commit action will linger in the DB.
-%% Classy will <b>not</b> attempt to recover the action until the next node restart.
-%% Recovery of failed commit or rollback actions is left to the API consumers.
 -module(classy_vote).
+-moduledoc """
+This module implements a variation of 2-phase commit.
+
+Important to note:
+
+@enumerate
+@item All callbacks involved in the operations are persistently stored.
+  Certain callbacks may be retried after a node restart.
+  Hence, user must make sure that functions involved in the commit are not removed during upgrade.
+
+@item Vote is rather heavy operation.
+  Do not use it when frequent coordination is needed.
+
+@item Commit flows may hang for an unlimited time if the coordinator node fails
+during the decision stage.
+@end enumerate
+
+@section Error Handling
+
+This API uses both synchronous and asynchronous methods of status and error reporting.
+Both methods must be handled in all cases.
+Note: when @link{classy_vote:create/1,create/1} API returns @code{@{ok, _@}},
+it doesn't mean the commit has been completed.
+
+@enumerate
+@item
+If this function returns an error tuple,
+it means the commit followed a "fast abort" path.
+"Fast abort" path is synchronous,
+and it implies that no persistent changes have been made to the involved sites
+(participant and coordinator).
+
+@item
+When the function returns @code{@{ok, _@}},
+it means commit flow entered "persistent" path.
+Persistent path continues even after restart of any involved site.
+Because of that, it uses asynchronous method of status reporting
+via callbacks passed in the options.
+
+The coordinator is notified of the outcome via @code{post_vote} callback.
+
+The participants are notified via their respective @code{commit} or @code{rollback} callbacks.
+
+@item
+Additionally,
+if @code{post_vote}, @code{commit} or @code{rollback} callbacks throw an exception,
+@code{on_fail} callback gets involved.
+
+Such mechanism is used because classy doesn't automatically retry any actions that failed on the persistent path:
+there is a high risk that these actions will just keep failing repeatedly.
+Instead, they are abandoned until the next node restart.
+@code{on_fail} callback provides a mechanism to signal such failures back to the business logic.
+
+@end enumerate
+""".
 
 %% API:
 -export([ create/1
@@ -66,7 +71,7 @@
         , verify_prepare/1
         , verify_commit/1
         , verify_rollback/1
-        , verify_mfas/2
+        , verify_mfas/3
         , verify_mfa/3
         , retry_interval/0
         , on_fail/2
@@ -92,7 +97,7 @@
 -export([ test_wait_conclude/1
         , trace_props/0
         , prop_every_vote_concludes/1
-        , prop_coord_receives_votes/1
+        , prop_every_participant_receives_outcome/1
         ]).
 -endif.
 
@@ -101,24 +106,94 @@
 %%================================================================================
 
 
-%% Lock tag associated with the operation.
-%% It allows business logic to quickly enumerate ongoing votes of certain kind.
+-doc """
+Arbitrary tag associated with the operation.
+It allows business logic to quickly enumerate ongoing votes of certain kind.
+""".
 -type tag() :: term().
-%% Unique ID of the vote.
+
+-doc "Unique ID of the vote.".
 -type id() :: classy_uid:cu_tuple().
 
-%% Strategy used to decide when to commit
-%%
-%% `all': All participant must vote `true' within the timeout
+-doc """
+Strategy used to decide whether to commit.
+
+@code{all}: All participant must vote yes within the timeout.
+""".
 -type strategy() :: {all, timeout()}.
 
+-doc """
+Per-participant set of commit actions.
+
+@table @code
+@item prepare
+  Callback that lets the participant decide whether to commit.
+
+  Classy prepends two additional values to the user-specified argument list:
+  @enumerate
+    @item A boolean indicating whether the prepare action can have side effects.
+    It is set to @code{false} during pre-commit fast abort check
+    and to @code{true} during the persistent flow.
+
+    @item ID of the vote.
+  @end enumerate
+
+  The return value is a boolean indicating the participant's vote (@code{true} means ``yes'').
+
+@item commit
+  List of actions executed on the sites if the coordinator decides to go ahead with the commit.
+  Classy prepends vote ID to the user-specified argument list.
+  Return value is ignored.
+
+@item rollback
+  Action executed on the participant when the coordinator decides to abort the commit.
+  Classy prepends vote ID to the user-specified argument list.
+  Return value is ignored.
+@end table
+""".
 -type actions() ::
         #{ prepare   := classy_lib:mfargs()
          , commit    := [classy_lib:mfargs()]
-         , rollback  => classy_lib:mfargs()
+         , rollback  => [classy_lib:mfargs()]
          }.
 
-%% Warning: MFA's are persistently stored!
+-doc """
+Common vote options.
+
+@table @code
+@item tag
+  An arbitrary tag identifying the commit action.
+  Ongoing commit actions can be efficiently filtered by the tag.
+
+@item actions
+  A map from @link{t:classy:site/0,site ID} to per-site @ref{t:classy_vote:actions/0, commit actions}.
+  Each site in the map becomes a vote participant.
+  Participants' actions may be non-uniform.
+
+@item post_vote
+  Callback that is executed on the coordinator after the decision is made.
+  Classy prepends two arguments to the user-specified argument list:
+
+  @enumerate
+  @item A boolean indicating the decision
+  @item Vote ID
+  @end enumerate
+
+  The return value is ignored.
+
+  Note: it's NOT guaranteed that all commit actions on the participants are finished
+  by the time when @code{post_vote} is called.
+  This callback can be retried on node restart.
+
+@item strategy
+  @xref{t:classy_vote:strategy/0,strategy()}.
+
+@item on_fail
+  Executed on both coordinator and participant if commit / rollback / post_commit actions fail.
+  This callback may be used to signal failures to the business logic.
+  Classy prepends an argument of type @ref{t:classy_vote:fail_info/0} to the user-specified argument list.
+@end table
+""".
 -type options() ::
         #{ tag       := tag()
          , actions   := #{classy:site() => actions()}
@@ -148,14 +223,18 @@
 %% API functions
 %%================================================================================
 
-%% @doc List all ongoing commit actions.
+-doc """
+@xref{classy_vote:ls_votes/1}. No filtering.
+""".
 -spec ls_votes() -> [vote_info()].
 ls_votes() ->
   ls_votes('_').
 
-%% @doc List ongoing commit actions.
-%%
-%% Argument: match specification for the tag.
+-doc """
+List all ongoing 2PC flows where the local site is either a coordinator or a participant.
+
+The argument is an ETS match expression that allows to filter on the tag.
+""".
 -spec ls_votes(_TagMatch) -> [vote_info()].
 ls_votes(TagMatch) ->
   fold_ongoing(
@@ -163,9 +242,17 @@ ls_votes(TagMatch) ->
     [],
     TagMatch).
 
-%% @doc Fold over ongoing commit actions.
-%%
-%% Argument: match specification for the tag.
+-doc """
+Fold over ongoing 2PC flows where the local site is either a coordinator or a participant.
+
+Arguments:
+
+@enumerate
+@item Fold function
+@item Initial accumulator
+@item ETS match expression for filtering the tag
+@end enumerate
+""".
 -spec fold_ongoing(fun((vote_info(), Acc) -> Acc), Acc, _TagMatchPattern) -> Acc.
 fold_ongoing(Fun, Acc0, TagMatch) ->
   classy_vote_participant:fold_ongoing(
@@ -173,9 +260,9 @@ fold_ongoing(Fun, Acc0, TagMatch) ->
     classy_vote_coordinator:fold_ongoing(Fun, Acc0, TagMatch),
     TagMatch).
 
-%% @doc Initiate a new vote.
-%%
-%% Note: This function returns immediately.
+-doc """
+Initiate a new vote, @pxref{t:classy_vote:options/0,options/0}.
+""".
 -spec create(options()) -> {ok, classy_vote:id()} | {error, _}.
 create(UserOptions) ->
   maybe
@@ -200,30 +287,30 @@ create_table() ->
 
 -doc false.
 verify_prepare(Prepare) ->
-  verify_mfa(bad_prepare, 1, Prepare).
+  verify_mfa(bad_prepare, 2, Prepare).
 
 -doc false.
 verify_commit(Commit) ->
-  verify_mfas(bad_commit, Commit).
+  verify_mfas(bad_commit, 1, Commit).
 
 -doc false.
 verify_rollback(Rollback) ->
-  verify_mfas(bad_rollback, Rollback).
+  verify_mfas(bad_rollback, 1, Rollback).
 
 -doc false.
-verify_mfas(Reason, Commits) when is_list(Commits) ->
+verify_mfas(Reason, NExtraArgs, L) when is_list(L) ->
   try
-    [case verify_mfa(Reason, 0, I) of
+    [case verify_mfa(Reason, NExtraArgs, I) of
        ok ->
          ok;
        Err ->
          throw(Err)
-     end || I <- Commits],
+     end || I <- L],
     ok
   catch
     Err -> Err
   end;
-verify_mfas(Reason, Other) ->
+verify_mfas(Reason, _, Other) ->
   {error, {Reason, Other}}.
 
 -doc false.
@@ -288,7 +375,7 @@ with_defaults(UserOpts) when is_map(UserOpts) ->
 
 verify_post_vote(#{post_vote := PostVote}) ->
   maybe
-    ok = verify_mfa(bad_post_vote, 1, PostVote),
+    ok = verify_mfa(bad_post_vote, 2, PostVote),
     {ok, [PostVote]}
   end;
 verify_post_vote(#{}) ->
@@ -374,7 +461,7 @@ test_wait_conclude(ID) ->
 
 trace_props() ->
   [ fun ?MODULE:prop_every_vote_concludes/1
-  , fun ?MODULE:prop_coord_receives_votes/1
+  , fun ?MODULE:prop_every_participant_receives_outcome/1
   ].
 
 prop_every_vote_concludes(Trace) ->
@@ -384,10 +471,12 @@ prop_every_vote_concludes(Trace) ->
                                        K =:= ?classy_vote_coord_early_abort,
      Trace).
 
-prop_coord_receives_votes(Trace) ->
+%% This property should always hold, unless the coordinator is removed
+%% from the cluster and the participants auto-abort.
+prop_every_participant_receives_outcome(Trace) ->
   ?strict_causality(
-     #{?snk_kind := ?classy_vote_part_send_vote, id := _Id, vote := _Vote, from := _From, ?snk_span := start},
-     #{?snk_kind := ?classy_vote_coord_recv, id := _Id, vote := _Vote, from := _From},
+     #{?snk_kind := ?classy_vote_part_established, id := _Id, site := _Site},
+     #{?snk_kind := ?classy_vote_part_recv_outcome, id := _Id, site := _Site},
      Trace).
 
 -endif.

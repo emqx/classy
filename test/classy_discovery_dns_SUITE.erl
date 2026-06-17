@@ -75,15 +75,3 @@ t_discover(_) ->
     %% below test relies on rebar3 ct is run with '--name ct@127.0.0.1'
     {ok, ['ct@127.0.0.1']} = classy_discovery_strategy:discover(classy_discovery_dns, Options3),
     ok.
-
-t_lock(_) ->
-    ok = classy_discovery_strategy:lock(classy_discovery_dns, #{}).
-
-t_unlock(_) ->
-    ok = classy_discovery_strategy:unlock(classy_discovery_dns, #{}).
-
-t_register(_) ->
-    ok = classy_discovery_strategy:register(classy_discovery_dns, #{}).
-
-t_unregister(_) ->
-    ok = classy_discovery_strategy:unregister(classy_discovery_dns, #{}).

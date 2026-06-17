@@ -19,23 +19,17 @@
 -behaviour(classy_discovery_strategy).
 
 -export([ discover/1
-        , lock/1
-        , unlock/1
-        , register/1
-        , unregister/1
+        , hook/0
         ]).
+
+hook() ->
+  classy_discovery_strategy:hook(
+    fun({static, _}) ->
+        {ok, ?MODULE};
+       (_) ->
+        undefined
+    end,
+    0).
 
 discover(Options) ->
   {ok, maps:get(seeds, Options, [])}.
-
-lock(_Options) ->
-  ok.
-
-unlock(_Options) ->
-  ok.
-
-register(_Options) ->
-  ok.
-
-unregister(_Options) ->
-  ok.

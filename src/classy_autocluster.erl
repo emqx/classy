@@ -245,19 +245,11 @@ wakeup(After, S = #s{t = T0}) ->
 
 with_strategy(Fun) ->
   case classy_discovery_strategy:get() of
-    {manual, _} ->
-      ignore;
-    {singleton, _} ->
-      ignore;
+    {Module, Options} ->
+      Fun(Module, Options);
     undefined ->
-      ignore;
-    {Strategy, Options} ->
-      Fun(strategy_module(Strategy), Options)
+      ignore
   end.
-
--spec strategy_module(atom()) -> module().
-strategy_module(Strategy) ->
-  list_to_atom("classy_discovery_" ++ atom_to_list(Strategy)).
 
 -spec discovery_interval() -> pos_integer().
 discovery_interval() ->

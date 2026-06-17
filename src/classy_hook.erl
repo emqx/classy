@@ -65,6 +65,11 @@ init() ->
   classy:on_membership_change(fun classy_builtin_hooks:log_membership_change/4, 100),
   classy:run_level(fun classy_builtin_hooks:log_run_level/2, -100),
   classy:on_peer_connection_change(fun classy_builtin_hooks:log_peer_connection_change/5, 100),
+  %% Discovery strategies:
+  classy_discovery_static:hook(),
+  classy_discovery_dns:hook(),
+  classy_discovery_k8s:hook(),
+  classy_discovery_etcd:hook(),
   %% User initialization:
   case application:get_env(classy, setup_hooks) of
     {ok, {Mod, Func, Args}} ->
@@ -74,7 +79,6 @@ init() ->
       ok
   end.
 
--doc false.
 -spec insert(hookpoint(), fun(), prio()) -> hook().
 insert(Hookpoint, Hook, Prio) when is_atom(Hookpoint), is_integer(Prio), is_function(Hook) ->
   Key = {Hookpoint, -Prio, Hook},

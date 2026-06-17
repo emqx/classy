@@ -106,6 +106,14 @@ The document was typeset with
     Site is fully connected and operational.
   @end enumerate
 
+  Unless the node is stopped abruptly
+  (@code{erlang:halt}, @code{kill}, power loss),
+  run levels always advance and retard in sequence.
+
+  Business applications can track the run level via @ref{classy:run_level/2} hook.
+  This hook can, for example,
+  activate or deactivate some business applications.
+
   @node Network Partition
   @section Network Partitions
 
@@ -123,13 +131,18 @@ The document was typeset with
   Peer discovery is done with a help of several modules implementing
   @ref{api/classy/classy_discovery_strategy, discovery_strategy} behavior.
 
-  Active strategy is selected by @ref{discovery_strategy} OTP application environment variable.
+  The strategy is configured via @ref{discovery_strategy} OTP application environment variable.
   This variable has a form of 2-tuple with the following elements:
 
   @enumerate
-    @item Strategy
-    @item Strategy-specific parameters
+    @item Discovery method, such as @code{static}
+    @item Method-specific parameters
   @end enumerate
+
+  New methods can be registered using @ref{classy_discovery_strategy:hook/2} function.
+
+  Additionally, there is a hook that allows to filter and prioritize discovered nodes:
+  @ref{classy:pre_autocluster/2}.
 
   Autocluster logic runs only on singleton sites.
   It is inactive on sites that already have peers (up or down).

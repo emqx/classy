@@ -20,10 +20,7 @@
 
 %% Cluster strategy callbacks
 -export([ discover/1
-        , lock/1
-        , unlock/1
-        , register/1
-        , unregister/1
+        , hook/0
         ]).
 
 -export_type([ opts/0
@@ -34,6 +31,15 @@
      , type => a | aaaa | srv
      , app  => string() | atom()
      }.
+
+hook() ->
+  classy_discovery_strategy:hook(
+    fun({dns, _}) ->
+        {ok, ?MODULE};
+       (_) ->
+        undefined
+    end,
+    0).
 
 discover(Options) ->
   Defaults = #{ app  => undefined
@@ -55,15 +61,3 @@ node_name(undefined, Host) ->
   node_name(classy_autocluster:app_name(), Host);
 node_name(NodeName, Host) ->
   list_to_atom(lists:concat([NodeName, "@", Host])).
-
-lock(_Options) ->
-  ok.
-
-unlock(_Options) ->
-  ok.
-
-register(_Options) ->
-  ok.
-
-unregister(_Options) ->
-  ok.

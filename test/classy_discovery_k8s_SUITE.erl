@@ -50,15 +50,3 @@ t_discover(_) ->
        classy_discovery_k8s,
        ?OPTIONS)),
   ok = meck:unload(classy_httpc).
-
-t_lock(_) ->
-  ok = classy_discovery_static:lock([]).
-
-t_unlock(_) ->
-  ok = classy_discovery_static:unlock([]).
-
-t_register(_) ->
-  ok = classy_discovery_static:register([]).
-
-t_unregister(_) ->
-  ok = classy_discovery_static:unregister([]).

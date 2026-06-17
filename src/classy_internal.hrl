@@ -54,6 +54,7 @@
 -define(classy_vote_part_perform_action, classy_vote_part_perform_action).
 -define(classy_vote_flow_start, classy_vote_flow_start).
 -define(classy_vote_part_established, classy_vote_part_established).
+-define(classy_vote_part_recv_outcome, classy_vote_part_recv_outcome).
 -define(classy_vote_alloc_id, classy_vote_alloc_id).
 -define(classy_vote_part_recv, classy_vote_part_recv).
 -define(classy_vote_part_send_vote, classy_vote_part_send_vote).
