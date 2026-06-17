@@ -8,7 +8,8 @@ This module contains various algorithms for calculating network partitions.
 """.
 
 %% API:
--export([ bidi_link/3
+-export([ unid_link/3
+        , bidi_link/3
         , full_meshes/1
         ]).
 
@@ -30,6 +31,27 @@ This module contains various algorithms for calculating network partitions.
 %%================================================================================
 
 -doc """
+Return @code{@{ok, Value@}} if node A is alive and appears in @code{ClusterInfo}.
+Then the value indicates whether A is currently connected to B.
+
+Error tuple is returned if A is unreachable.
+""".
+-spec unid_link(classy:cluster_info(), node(), node()) -> {ok, boolean()} | {error, _}.
+unid_link(ClusterInfo, NodeA, NodeB) ->
+  maybe
+    #{infos := #{NodeA := #{peers := PeersA}}} ?= ClusterInfo,
+    case find_peer_by_nodeid(NodeB, PeersA) of
+      {_Site, #{connected := Conn}} ->
+        {ok, Conn};
+      undefined ->
+        {ok, false}
+    end
+  else
+    _ ->
+      {error, insufficient_data}
+  end.
+
+-doc """
 Return @code{@{ok, true@}} if nodes are mutually connected to each other,
 or @code{@{ok, false@}} when either node considers the other disconnected.
 
@@ -40,6 +62,7 @@ then an error tuple is returned.
 bidi_link(ClusterInfo, NodeA, NodeB) ->
   case ClusterInfo of
     #{infos := #{NodeA := A, NodeB := B}} ->
+      %% Simple case: both nodes are present in the results:
       #{site := SiteA, peers := PeersA} = A,
       #{site := SiteB, peers := PeersB} = B,
       maybe
@@ -51,7 +74,15 @@ bidi_link(ClusterInfo, NodeA, NodeB) ->
           {ok, false}
       end;
     _ ->
-       {error, insufficient_data}
+      %% We may still prove that bidi link *doesn't* exist if either node
+      %% reports the other as disconnected:
+      case unid_link(ClusterInfo, NodeA, NodeB) =:= {ok, false} orelse
+           unid_link(ClusterInfo, NodeB, NodeA) =:= {ok, false} of
+        true ->
+          {ok, false};
+        false ->
+          {error, insufficient_data}
+      end
   end.
 
 -doc """
@@ -121,6 +152,22 @@ sort_partitions(Partitions0) ->
        , I
        } || I <- Partitions],
   [I || {_, _, I} <- lists:sort(L)].
+
+-spec find_peer_by_nodeid(node(), #{classy:site() => classy:peer_info()}) ->
+        {classy:site(), classy:peer_info()} | undefined.
+find_peer_by_nodeid(Node, Infos) when is_map(Infos) ->
+  do_find_peer_by_nodeid(Node, maps:iterator(Infos)).
+
+do_find_peer_by_nodeid(Node, It0) ->
+  case maps:next(It0) of
+    {Site, PeerInfo, It} ->
+      case PeerInfo of
+        #{node := Node} -> {Site, PeerInfo};
+        #{}             -> do_find_peer_by_nodeid(Node, It)
+      end;
+    none ->
+      undefined
+  end.
 
 -ifdef(TEST).
 

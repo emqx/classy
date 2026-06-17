@@ -583,7 +583,7 @@ t_091_node_of_site(_) ->
      , fun events_on_all_sites/1
      ]).
 
-t_092_bidi_link(_) ->
+t_092_link_detect(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   Sites = [S1, S2],
@@ -595,9 +595,24 @@ t_092_bidi_link(_) ->
        N2 = create_start_site(S2, #{}),
        #{cluster := Cluster} = ?ON(S1, classy_node:hello()),
        CInfo1 = classy:info([N1, N2]),
+       %% Sites are disconnected:
+       %%   Bidi:
        ?assertEqual(
           {ok, false},
           classy_partition:bidi_link(CInfo1, N1, N2),
+          CInfo1),
+       ?assertEqual(
+          {ok, false},
+          classy_partition:bidi_link(CInfo1, N2, N1),
+          CInfo1),
+       %%  Unid:
+       ?assertEqual(
+          {ok, false},
+          classy_partition:unid_link(CInfo1, N1, N2),
+          CInfo1),
+       ?assertEqual(
+          {ok, false},
+          classy_partition:unid_link(CInfo1, N2, N1),
           CInfo1),
        %% Join sites:
        ?ON(S2, classy:join_node(N1, join)),
@@ -608,13 +623,45 @@ t_092_bidi_link(_) ->
           {ok, true},
           classy_partition:bidi_link(CInfo2, N1, N2),
           CInfo2),
+       ?assertEqual(
+          {ok, true},
+          classy_partition:bidi_link(CInfo2, N2, N1),
+          CInfo2),
+       %% Uni-d as well:
+       ?assertEqual(
+          {ok, true},
+          classy_partition:unid_link(CInfo2, N1, N2),
+          CInfo2),
+       ?assertEqual(
+          {ok, true},
+          classy_partition:unid_link(CInfo2, N2, N1),
+          CInfo2),
        %% Stop one of the sites:
        stop_site(S2),
        ?block_until(#{?snk_kind := classy_peer_disconnected, remote := S2}),
        CInfo3 = classy:info([N1, N2]),
+       %% We can still derive that there's no bidirectional link:
+       ?assertEqual(
+          {ok, false},
+          classy_partition:bidi_link(CInfo3, N1, N2),
+          CInfo3),
+       ?assertEqual(
+          {ok, false},
+          classy_partition:bidi_link(CInfo3, N2, N1),
+          CInfo3),
+       %% Unid:
+       ?assertEqual(
+          {ok, false},
+          classy_partition:unid_link(CInfo3, N1, N2),
+          CInfo3),
        ?assertEqual(
           {error, insufficient_data},
-          classy_partition:bidi_link(CInfo3, N1, N2),
+          classy_partition:unid_link(CInfo3, N2, N1),
+          CInfo3),
+       %% Both sites are missing:
+       ?assertEqual(
+          {error, insufficient_data},
+          classy_partition:bidi_link(CInfo3, 'missing1@badhost', 'missing2@badhost'),
           CInfo3)
      end,
      [ fun no_unexpected_events/1
