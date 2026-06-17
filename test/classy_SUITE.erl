@@ -377,6 +377,7 @@ t_071_membership_forget(_) ->
   S2 = <<"s2">>,
   S3 = <<"s3">>,
   S4 = <<"s4">>,
+  Sites = [S1, S2, S3, S4],
   ForgetAfterS = 1,
   WaitForget = ForgetAfterS * 1000 + 10,
   AppConf = {familiar_app,
@@ -394,6 +395,7 @@ t_071_membership_forget(_) ->
        _N4 = create_start_site(S4, Conf),
        [ok = ?ON(I, classy:join_node(N1, join)) || I <- [S2, S3, S4]],
        #{cluster := Cluster} = ?ON(S1, classy_node:hello()),
+       [wait_site_joined(Sites, Cluster, I) || I <- [S2, S3, S4]],
        %% Stop S3. Its absence should prevent cleanup from doing anything.
        stop_site(S3),
        %% Kick S2, pass time and trigger cleanup at S1:
