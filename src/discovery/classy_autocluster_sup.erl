@@ -61,7 +61,7 @@ init([]) ->
      , type     => worker
      },
   ETCD = case classy_discovery_strategy:get() of
-           {etcd, Options} ->
+           {classy_discovery_etcd, Options} ->
              case proplists:get_value(version, Options, v3) of
                v3 ->
                  [#{id       => classy_discovery_etcd,

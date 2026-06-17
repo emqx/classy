@@ -20,6 +20,7 @@
 
 %% Cluster strategy callbacks
 -export([ discover/1
+        , hook/0
         ]).
 
 -export_type([ opts/0
@@ -30,6 +31,15 @@
      , type => a | aaaa | srv
      , app  => string() | atom()
      }.
+
+hook() ->
+  classy_discovery_strategy:hook(
+    fun({dns, _}) ->
+        {ok, ?MODULE};
+       (_) ->
+        undefined
+    end,
+    0).
 
 discover(Options) ->
   Defaults = #{ app  => undefined

@@ -83,13 +83,16 @@ log_run_level(From, To) ->
        , to => To
        }).
 
-log_peer_connection_change(_Cluster, _Local, Remote, Node, true) ->
-  ?tp(notice, classy_peer_connected,
-      #{ remote => Remote
-       , node   => Node
-       });
-log_peer_connection_change(_Cluster, _Local, Remote, Node, false) ->
-  ?tp(notice, classy_peer_disconnected,
+log_peer_connection_change(_Cluster, Local, Remote, Node, ConnStatus) ->
+  Kind = case ConnStatus of
+           true -> classy_peer_connected;
+           false -> classy_peer_disconnected
+         end,
+  Level = case Remote of
+            Local -> debug;
+            _     -> notice
+          end,
+  ?tp(Level, Kind,
       #{ remote => Remote
        , node   => Node
        }).

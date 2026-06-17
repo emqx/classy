@@ -21,7 +21,8 @@
 
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
--export([ discover/1
+-export([ hook/0
+        , discover/1
         , lock/1
         , unlock/1
         , register/1
@@ -64,6 +65,15 @@
         ]).
 
 -define(LOG(Level, Format, Args), logger:Level("Classy(etcd): " ++ Format, Args)).
+
+hook() ->
+  classy_discovery_strategy:hook(
+    fun({etcd, _}) ->
+        {ok, ?MODULE};
+       (_) ->
+        undefined
+    end,
+    0).
 
 start_link(Options) ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, Options, []).

@@ -20,6 +20,7 @@
 
 %% Cluster strategy callbacks.
 -export([ discover/1
+        , hook/0
         ]).
 
 -export_type([opts/0]).
@@ -38,6 +39,15 @@
          , namespace    => string()
          , suffix       => string()
          }.
+
+hook() ->
+  classy_discovery_strategy:hook(
+    fun({k8s, _}) ->
+        {ok, ?MODULE};
+       (_) ->
+        undefined
+    end,
+    0).
 
 %%--------------------------------------------------------------------
 %% classy_discovery_strategy callbacks

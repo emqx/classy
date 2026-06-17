@@ -123,13 +123,18 @@ The document was typeset with
   Peer discovery is done with a help of several modules implementing
   @ref{api/classy/classy_discovery_strategy, discovery_strategy} behavior.
 
-  Active strategy is selected by @ref{discovery_strategy} OTP application environment variable.
+  The strategy is configured via @ref{discovery_strategy} OTP application environment variable.
   This variable has a form of 2-tuple with the following elements:
 
   @enumerate
-    @item Strategy
-    @item Strategy-specific parameters
+    @item Discovery method, such as @code{static}
+    @item Method-specific parameters
   @end enumerate
+
+  New methods can be registered using @ref{classy_discovery_strategy:hook/2} function.
+
+  Additionally, there is a hook that allows to filter and prioritize discovered nodes:
+  @ref{classy:pre_autocluster/2}.
 
   Autocluster logic runs only on singleton sites.
   It is inactive on sites that already have peers (up or down).

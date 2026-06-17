@@ -19,6 +19,7 @@
 This module defines a behavior of discovery strategy.
 """.
 
+-export([hook/2]).
 -export([get/0, discover/2, lock/2, unlock/2, register/2, unregister/2]).
 
 -export_type([options/0, t/0]).
@@ -45,15 +46,38 @@ This module defines a behavior of discovery strategy.
 
 -optional_callbacks([lock/1, unlock/1, register/1, unregister/1]).
 
+-define(hook, ?MODULE).
+
 %%================================================================================
 %% API functions
 %%================================================================================
 
 -doc """
-Read value of @ref{discovery_strategy} environment variable (with default).
+Register a discovery strategy.
+
+Callbacks registered here match on the @ref{discovery_strategy} configuration
+and return callback module implementing @code{classy_discovery_strategy} behavior.
+
+The first hook that returns @code{@{ok, Module@}} wins
+and handles all the callbacks for the next discovery cycle.
 """.
+-spec hook(fun(({atom(), options()}) -> {ok, module()} | undefined), classy_hook:prio()) -> classy_hook:hook().
+hook(Fun, Prio) when is_function(Fun, 1), is_number(Prio) ->
+  classy_hook:insert(?hook, Fun, Prio).
+
+-doc """
+Read @ref{discovery_strategy} environment variable and decide which strategy to use.
+""".
+-spec get() -> t() | undefined.
 get() ->
-  application:get_env(classy, discovery_strategy, {manual, []}).
+  Conf = application:get_env(classy, discovery_strategy, {manual, []}),
+  case classy_hook:first_match(?hook, [Conf]) of
+    {ok, Module} ->
+      {_Method, Options} = Conf,
+      {Module, Options};
+    undefined ->
+      undefined
+  end.
 
 %%================================================================================
 %% Internal exports

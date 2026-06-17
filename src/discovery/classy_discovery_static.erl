@@ -19,7 +19,17 @@
 -behaviour(classy_discovery_strategy).
 
 -export([ discover/1
+        , hook/0
         ]).
+
+hook() ->
+  classy_discovery_strategy:hook(
+    fun({static, _}) ->
+        {ok, ?MODULE};
+       (_) ->
+        undefined
+    end,
+    0).
 
 discover(Options) ->
   {ok, maps:get(seeds, Options, [])}.
