@@ -208,7 +208,13 @@ terminate(Reason, State, _Data) ->
 %% Internal functions
 %%================================================================================
 
-do_receive_outcome(From, #c_outcome{result = Result}, D0 = #d{vote = MyVote}) ->
+do_receive_outcome(From, #c_outcome{result = Result}, D0 = #d{vote = MyVote, prep = Prep}) ->
+  {ok, Self} = classy_node:the_site(),
+  ?tp(debug, ?classy_vote_part_recv_outcome,
+      #{ outcome => Result
+       , id => Prep#prepare.id
+       , site => Self
+       }),
   NextStage = case Result of
                 true -> ?s_commit;
                 false -> ?s_rollback
@@ -348,7 +354,8 @@ db_establish(Stage, Vote, CompletedActions, Prep) ->
                  [ {w, DataKey, Prep}
                  , {w, StateKey, State}
                  ]),
-    ?tp(debug, ?classy_vote_part_established, #{id => ID, tag => Tag}),
+    {ok, Site} = classy_node:the_site(),
+    ?tp(debug, ?classy_vote_part_established, #{id => ID, tag => Tag, site => Site}),
     {ok, #d{ prep = Prep
            , vote = Vote
            , completed_actions = CompletedActions

@@ -97,7 +97,7 @@ Instead, they are abandoned until the next node restart.
 -export([ test_wait_conclude/1
         , trace_props/0
         , prop_every_vote_concludes/1
-        , prop_coord_receives_votes/1
+        , prop_every_participant_receives_outcome/1
         ]).
 -endif.
 
@@ -461,7 +461,7 @@ test_wait_conclude(ID) ->
 
 trace_props() ->
   [ fun ?MODULE:prop_every_vote_concludes/1
-  , fun ?MODULE:prop_coord_receives_votes/1
+  , fun ?MODULE:prop_every_participant_receives_outcome/1
   ].
 
 prop_every_vote_concludes(Trace) ->
@@ -471,10 +471,12 @@ prop_every_vote_concludes(Trace) ->
                                        K =:= ?classy_vote_coord_early_abort,
      Trace).
 
-prop_coord_receives_votes(Trace) ->
+%% This property should always hold, unless the coordinator is removed
+%% from the cluster and the participants auto-abort.
+prop_every_participant_receives_outcome(Trace) ->
   ?strict_causality(
-     #{?snk_kind := ?classy_vote_part_send_vote, id := _Id, vote := _Vote, from := _From, ?snk_span := start},
-     #{?snk_kind := ?classy_vote_coord_recv, id := _Id, vote := _Vote, from := _From},
+     #{?snk_kind := ?classy_vote_part_established, id := _Id, site := _Site},
+     #{?snk_kind := ?classy_vote_part_recv_outcome, id := _Id, site := _Site},
      Trace).
 
 -endif.
