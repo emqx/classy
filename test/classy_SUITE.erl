@@ -569,6 +569,7 @@ t_091_node_of_site(_) ->
         || I <- Sites, J <- Sites, OnlyLive <- [true, false]],
        %% Shut down S2 and verify that S1 reacted on changes:
        stop_site(S2),
+       ?block_until(#{?snk_kind := classy_peer_disconnected, remote := S2}),
        ?assertEqual(
           undefined,
           ?ON(S1, classy:node_of_site(S2, true))),
@@ -607,6 +608,7 @@ t_092_bidi_link(_) ->
           CInfo2),
        %% Stop one of the sites:
        stop_site(S2),
+       ?block_until(#{?snk_kind := classy_peer_disconnected, remote := S2}),
        CInfo3 = classy:info([N1, N2]),
        ?assertEqual(
           {error, insufficient_data},
