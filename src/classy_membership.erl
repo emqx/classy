@@ -337,7 +337,7 @@ cast_sync(Cluster, Site, SyncData) ->
 %% @doc Send membership data to the process
 -spec call_sync(classy:cluster_id(), classy:site(), sync_data()) -> ok.
 call_sync(Cluster, Site, SyncData) ->
-  ?tp(debug, classy_membership_call_sync,
+  ?tp(classy_membership_call_sync,
       #{ clus => Cluster
        , local => Site
        , clock => #cast_sync.c
@@ -536,7 +536,7 @@ handle_sync_in(Req, S0) ->
             , acked = AckedOut
             , data = Data
             } = Req,
-  ?tp(debug, classy_membership_sync_in,
+  ?tp(classy_membership_sync_in,
       #{ from => From
        , since => Since
        , clock => Cf
@@ -570,9 +570,7 @@ handle_sync_in(Req, S0) ->
 -spec handle_sync_out(#s{}) -> #s{}.
 handle_sync_out(S = #s{cluster = Cluster}) ->
   SyncTargets = sync_targets(S),
-  ?tp(debug, classy_membership_sync_out,
-      #{ targets => SyncTargets
-       }),
+  ?tp(classy_membership_sync_out, #{targets => SyncTargets}),
   maps:foreach(
     fun(Site, Node) ->
         Since = get_acked_out(Site, S),

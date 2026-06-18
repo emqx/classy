@@ -28,7 +28,6 @@ Module responsible for managing the hooks.
 %%================================================================================
 %% Type declarations
 %%================================================================================
-
 -define(tab, ?MODULE).
 
 -doc """
@@ -55,16 +54,16 @@ It can be used to unregister the hook.
 init() ->
   ets:new(?tab, [named_table, ordered_set, public, {keypos, 1}]),
   %% Default initialization:
-  classy:on_node_init(fun classy_builtin_hooks:gen_random_site_id/0, -100),
-  classy:post_kick(fun classy_builtin_hooks:maybe_reinitialize_after_kick/3, -100),
+  classy:on_node_init(fun classy_builtin_hooks:gen_random_site_id/0, ?min_hook_prio),
+  classy:post_kick(fun classy_builtin_hooks:maybe_reinitialize_after_kick/3, ?min_hook_prio),
   %% Info logging:
-  classy:on_create_site(fun classy_builtin_hooks:log_create_site/1, 100),
-  classy:on_create_cluster(fun classy_builtin_hooks:log_create_cluster/2, 100),
-  classy:pre_join(fun classy_builtin_hooks:log_pre_join/4, 100),
-  classy:post_join(fun classy_builtin_hooks:log_post_join/3, -100),
-  classy:on_membership_change(fun classy_builtin_hooks:log_membership_change/4, 100),
-  classy:run_level(fun classy_builtin_hooks:log_run_level/2, -100),
-  classy:on_peer_connection_change(fun classy_builtin_hooks:log_peer_connection_change/5, 100),
+  classy:on_create_site(fun classy_builtin_hooks:log_create_site/1, ?max_hook_prio),
+  classy:on_create_cluster(fun classy_builtin_hooks:log_create_cluster/2, ?max_hook_prio),
+  classy:pre_join(fun classy_builtin_hooks:log_pre_join/4, ?max_hook_prio),
+  classy:post_join(fun classy_builtin_hooks:log_post_join/3, ?min_hook_prio),
+  classy:on_membership_change(fun classy_builtin_hooks:log_membership_change/4, ?max_hook_prio),
+  classy:run_level(fun classy_builtin_hooks:log_run_level/2, ?min_hook_prio),
+  classy:on_peer_connection_change(fun classy_builtin_hooks:log_peer_connection_change/5, ?max_hook_prio),
   %% Discovery strategies:
   classy_discovery_static:hook(),
   classy_discovery_dns:hook(),
