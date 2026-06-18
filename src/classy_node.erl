@@ -605,7 +605,7 @@ ensure_the_id(Key, OnCreateHook, HookArgs, Default) ->
     [] ->
       case Default of
         undefined ->
-          Val = base64:encode(crypto:strong_rand_bytes(32));
+          Val = binary:encode_hex(crypto:strong_rand_bytes(32), uppercase);
         Val when is_binary(Val) ->
           ok
       end,
