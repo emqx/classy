@@ -19,6 +19,9 @@
 -include_lib("snabbkaffe/include/trace.hrl").
 -include("classy.hrl").
 
+-define(max_hook_prio, 100000).
+-define(min_hook_prio, -?max_hook_prio).
+
 -define(on_node_init, on_node_init).
 -define(on_create_cluster, on_create_cluster).
 -define(on_create_site, on_create_site).
