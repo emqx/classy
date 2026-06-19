@@ -25,6 +25,8 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , quorum/1
         , fault_tolerance/1
         , at_lower_level/2
+        , the_site/0
+        , the_cluster/0
         ]).
 
 -export([ on_node_init/2
@@ -149,14 +151,8 @@ Provide general information about the local node.
 -spec info() -> info().
 info() ->
   %% Note: this is an RPC target.
-  case classy_node:the_cluster() of
-    {ok, MaybeCluster} -> ok;
-    _                  -> MaybeCluster = undefined
-  end,
-  case classy_node:the_site() of
-    {ok, MaybeSite} -> ok;
-    _               -> MaybeSite = undefined
-  end,
+  MaybeCluster = classy_node:maybe_cluster(),
+  MaybeSite = classy_node:maybe_site(),
   PeerInfo0 = classy_node:peer_info(),
   case maps:take(MaybeSite, PeerInfo0) of
     {#{last_update := MyLU}, PeerInfo} ->
@@ -281,7 +277,7 @@ Translate node name to a site ID and kick it via @ref{classy:kick_site/2}.
 """.
 -spec kick_node(node(), kick_intent()) -> ok | {error, _}.
 kick_node(Node, Intent) ->
-  case {classy_node:the_cluster(), classy_node:the_site()} of
+  case {the_cluster(), the_site()} of
     {{ok, Cluster}, {ok, Local}} ->
       case classy_membership:site_of_node(Cluster, Local) of
         #{Node := Site} ->
@@ -299,8 +295,8 @@ List IDs of peer sites.
 -spec sites() -> [site()].
 sites() ->
   maybe
-    {ok, Cluster} ?= classy_node:the_cluster(),
-    {ok, Local} ?= classy_node:the_site(),
+    {ok, Cluster} ?= the_cluster(),
+    {ok, Local} ?= the_site(),
     classy_membership:members(Cluster, Local)
   else
     _ ->
@@ -330,6 +326,30 @@ require business applications to be stopped.
         {error | exit | throw, _Reason, _Stacktrace}.
 at_lower_level(RunLevel, Fun) ->
   classy_node:at_lower_level(RunLevel, Fun).
+
+-doc """
+Get ID of the local site.
+""".
+-spec the_site() -> {ok, site()} | undefined.
+the_site() ->
+  case classy_node:maybe_site() of
+    Site when is_binary(Site) ->
+      {ok, Site};
+    undefined ->
+      undefined
+  end.
+
+-doc """
+Get ID of the cluster.
+""".
+-spec the_cluster() -> {ok, cluster_id()} | undefined.
+the_cluster() ->
+  case classy_node:maybe_cluster() of
+    Cluster when is_binary(Cluster) ->
+      {ok, Cluster};
+    undefined ->
+      undefined
+  end.
 
 %%--------------------------------------------------------------------------------
 %% Misc.
@@ -372,7 +392,7 @@ fault_tolerance(N) ->
 -doc """
 Register a hook that is executed when the node (not the site) starts.
 
-It is called before @ref{classy_node:the_site/0} and @code{classy_node:the_cluster/0}
+It is called before @ref{classy:the_site/0} and @code{classy:the_cluster/0}
 are initialized,
 and can be used to override the default cluster and site initialization logic.
 """.

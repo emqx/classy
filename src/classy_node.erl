@@ -13,8 +13,8 @@ Management of the local site and node.
         , maybe_init_the_site/1
         , join_node/3
         , kick_site/2
-        , the_site/0
-        , the_cluster/0
+        , maybe_site/0
+        , maybe_cluster/0
         , parent_site/0
         , nodes/1
         , peer_info/0
@@ -28,9 +28,8 @@ Management of the local site and node.
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([hello/0]).
-
 -export_type([run_level_atom/0]).
+-export([hello/0, on_ptab_update/2]).
 
 -include_lib("snabbkaffe/include/trace.hrl").
 -include("classy_internal.hrl").
@@ -40,6 +39,9 @@ Management of the local site and node.
 %%================================================================================
 %% Type declarations
 %%================================================================================
+
+-define(pt_site, classy_node_the_site).
+-define(pt_cluster, classy_node_the_cluster).
 
 -define(SERVER, ?MODULE).
 
@@ -119,22 +121,16 @@ start_link() ->
 -doc """
 Return ID of the cluster that the local site currently belongs to.
 """.
--spec the_cluster() -> {ok, classy:cluster_id()} | undefined.
-the_cluster() ->
-  case classy_table:lookup(?ptab, ?the_cluster) of
-    [V] -> {ok, V};
-    []   -> undefined
-  end.
+-spec maybe_cluster() -> classy:cluster_id() | undefined.
+maybe_cluster() ->
+  persistent_term:get(?pt_cluster, undefined).
 
 -doc """
 Return ID of the local site.
 """.
--spec the_site() -> {ok, classy:site()} | undefined.
-the_site() ->
-  case classy_table:lookup(?ptab, ?the_site) of
-    [V] -> {ok, V};
-    []  -> undefined
-  end.
+-spec maybe_site() -> classy:site() | undefined.
+maybe_site() ->
+  persistent_term:get(?pt_site, undefined).
 
 -doc """
 Return ID of the site that invited us to @code{the_cluster}.
@@ -255,7 +251,7 @@ init(_) ->
     #{ node_type => visible
      , nodedown_reason => true
      }),
-  ok = classy_table:open(?ptab, #{}),
+  ok = classy_table:open(?ptab, #{on_update => fun ?MODULE:on_ptab_update/2}),
   ok = classy_table:open(?site_info, #{ets_options => [{read_concurrency, true}]}),
   classy:on_membership_change(fun on_membership_change/4, -100),
   increase_n_restarts(),
@@ -340,7 +336,9 @@ terminate(Reason, S) ->
   case S of
     #s{} -> change_run_level(run_level(?stopped), S);
     _    -> ok
-  end.
+  end,
+  persistent_term:erase(?pt_site),
+  persistent_term:erase(?pt_cluster).
 
 %%================================================================================
 %% Internal exports
@@ -364,6 +362,21 @@ hello() ->
       {error, not_in_cluster};
     Err ->
       Err
+  end.
+
+-doc false.
+on_ptab_update(_, Op) ->
+  case Op of
+    {w, ?the_cluster, Val} ->
+      persistent_term:put(?pt_cluster, Val);
+    {d, ?the_cluster} ->
+      persistent_term:erase(?pt_cluster);
+    {w, ?the_site, Val} ->
+      persistent_term:put(?pt_site, Val);
+    {d, ?the_site} ->
+      persistent_term:erase(?pt_site);
+    _ ->
+      ok
   end.
 
 %%================================================================================
@@ -684,3 +697,19 @@ run_level(0) -> ?stopped;
 run_level(1) -> ?single;
 run_level(2) -> ?cluster;
 run_level(3) -> ?quorum.
+
+the_cluster() ->
+  case classy_table:lookup(?ptab, ?the_cluster) of
+    [V] ->
+      {ok, V};
+    [] ->
+      undefined
+  end.
+
+the_site() ->
+  case classy_table:lookup(?ptab, ?the_site) of
+    [V] ->
+      {ok, V};
+    [] ->
+      undefined
+  end.

@@ -209,7 +209,7 @@ terminate(Reason, State, _Data) ->
 %%================================================================================
 
 do_receive_outcome(From, #c_outcome{result = Result}, D0 = #d{vote = MyVote, prep = Prep}) ->
-  {ok, Self} = classy_node:the_site(),
+  {ok, Self} = classy:the_site(),
   ?tp(debug, ?classy_vote_part_recv_outcome,
       #{ outcome => Result
        , id => Prep#prepare.id
@@ -322,7 +322,7 @@ do_prepare(
   end.
 
 send_vote(#d{vote = Vote, prep = Prep = #prepare{id = ID}}) ->
-  {ok, Self} = classy_node:the_site(),
+  {ok, Self} = classy:the_site(),
   #prepare{id = Id, coordinator = Coordinator} = Prep,
   Arg = #c_vote{ id = Id
                , vote = Vote
@@ -354,7 +354,7 @@ db_establish(Stage, Vote, CompletedActions, Prep) ->
                  [ {w, DataKey, Prep}
                  , {w, StateKey, State}
                  ]),
-    {ok, Site} = classy_node:the_site(),
+    {ok, Site} = classy:the_site(),
     ?tp(debug, ?classy_vote_part_established, #{id => ID, tag => Tag, site => Site}),
     {ok, #d{ prep = Prep
            , vote = Vote

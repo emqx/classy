@@ -102,8 +102,8 @@ site_down_since(RemoteT, Site) ->
 
 check_down_sites() ->
   maybe
-    {ok, Cluster} ?= classy_node:the_cluster(),
-    {ok, Local} ?= classy_node:the_site(),
+    {ok, Cluster} ?= classy:the_cluster(),
+    {ok, Local} ?= classy:the_site(),
     %% Calculate minimum wall time when site should be alive:
     MaxDownSecs = max_downtime(),
     true ?= is_integer(MaxDownSecs),

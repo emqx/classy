@@ -445,7 +445,7 @@ prepare(
   #d{id = Id, tag = Tag, opts = #opts{on_fail = OnFail}},
   #act{prepare = Prep, commit = Commit, rollback = Rollback}
  ) ->
-  {ok, Self} = classy_node:the_site(),
+  {ok, Self} = classy:the_site(),
   #prepare{ id = Id
           , tag = Tag
           , prepare = Prep

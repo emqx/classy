@@ -82,13 +82,13 @@ t_020_join(_) ->
        %% cluster ID should be equal to the site id:
        ?assertEqual(
           {ok, Cluster1},
-          ?ON(S1, classy_node:the_cluster())),
+          ?ON(S1, classy:the_cluster())),
        ?assertEqual(
           [S1],
           ?ON(S1, classy:sites())),
        ?assertEqual(
           {ok, Cluster2},
-          ?ON(S2, classy_node:the_cluster())),
+          ?ON(S2, classy:the_cluster())),
        ?assertEqual(
           [S2],
           ?ON(S2, classy:sites())),
@@ -101,10 +101,10 @@ t_020_join(_) ->
        %% Verify state after join:
        ?assertEqual(
           {ok, Cluster1},
-          ?ON(S1, classy_node:the_cluster())),
+          ?ON(S1, classy:the_cluster())),
        ?assertEqual(
           {ok, Cluster1},
-          ?ON(S2, classy_node:the_cluster())),
+          ?ON(S2, classy:the_cluster())),
        ?assertSameSet(
           [S1, S2],
           ?ON(S1, classy:sites())),
@@ -348,7 +348,7 @@ t_070_cleanup(_) ->
        N1 = create_start_site(S1, Conf),
        _N2 = create_start_site(S2, Conf),
        _N3 = create_start_site(S3, Conf),
-       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
        ?assertMatch(ok, ?ON(S3, classy:join_node(N1, join))),
        wait_site_joined(Sites, Cluster, S2),
@@ -758,7 +758,7 @@ t_300_rpc(_) ->
        %% Prepare
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
-       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
        wait_site_joined([S1, S2], Cluster, S2),
        %% Tests:
@@ -843,7 +843,7 @@ t_310_rpc_to_failing_node(_) ->
        %% Prepare
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
-       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
        wait_site_joined([S1, S2], Cluster, S2),
        %% Test:
@@ -880,7 +880,7 @@ t_400_vote_smoke_abort(_) ->
        N2 = create_start_site(S2, #{}),
        N3 = create_start_site(S3, #{}),
        Nodes = [N1, N2, N3],
-       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
        ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
        ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
        wait_site_joined(Sites, Cluster, S2),
@@ -952,7 +952,7 @@ t_401_vote_timeout(_) ->
        N2 = create_start_site(S2, #{}),
        N3 = create_start_site(S3, #{}),
        Nodes = [N1, N2, N3],
-       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
        ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
        ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
        wait_site_joined(Sites, Cluster, S2),
@@ -1010,7 +1010,7 @@ t_403_vote_coord_restart(_) ->
        N2 = create_start_site(S2, #{}),
        N3 = create_start_site(S3, #{}),
        Nodes = [N1, N2, N3],
-       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
        ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
        ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
        wait_site_joined(Sites, Cluster, S2),
@@ -1070,7 +1070,7 @@ t_404_vote_part_restart(_) ->
        N2 = create_start_site(S2, #{}),
        N3 = create_start_site(S3, #{}),
        Nodes = [N1, N2, N3],
-       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
        ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
        ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
        wait_site_joined(Sites, Cluster, S2),
@@ -1162,7 +1162,7 @@ t_410_vote_commit(_) ->
        N2 = create_start_site(S2, #{}),
        N3 = create_start_site(S3, #{}),
        Nodes = [N1, N2, N3],
-       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
        ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
        ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
        wait_site_joined(Sites, Cluster, S2),
@@ -1211,7 +1211,7 @@ t_411_commit_actions_after_restart(_) ->
        N1 = create_start_site(S1, #{peer => #{shutdown => halt}}),
        N2 = create_start_site(S2, #{peer => #{shutdown => halt}}),
        Nodes = [N1, N2],
-       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
        ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
        wait_site_joined(Sites, Cluster, S2),
        %% Make sure post commit actions are delayed:
@@ -1282,7 +1282,7 @@ t_412_commit_action_crash(_) ->
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
        Nodes = [N1, N2],
-       {ok, Cluster} = ?ON(S1, classy_node:the_cluster()),
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
        ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
        wait_site_joined(Sites, Cluster, S2),
        %% Inject failures into the commit flows:

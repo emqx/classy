@@ -120,7 +120,7 @@ cluster_unique_seq_tuple(Sequence) ->
 init(_) ->
   process_flag(trap_exit, true),
   {ok, NRestarts} = classy_node:n_restarts(),
-  {ok, Site} = classy_node:the_site(),
+  {ok, Site} = classy:the_site(),
   ets:new(?volatile_sequences, [set, named_table, public, {write_concurrency, true}]),
   set_pterm(#{ site               => Site
              , n_restarts         => NRestarts

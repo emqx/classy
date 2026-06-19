@@ -81,6 +81,7 @@ log_run_level(From, To) ->
   ?tp(info, classy_change_run_level,
       #{ from => From
        , to => To
+       , local => classy_node:maybe_site()
        }).
 
 log_peer_connection_change(_Cluster, Local, Remote, Node, ConnStatus) ->
