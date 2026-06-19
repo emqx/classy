@@ -71,8 +71,6 @@ handle_info(#to_check{}, S0) ->
   S = S0#s{t = undefined},
   check_down_sites(),
   {noreply, wakeup(S)};
-handle_info({'EXIT', _, shutdown}, S) ->
-  {stop, shutdown, S};
 handle_info(_Info, S) ->
   {noreply, S}.
 

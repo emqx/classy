@@ -177,11 +177,6 @@ handle_event(enter, OldStage, Stage, D) ->
 handle_event(state_timeout, ?state_timeout, ?s_prepare, D) ->
   %% Perform the actual vote:
   do_real_vote(D);
-handle_event(info, {'EXIT', _, Reason}, _, _) ->
-  case Reason of
-    normal -> keep_state_and_data;
-    _      -> {stop, shutdown}
-  end;
 handle_event({call, From}, #c_outcome{} = Outcome, ?s_wait_outcome, D) ->
   do_receive_outcome(From, Outcome, D);
 handle_event(ET, Event, State, _Data) ->

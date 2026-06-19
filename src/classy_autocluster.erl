@@ -115,8 +115,6 @@ handle_cast(Cast, S) ->
 -doc false.
 handle_info(#to_discover{}, S) ->
   {noreply, handle_discover(S)};
-handle_info({'EXIT', _, shutdown}, S) ->
-  {stop, shutdown, S};
 handle_info(Info, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => info

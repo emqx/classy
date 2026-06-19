@@ -283,8 +283,6 @@ handle_cast(Cast, S) ->
 -doc false.
 handle_info({NodeUpOrDown, _Node, _}, S) when NodeUpOrDown =:= nodeup; NodeUpOrDown =:= nodedown ->
   {noreply, update_runtime(S)};
-handle_info({'EXIT', _, shutdown}, S) ->
-  {stop, shutdown, S};
 handle_info(Info, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => info

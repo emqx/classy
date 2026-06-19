@@ -148,8 +148,6 @@ handle_cast(Cast, S) ->
   {noreply, S}.
 
 -doc false.
-handle_info({'EXIT', _, shutdown}, S) ->
-  {stop, shutdown, S};
 handle_info(Info, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => info

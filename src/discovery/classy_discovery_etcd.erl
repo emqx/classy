@@ -389,9 +389,6 @@ handle_call(_Request, _From, State = #state{}) ->
 handle_cast(_Request, State = #state{}) ->
   {noreply, State}.
 
-handle_info({'EXIT', _From, Reason}, State) ->
-  {stop, Reason, State};
-
 handle_info(_Info, State = #state{}) ->
   {noreply, State}.
 
