@@ -372,7 +372,8 @@ t_061_run_level_timeouts(_) ->
              classy_rl_changer:set(?single),
              classy:at_lower_level(?single, fun() -> ok end)
            end),
-       %%    Request transition to quorum, and simultaneously stop application:
+       %%    Request transition to quorum, and simultaneously stop
+       %%    application (simulated by a supervisor request):
        {ok, Sub2} = snabbkaffe:subscribe(Pred, 100, 1000, 0),
        ?ON(S1,
            begin

@@ -13,7 +13,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([start_link/1, set/1]).
+-export([start_link/0, set/1]).
 
 -export_type([run_level_int/0]).
 
@@ -64,9 +64,9 @@ at_lower_level(RunLevel, Fun) ->
 %% Internal exports
 %%================================================================================
 
--spec start_link(pid()) -> {ok, pid()}.
-start_link(Parent) ->
-  gen_server:start_link({local, ?SERVER}, ?MODULE, [Parent], []).
+-spec start_link() -> {ok, pid()}.
+start_link() ->
+  gen_server:start_link({local, ?SERVER}, ?MODULE, [self()], []).
 
 -spec set(classy:run_level()) -> ok.
 set(RunLevel) ->
@@ -117,8 +117,6 @@ handle_info(#cast_set{rl = NewRL}, S0) ->
   if S#s.stopping -> {stop, normal, S};
      true         -> {noreply, S}
   end;
-handle_info({'EXIT', Parent, _Reason}, S = #s{parent = Parent}) ->
-  {stop, normal, flush_events(S#s{set = 0, stopping = true})};
 handle_info(_Info, S) ->
   {noreply, S}.
 
@@ -128,7 +126,7 @@ terminate(Reason, S) ->
         #{ server => ?MODULE
          , reason => Reason
          }),
-  change_run_level(S#s{set = 0}),
+  change_run_level(S#s{set = 0, stopping = true}),
   ok.
 
 %%================================================================================
