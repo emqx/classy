@@ -461,7 +461,7 @@ It is guaranteed to be called @emph{at least} once,
 and must be idempotent.
 """.
 -spec post_join(
-        fun((cluster_id(), Local, JoinedTo) -> _),
+        fun((cluster_id(), Local, JoinedTo, join_intent()) -> _),
         classy_hook:prio()
        ) -> classy_hook:hook()
   when Local :: site(),

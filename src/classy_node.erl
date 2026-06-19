@@ -417,7 +417,7 @@ handle_join(S, Call) ->
             ExpectedCluster =:= any ->
       case classy_hook:all(?on_pre_join, [Cluster, Remote, Node, Intent]) of
         ok ->
-          do_join_node(Node, Cluster, Remote, MemData, S);
+          do_join_node(Node, Cluster, Remote, MemData, Intent, S);
         {error, _} = Err ->
           Err
       end;
@@ -434,10 +434,11 @@ handle_join(S, Call) ->
         classy:cluster_id(),
         classy:site(),
         classy_membership:sync_data(),
+        classy:join_intent(),
         #s{}
        ) ->
         {ok, #s{}} | {error, _}.
-do_join_node(Node, Cluster, Remote, MemData, S0) ->
+do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
   {ok, Local} = the_site(),
   case the_cluster() of
     {ok, Cluster} ->
@@ -449,18 +450,18 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
       {ok, update_runtime(S0)};
     {ok, OldCluster} when OldCluster =/= Cluster ->
       %% Site is currently in a different cluster. Leave it first:
-      Intent = join,
-      case handle_kick(OldCluster, Local, Local, Intent) of
+      LeaveIntent = join,
+      case handle_kick(OldCluster, Local, Local, LeaveIntent) of
         ok ->
-          {ok, S} = on_leave(S0, Intent),
-          do_join_node(Node, Cluster, Remote, MemData, S);
+          {ok, S} = on_leave(S0, LeaveIntent),
+          do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S);
         Err ->
           Err
       end;
     undefined ->
       %% Site is not in any cluster:
-      {ok, S} = join_cluster(Cluster, Node, Local, Remote, S0),
-      do_join_node(Node, Cluster, Remote, MemData, S)
+      {ok, S} = join_cluster(Cluster, Node, Local, Remote, JoinIntent, S0),
+      do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S)
   end.
 
 on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
@@ -477,10 +478,10 @@ on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
       init_cluster()
   end.
 
--spec join_cluster(classy:cluster_id(), node(), classy:site(), classy:site(), #s{}) -> {ok, #s{}}.
-join_cluster(Cluster, JoinToNode, Local, Remote, S = #s{}) ->
+-spec join_cluster(classy:cluster_id(), node(), classy:site(), classy:site(), classy:join_intent(), #s{}) -> {ok, #s{}}.
+join_cluster(Cluster, JoinToNode, Local, Remote, Intent, S = #s{}) ->
   {ok, _} = classy_sup:ensure_membership(Cluster, Local),
-  classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode]),
+  classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode, Intent]),
   classy_table:dirty_write(?ptab, ?the_cluster, Cluster),
   classy_table:dirty_write(?ptab, ?parent_site, Remote),
   classy_table:flush(?ptab),

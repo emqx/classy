@@ -60,7 +60,7 @@ init() ->
   classy:on_create_site(fun classy_builtin_hooks:log_create_site/1, ?max_hook_prio),
   classy:on_create_cluster(fun classy_builtin_hooks:log_create_cluster/2, ?max_hook_prio),
   classy:pre_join(fun classy_builtin_hooks:log_pre_join/4, ?max_hook_prio),
-  classy:post_join(fun classy_builtin_hooks:log_post_join/3, ?min_hook_prio),
+  classy:post_join(fun classy_builtin_hooks:log_post_join/4, ?min_hook_prio),
   classy:on_membership_change(fun classy_builtin_hooks:log_membership_change/4, ?max_hook_prio),
   classy:run_level(fun classy_builtin_hooks:log_run_level/2, ?min_hook_prio),
   classy:on_peer_connection_change(fun classy_builtin_hooks:log_peer_connection_change/5, ?max_hook_prio),
