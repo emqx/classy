@@ -47,6 +47,8 @@
 -define(classy_abnormal_exit, classy_abnormal_exit).
 -define(classy_table_anomaly, classy_table_anomaly).
 -define(classy_bad_data, classy_bad_data).
+-define(classy_run_level_change_timeout, classy_run_level_change_timeout).
+-define(classy_run_level_change_error, classy_run_level_change_error).
 
 -define(classy_vote_pre_results, classy_vote_pre_results).
 -define(classy_vote_coord_stage, classy_vote_coord_stage).

@@ -327,6 +327,101 @@ t_060_at_lower_level(_) ->
      , fun events_on_all_sites/1
      ]).
 
+%% Verify hadling of timeouts during run level changes.
+t_061_run_level_timeouts(_) ->
+  S1 = <<"s1">>,
+  ?check_trace(
+     #{timetrap => 30_000},
+     begin
+       %% Setup:
+       _N1 = create_start_site(S1, #{}),
+       ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
+       Pred = ?match_event(#{?snk_kind := K} when K =:= rl_change;
+                                                  K =:= classy_run_level_change_timeout;
+                                                  K =:= classy_run_level_change_error),
+       ?ON(S1,
+           begin
+             classy:run_level(
+               fun(From, To) ->
+                   ?tp(rl_change, #{f => From, t => To}),
+                   timer:sleep(100)
+               end,
+               0),
+             application:set_env(classy, run_level_grace_period, 10)
+           end),
+       %% 1. First try setting run level multiple times, faster than
+       %% the hooks can handle:
+       ?ON(S1, application:set_env(classy, run_level_timeout, 1000)),
+       {ok, Sub1} = snabbkaffe:subscribe(Pred, 100, 1000, 0),
+       %% Issue a few conflicting commands in rapid succession:
+       ?ON(S1, classy_rl_changer:set(?stopped)),
+       ?ON(S1, classy_rl_changer:set(?quorum)),
+       ?ON(S1, classy_rl_changer:set(?stopped)),
+       %% System should follow the last command:
+       {_, Events1} = snabbkaffe:receive_events(Sub1),
+       ?assertMatch(
+          [ #{f := ?quorum, t := ?cluster}
+          , #{f := ?cluster, t := ?single}
+          , #{f := ?single, t := ?stopped}
+          ],
+          Events1),
+       %% 2. Same logic applies when the system is stopped:
+       %%    Prepare; go to the single state
+       ?ON(S1,
+           begin
+             classy_rl_changer:set(?single),
+             classy:at_lower_level(?single, fun() -> ok end)
+           end),
+       %%    Request transition to quorum, and simultaneously stop application:
+       {ok, Sub2} = snabbkaffe:subscribe(Pred, 100, 1000, 0),
+       ?ON(S1,
+           begin
+             classy_rl_changer:set(?quorum),
+             ok = supervisor:terminate_child(classy_sup, run_level_mgr)
+           end),
+       {_, Events2} = snabbkaffe:receive_events(Sub2),
+       ?assertMatch(
+          [ #{f := ?single, t := ?cluster}
+          , #{f := ?cluster, t := ?single}
+          , #{f := ?single, t := ?stopped}
+          ],
+          Events2),
+       %%   3. Verify that timeouts are handled normally:
+       ?ON(S1,
+           begin
+             {ok, _} = supervisor:restart_child(classy_sup, run_level_mgr),
+             application:set_env(classy, run_level_timeout, 10)
+           end),
+       {ok, Sub3} = snabbkaffe:subscribe(Pred, 100, 1000, 0),
+       ?ON(S1,
+           begin
+             classy_rl_changer:set(?quorum),
+             classy:at_lower_level(?quorum, fun() -> ok end),
+             classy_rl_changer:set(?stopped),
+             classy:at_lower_level(?stopped, fun() -> ok end)
+           end),
+       {_, Events3} = snabbkaffe:receive_events(Sub3),
+       ?assertMatch(
+          [ %% Advance:
+            #{f := ?stopped, t := ?single}
+          , #{?snk_kind := classy_run_level_change_timeout}
+          , #{f := ?single, t := ?cluster}
+          , #{?snk_kind := classy_run_level_change_timeout}
+          , #{f := ?cluster, t := ?quorum}
+          , #{?snk_kind := classy_run_level_change_timeout}
+            %% Retard:
+          , #{f := ?quorum, t := ?cluster}
+          , #{?snk_kind := classy_run_level_change_timeout}
+          , #{f := ?cluster, t := ?single}
+          , #{?snk_kind := classy_run_level_change_timeout}
+          , #{f := ?single, t := ?stopped}
+          , #{?snk_kind := classy_run_level_change_timeout}
+          ],
+          Events3)
+     end,
+     [ fun events_on_all_sites/1
+     ]).
+
 %% This testcase verifies site autoclean functionality
 t_070_cleanup(_) ->
   S1 = <<"s1">>,
@@ -1481,6 +1576,8 @@ no_unexpected_events(Trace) ->
         , classy_discovery_failure
         , classy_table_on_update_callback_failure
         , ?classy_bad_data
+        , ?classy_run_level_change_error
+        , ?classy_run_level_change_timeout
         ],
         Trace)).
 

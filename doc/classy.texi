@@ -292,6 +292,20 @@ The document was typeset with
       @emph{Unit}: ms
 
       Default timeout for remote procedure calls.
+
+    @defen{run_level_timeout, @code{timeout()}, @code{infinity}}
+
+      @emph{Unit}: ms
+
+      Timeout waiting for the @ref{classy:run_level/2, run level change} hook.
+
+    @defen{run_level_grace_period, @code{timeout()}, 5000}
+
+      @emph{Unit}: ms
+
+      Timeout after the initial graceful shutdown signal is sent
+      before @ref{classy:run_level/2, run level change} hook is brutally killed.
+
   @section Peer
 
     @defen{sync_timeout, @code{non_neg_integer()}, 1000}

@@ -116,8 +116,8 @@ start_link_vote_participant_sup() ->
 init(#top{}) ->
   _ = classy_hook:init(),
   RLChanger = #{ id       => run_level_mgr
-               , start    => {classy_rl_changer, start_link, []}
-               , shutdown => 10_000
+               , start    => {classy_rl_changer, start_link, [self()]}
+               , shutdown => infinity
                , restart  => permanent
                , type     => worker
                },
