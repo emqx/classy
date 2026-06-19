@@ -15,6 +15,8 @@ Business code should not use it directly.
 %% API:
 -export([ known_clusters/1
         , set_member/4
+        , set_info/3
+        , set_liveness/5
         , members/2
         , list_local_sites/1
         , get_data/4
@@ -66,7 +68,9 @@ Business code should not use it directly.
 %% Types of keys stored in the cluster CRDT.
 -record(mem, {s :: classy:site() | atom()}).
 -record(host, {s :: classy:site() | atom()}).
--type key() :: #mem{} | #host{}.
+-record(info, {s :: classy:site() | atom()}).
+-record(live, {s :: classy:site() | atom()}).
+-type key() :: #mem{} | #host{} | #info{} | #live{}.
 
 -doc "Arbitrary term used to break ties between commands with the same logical timestamp.".
 -type magic() :: term().
@@ -190,6 +194,36 @@ set_member(Cluster, Local, Target, IsMember) when is_boolean(IsMember) ->
   end.
 
 -doc """
+Set site information.
+
+This function is called by the site itself.
+""".
+-spec set_info(classy:cluster_id(), classy:site(), _Info) -> ok | {error, _}.
+set_info(Cluster, Local, Info) ->
+  try
+    gen_server:call(
+      ?via(Cluster, Local),
+      #call_set{k = #info{s = Local}, v = Info},
+      ?call_timeout)
+  catch
+    EC:Err -> {error, {EC, Err}}
+  end.
+
+-doc """
+Set site liveness info.
+""".
+-spec set_liveness(classy:cluster_id(), classy:site(), classy:site(), integer(), boolean()) -> ok | {error, _}.
+set_liveness(Cluster, Local, Target, NRestarts, IsUp) ->
+  try
+    gen_server:call(
+      ?via(Cluster, Local),
+      #call_set{k = #live{s = Local}, v = #liveness{nr = NRestarts, isup = IsUp}},
+      ?call_timeout)
+  catch
+    EC:Err -> {error, {EC, Err}}
+  end.
+
+-doc """
 Return active members of the @code{Cluster},
 as perceived by @code{Local} site.
 
@@ -278,7 +312,9 @@ dump() ->
             Info = {Val, #{origin => Origin, ltime => Clock, wtime => OWT, ltime_imported => TOI}},
             Path = case Key of
                      #mem{s = Target}  -> [peers, Target, mem];
-                     #host{s = Target} -> [peers, Target, host]
+                     #host{s = Target} -> [peers, Target, host];
+                     #info{s = Target} -> [peers, Target, info];
+                     #live{s = Target} -> [peers, Target, liveness]
                    end,
             classy_lib:map_deep_insert(
               [{Cluster, Local} | Path],
@@ -489,6 +525,17 @@ This is most likely to happen during a network partition.
 Please see theories/classy.v file for more details and some intricate requirements for this function.
 """.
 -spec ord(op()) -> ord().
+ord(#op_set{k = #live{}, val = #liveness{nr = NR, isup = IsUp}, c = C, origin = O}) ->
+  %% Liveness information is merged according to special rules:
+  %% here we use target's n_restarts for serialization (as it can only grow),
+  %% also "down" events take priority over "up" events.
+  %% This is to make sure that information about site getting down at a certain
+  %% "incarnation" is eventually propagated everywhere.
+  UpN = case IsUp of
+          true -> 0;
+          false -> 1
+        end,
+  {NR, UpN, C, O};
 ord(#op_set{c = C, m = M, origin = O}) ->
   {C, M, O}.
 
@@ -657,6 +704,8 @@ sites_for_cleanup(SecsDown, S) ->
 forget_site(Site, #s{cluster = Cluster, site = Local}) when is_binary(Site) ->
   classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, k = #mem{s = Site}}),
   classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, k = #host{s = Site}}),
+  classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, k = #info{s = Site}}),
+  classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, k = #live{s = Site}}),
   classy_table:dirty_delete(?ptab, #pk_acked_in{c = Cluster, l = Local, r = Site}),
   classy_table:dirty_delete(?ptab, #pk_acked_out{c = Cluster, l = Local, r = Site}),
   ok.
@@ -755,7 +804,7 @@ max_toi(Site, #s{cluster = Cluster, site = Local}) ->
                     }
         , []
         , ['$1']
-        } || Key <- [#mem{s = Site}, #host{s = Site}]],
+        } || Key <- [#mem{s = Site}, #host{s = Site}, #info{s = Site}, #live{s = Site}]],
   L = ets:select(?ptab, MS),
   case L of
     [] -> undefined;

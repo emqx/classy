@@ -611,6 +611,9 @@ adjust_run_level(S = #s{cluster = Cluster, site = Site}) ->
                false -> ?single
              end,
   set_run_level(RunLevel),
+  %% Propagate info to peers:
+  Info = classy_hook:fold(?on_enrich_site_info, [], #{rl => RunLevel}),
+  classy_membership:set_info(Cluster, Site, Info),
   S.
 
 %% Start membership processes for all known former clusters, in order

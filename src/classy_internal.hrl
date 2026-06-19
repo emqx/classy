@@ -78,5 +78,10 @@
         }).
 %%    Number of restarts since creation of the site
 -define(n_restarts, n_restarts).
+-record(liveness,
+        { nr
+        , isup
+        , reserved = []
+        }).
 
 -endif.
