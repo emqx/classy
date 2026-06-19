@@ -327,7 +327,7 @@ t_060_at_lower_level(_) ->
      , fun events_on_all_sites/1
      ]).
 
-%% Verify hadling of timeouts during run level changes.
+%% Verify handling of timeouts during run level changes.
 t_061_run_level_timeouts(_) ->
   S1 = <<"s1">>,
   ?check_trace(
@@ -781,7 +781,12 @@ t_100_autocluster(_) ->
             application:set_env(classy, discovery_strategy, Strategy))
         || I <- Sites],
        %% Wait for the autocluster to do its job:
-       ?block_until(#{?snk_kind := classy_member_join})
+       ?block_until(#{?snk_kind := classy_member_join}),
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
+       %% Verify candidates function:
+       ?assertMatch(
+          {ok, [{Cluster, N2}]},
+          ?ON(S1, classy_autocluster:candidates()))
      end,
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1

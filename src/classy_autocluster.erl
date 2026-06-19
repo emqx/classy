@@ -70,9 +70,7 @@ List candidates according to the selected strategy.
 candidates() ->
   with_strategy(
     fun(Mod, Options) ->
-        fun() ->
-            discover(Mod, Options)
-        end
+        discover(Mod, Options)
     end).
 
 %%================================================================================
