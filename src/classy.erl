@@ -138,7 +138,7 @@ Site is kicked by the autoclean logic.
 -doc """
 @xref{Run level}
 """.
--type run_level() :: stopped | single | cluster | quorum.
+-type run_level() :: ?stopped | ?single | ?cluster | ?quorum.
 
 %%================================================================================
 %% API functions
@@ -321,11 +321,11 @@ Lower the run level to the given value and run the specified function.
 This function can be used to implement migrations that
 require business applications to be stopped.
 """.
--spec at_lower_level(classy_node:run_level_atom(), fun(() -> Ret)) ->
+-spec at_lower_level(run_level(), fun(() -> Ret)) ->
         {ok, Ret} |
         {error | exit | throw, _Reason, _Stacktrace}.
 at_lower_level(RunLevel, Fun) ->
-  classy_node:at_lower_level(RunLevel, Fun).
+  classy_rl_changer:at_lower_level(RunLevel, Fun).
 
 -doc """
 Get ID of the local site.

@@ -115,6 +115,12 @@ start_link_vote_participant_sup() ->
 
 init(#top{}) ->
   _ = classy_hook:init(),
+  RLChanger = #{ id       => run_level_mgr
+               , start    => {classy_rl_changer, start_link, []}
+               , shutdown => 10_000
+               , restart  => permanent
+               , type     => worker
+               },
   Node = #{ id       => node
           , start    => {classy_node, start_link, []}
           , shutdown => 10_000
@@ -141,6 +147,7 @@ init(#top{}) ->
                  },
   Children = [ sup_spec(#{id => ?TABLE_SUP, start => {?MODULE, start_link_table_sup, []}})
              , sup_spec(#{id => ?MEMBERSHIP_SUP, start => {?MODULE, start_link_membership_sup, []}})
+             , RLChanger
              , Node
              , UIDGen
              , sup_spec(#{id => ?VOTE_COORDINATOR_SUP, start => {?MODULE, start_link_vote_coordinator_sup, []}})

@@ -20,15 +20,12 @@ Management of the local site and node.
         , peer_info/0
         , node_of_site/2
         , n_restarts/0
-
-        , at_lower_level/2
         ]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export_type([run_level_atom/0]).
 -export([hello/0, on_ptab_update/2]).
 
 -include_lib("snabbkaffe/include/trace.hrl").
@@ -62,13 +59,6 @@ Management of the local site and node.
         , remote :: classy:site()
         , member :: boolean()
         }).
--record(call_at_run_level,
-        { level :: run_level_atom()
-        , function :: fun(() -> _)
-        }).
-
--type run_level_int() :: 0..3.
--type run_level_atom() :: ?stopped | ?single | ?cluster | ?quorum.
 
 %%================================================================================
 %% API functions
@@ -167,16 +157,6 @@ kick_site(Site, Intent) ->
     infinity).
 
 -doc false.
--spec at_lower_level(run_level_atom(), fun(() -> Ret)) ->
-        {ok, Ret} |
-        {error | exit | throw, _Reason, _Stacktrace}.
-at_lower_level(RunLevel, Fun) ->
-  gen_server:call(
-    ?SERVER,
-    #call_at_run_level{level = RunLevel, function = Fun},
-    infinity).
-
--doc false.
 -spec nodes(all | connected | disconnected) -> [node()].
 nodes(Query) ->
   Filter = case Query of
@@ -239,7 +219,6 @@ n_restarts() ->
 -record(s,
         { cluster :: classy:cluster_id() | undefined
         , site :: classy:site()
-        , run_level = 0 :: run_level_int()
         , peer_state = #{} :: #{classy:site() => {node(), boolean()}}
         }).
 
@@ -281,16 +260,6 @@ handle_call(#call_kick{site = Target, intent = Intent}, _From, S) ->
       _ -> {error, local_not_in_cluster}
     end,
   {reply, Ret, S};
-handle_call(#call_at_run_level{level = RequestedRunLevel, function = Fun}, _From, S0) ->
-  RunLevel = min(S0#s.run_level, run_level(RequestedRunLevel)),
-  S = change_run_level(RunLevel, S0),
-  Ret = try
-          {ok, Fun()}
-        catch
-          EC:Err:Stack ->
-            {EC, Err, Stack}
-        end,
-  {reply, Ret, update_runtime(S)};
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => call
@@ -325,7 +294,7 @@ handle_info(Info, S) ->
   {noreply, S}.
 
 -doc false.
-terminate(Reason, S) ->
+terminate(Reason, _S) ->
   classy_lib:is_normal_exit(Reason) orelse
     ?tp(warning, ?classy_abnormal_exit,
         #{ server => ?MODULE
@@ -333,10 +302,7 @@ terminate(Reason, S) ->
          }),
   classy_table:stop(?ptab, 1_000),
   classy_table:stop(?site_info, 1_000),
-  case S of
-    #s{} -> change_run_level(run_level(?stopped), S);
-    _    -> ok
-  end,
+  sync_set_run_level(?stopped),
   persistent_term:erase(?pt_site),
   persistent_term:erase(?pt_cluster).
 
@@ -499,8 +465,10 @@ do_join_node(Node, Cluster, Remote, MemData, S0) ->
       do_join_node(Node, Cluster, Remote, MemData, S)
   end.
 
-on_leave(S0 = #s{cluster = Cluster, site = Local}, Intent) ->
-  S = change_run_level(run_level(?stopped), S0),
+on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
+  set_run_level(?stopped),
+  %% Sync with the business apps:
+  _ = classy_rl_changer:at_lower_level(?stopped, fun() -> ok end),
   classy_table:delete(?ptab, ?the_cluster),
   classy_hook:foreach(?on_post_kick, [Cluster, Local, Intent]),
   classy_table:clear(?site_info),
@@ -512,7 +480,7 @@ on_leave(S0 = #s{cluster = Cluster, site = Local}, Intent) ->
   end.
 
 -spec join_cluster(classy:cluster_id(), node(), classy:site(), classy:site(), #s{}) -> {ok, #s{}}.
-join_cluster(Cluster, JoinToNode, Local, Remote, S = #s{run_level = 0}) ->
+join_cluster(Cluster, JoinToNode, Local, Remote, S = #s{}) ->
   {ok, _} = classy_sup:ensure_membership(Cluster, Local),
   classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode]),
   classy_table:dirty_write(?ptab, ?the_cluster, Cluster),
@@ -639,24 +607,13 @@ adjust_run_level(S = #s{cluster = Cluster, site = Site}) ->
   RunLevel = case NKnown >= classy_lib:n_sites() of
                true  ->
                  case NConnected >= classy:quorum(config) of
-                   true  -> run_level(?quorum);
-                   false -> run_level(?cluster)
+                   true  -> ?quorum;
+                   false -> ?cluster
                  end;
-               false -> run_level(?single)
+               false -> ?single
              end,
-  change_run_level(RunLevel, S).
-
--spec change_run_level(run_level_int(), #s{}) -> #s{}.
-change_run_level(Level, #s{run_level = Level} = S) when is_integer(Level) ->
-  S;
-change_run_level(To, #s{run_level = From} = S) when To >= 0, To =< 3 ->
-  Next = if To > From ->
-             From + 1;
-            To < From ->
-             From - 1
-         end,
-  classy_hook:foreach(?on_change_run_level, [run_level(From), run_level(Next)]),
-  change_run_level(To, S#s{run_level = Next}).
+  set_run_level(RunLevel),
+  S.
 
 %% Start membership processes for all known former clusters, in order
 %% to relay information to former peers.
@@ -687,16 +644,9 @@ increase_n_restarts() ->
       end,
   classy_table:write(?ptab, ?n_restarts, N).
 
--spec run_level(run_level_int()) -> run_level_atom();
-               (run_level_atom()) -> run_level_int().
-run_level(?stopped) -> 0;
-run_level(?single)  -> 1;
-run_level(?cluster) -> 2;
-run_level(?quorum)  -> 3;
-run_level(0) -> ?stopped;
-run_level(1) -> ?single;
-run_level(2) -> ?cluster;
-run_level(3) -> ?quorum.
+sync_set_run_level(Level) ->
+  classy_rl_changer:set(Level),
+  classy_rl_changer:at_lower_level(Level, fun() -> ok end).
 
 the_cluster() ->
   case classy_table:lookup(?ptab, ?the_cluster) of
@@ -713,3 +663,13 @@ the_site() ->
     [] ->
       undefined
   end.
+
+-ifndef(TEST).
+%% In real live we change levels async-ly:
+set_run_level(Level) ->
+  classy_rl_changer:set(Level).
+-else.
+%% In the tests we want to sequence the events.
+set_run_level(Level) ->
+  sync_set_run_level(Level).
+-endif.

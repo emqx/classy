@@ -302,7 +302,7 @@ t_060_at_lower_level(_) ->
      begin
        %% Prepare the system:
        _N1 = create_start_site(S1, #{}),
-       timer:sleep(1000),
+       ct:sleep(1000),
        ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
        ?assertMatch(
           {ok, hello},
@@ -311,7 +311,8 @@ t_060_at_lower_level(_) ->
                 single,
                 fun() ->
                     hello
-                end)))
+                end))),
+       ct:sleep(1000)
      end,
      [ {"run level transitions",
         fun(Trace) ->
@@ -1575,10 +1576,10 @@ site_of_event(#{?snk_kind := Kind, local := Site}) when
     Kind =:= classy_member_leave;
     Kind =:= classy_joined_cluster;
     Kind =:= classy_kicked_from_cluster;
+    Kind =:= classy_change_run_level;
     Kind =:= classy_init_clustering ->
   Site;
 site_of_event(#{?snk_kind := Kind, ?snk_meta := #{local := Site}}) when
-    Kind =:= classy_change_run_level;
     Kind =:= classy_peer_up;
     Kind =:= classy_peer_down ->
   Site;
