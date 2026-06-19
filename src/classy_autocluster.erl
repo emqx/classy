@@ -14,6 +14,7 @@ A server responsible for automatic peer discovery.
         , enable/0
         , disable/0
         , app_name/0
+        , candidates/0
         ]).
 
 %% behavior callbacks:
@@ -61,6 +62,18 @@ E.g. @code{'foo@@127.0.0.1'} -> @code{'foo'}.
 app_name() ->
   [Name | _] = string:tokens(atom_to_list(node()), "@"),
   Name.
+
+-doc """
+List candidates according to the selected strategy.
+""".
+-spec candidates() -> {ok, [{classy:cluster_id(), node()}]} | ignore.
+candidates() ->
+  with_strategy(
+    fun(Mod, Options) ->
+        fun() ->
+            discover(Mod, Options)
+        end
+    end).
 
 %%================================================================================
 %% behavior callbacks
