@@ -417,7 +417,20 @@ handle_join(S, Call) ->
             ExpectedCluster =:= any ->
       case classy_hook:all(?on_pre_join, [Cluster, Remote, Node, Intent]) of
         ok ->
-          do_join_node(Node, Cluster, Remote, MemData, Intent, S);
+          Res =
+            global:trans(
+              {classy_node_join_lock, self()},
+              fun() ->
+                  do_join_node(Node, Cluster, Remote, MemData, Intent, S)
+              end,
+              [node(), Node],
+              1),
+          case Res of
+            aborted ->
+              {error, aborted};
+            _ ->
+              Res
+          end;
         {error, _} = Err ->
           Err
       end;
