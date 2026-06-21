@@ -316,14 +316,17 @@ nodes(Query) ->
   classy_node:nodes(Query).
 
 -doc """
-Lower the run level to the given value and run the specified function.
+This function can be used to
+lower the run level of the system to the given value
+and run the specified function.
 
 This function can be used to implement migrations that
 require business applications to be stopped.
+
+Note: this function returns immediately after scheduling the action,
+but before the function is executed.
 """.
--spec at_lower_level(run_level(), fun(() -> Ret)) ->
-        {ok, Ret} |
-        {error | exit | throw, _Reason, _Stacktrace}.
+-spec at_lower_level(run_level(), fun(() -> any())) -> ok | {error, _}.
 at_lower_level(RunLevel, Fun) ->
   classy_rl_changer:at_lower_level(RunLevel, Fun).
 

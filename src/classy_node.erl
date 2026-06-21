@@ -660,8 +660,7 @@ increase_n_restarts() ->
   classy_table:write(?ptab, ?n_restarts, N).
 
 sync_set_run_level(Level) ->
-  classy_rl_changer:set(Level),
-  classy_rl_changer:at_lower_level(Level, fun() -> ok end).
+  classy_rl_changer:set_sync(Level, infinity).
 
 the_cluster() ->
   case classy_table:lookup(?ptab, ?the_cluster) of
@@ -686,5 +685,6 @@ set_run_level(Level) ->
 -else.
 %% In the tests we want to sequence the events.
 set_run_level(Level) ->
-  sync_set_run_level(Level).
+  ok = classy_rl_changer:set_sync(Level, 5_000),
+  ok.
 -endif.

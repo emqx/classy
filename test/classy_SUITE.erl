@@ -305,7 +305,7 @@ t_060_at_lower_level(_) ->
        ct:sleep(1000),
        ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
        ?assertMatch(
-          {ok, hello},
+          ok,
           ?ON(S1,
               classy:at_lower_level(
                 single,
@@ -337,8 +337,8 @@ t_061_run_level_timeouts(_) ->
        _N1 = create_start_site(S1, #{}),
        ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
        Pred = ?match_event(#{?snk_kind := K} when K =:= rl_change;
-                                                  K =:= classy_run_level_change_timeout;
-                                                  K =:= classy_run_level_change_error),
+                                                  K =:= ?classy_hook_failure;
+                                                  K =:= ?classy_run_level_change_error),
        ?ON(S1,
            begin
              classy:run_level(
@@ -346,13 +346,12 @@ t_061_run_level_timeouts(_) ->
                    ?tp(rl_change, #{f => From, t => To}),
                    timer:sleep(100)
                end,
-               0),
-             application:set_env(classy, run_level_grace_period, 10)
+               0)
            end),
        %% 1. First try setting run level multiple times, faster than
        %% the hooks can handle:
-       ?ON(S1, application:set_env(classy, run_level_timeout, 1000)),
-       {ok, Sub1} = snabbkaffe:subscribe(Pred, 100, 1000, 0),
+       ?ON(S1, application:set_env(classy, hook_timeout, 1000)),
+       {ok, Sub1} = snabbkaffe:subscribe(Pred, 100, 3000, 0),
        %% Issue a few conflicting commands in rapid succession:
        ?ON(S1, classy_rl_changer:set(?stopped)),
        ?ON(S1, classy_rl_changer:set(?quorum)),
@@ -368,13 +367,10 @@ t_061_run_level_timeouts(_) ->
        %% 2. Same logic applies when the system is stopped:
        %%    Prepare; go to the single state
        ?ON(S1,
-           begin
-             classy_rl_changer:set(?single),
-             classy:at_lower_level(?single, fun() -> ok end)
-           end),
+           classy_rl_changer:set_sync(?single, 5_000)),
        %%    Request transition to quorum, and simultaneously stop
        %%    application (simulated by a supervisor request):
-       {ok, Sub2} = snabbkaffe:subscribe(Pred, 100, 1000, 0),
+       {ok, Sub2} = snabbkaffe:subscribe(Pred, 100, 3000, 0),
        ?ON(S1,
            begin
              classy_rl_changer:set(?quorum),
@@ -391,32 +387,30 @@ t_061_run_level_timeouts(_) ->
        ?ON(S1,
            begin
              {ok, _} = supervisor:restart_child(classy_sup, run_level_mgr),
-             application:set_env(classy, run_level_timeout, 10)
+             application:set_env(classy, hook_timeout, 10)
            end),
-       {ok, Sub3} = snabbkaffe:subscribe(Pred, 100, 1000, 0),
+       {ok, Sub3} = snabbkaffe:subscribe(Pred, 100, 3000, 0),
        ?ON(S1,
            begin
-             classy_rl_changer:set(?quorum),
-             classy:at_lower_level(?quorum, fun() -> ok end),
-             classy_rl_changer:set(?stopped),
-             classy:at_lower_level(?stopped, fun() -> ok end)
+             classy_rl_changer:set_sync(?quorum, 5_000),
+             classy_rl_changer:set_sync(?stopped, 5_000)
            end),
        {_, Events3} = snabbkaffe:receive_events(Sub3),
        ?assertMatch(
           [ %% Advance:
             #{f := ?stopped, t := ?single}
-          , #{?snk_kind := classy_run_level_change_timeout}
+          , #{?snk_kind := ?classy_hook_failure, reason := {error, timeout}}
           , #{f := ?single, t := ?cluster}
-          , #{?snk_kind := classy_run_level_change_timeout}
+          , #{?snk_kind := ?classy_hook_failure, reason := {error, timeout}}
           , #{f := ?cluster, t := ?quorum}
-          , #{?snk_kind := classy_run_level_change_timeout}
+          , #{?snk_kind := ?classy_hook_failure, reason := {error, timeout}}
             %% Retard:
           , #{f := ?quorum, t := ?cluster}
-          , #{?snk_kind := classy_run_level_change_timeout}
+          , #{?snk_kind := ?classy_hook_failure, reason := {error, timeout}}
           , #{f := ?cluster, t := ?single}
-          , #{?snk_kind := classy_run_level_change_timeout}
+          , #{?snk_kind := ?classy_hook_failure, reason := {error, timeout}}
           , #{f := ?single, t := ?stopped}
-          , #{?snk_kind := classy_run_level_change_timeout}
+          , #{?snk_kind := ?classy_hook_failure, reason := {error, timeout}}
           ],
           Events3)
      end,
@@ -1578,12 +1572,11 @@ no_unexpected_events(Trace) ->
         [ ?classy_unknown_event
         , ?classy_abnormal_exit
         , ?classy_table_anomaly
-        , classy_hook_failure
+        , ?classy_hook_failure
         , classy_discovery_failure
         , classy_table_on_update_callback_failure
         , ?classy_bad_data
         , ?classy_run_level_change_error
-        , ?classy_run_level_change_timeout
         ],
         Trace)).
 

@@ -15,6 +15,7 @@ Module responsible for managing the hooks.
         , fold/3
         , all/2
         , first_match/2
+        , timeout/0
         ]).
 
 -export_type([ hookpoint/0
@@ -49,6 +50,12 @@ It can be used to unregister the hook.
 %%================================================================================
 %% API functions
 %%================================================================================
+
+-doc """
+Get the configured hook timeout value (with defaults).
+""".
+timeout() ->
+  application:get_env(classy, hook_timeout, 30_000).
 
 -doc false.
 init() ->
@@ -186,14 +193,14 @@ hooks(Hookpoint) ->
   ets:select(?tab, [MS]).
 
 -spec safe_apply(hookpoint(), fun(), list()) -> {ok, _Val} | error.
-safe_apply(HookPoint, Fun, A) ->
-  try
-    {ok, apply(Fun, A)}
-  catch
-    EC:Err:Stack ->
-      ?tp(warning, classy_hook_failure,
-          #{ EC        => Err
-           , stack     => Stack
+safe_apply(HookPoint, Fun, Args) ->
+  Timeout = timeout(),
+  case classy_lib:safe_apply_with_timeout({Fun, Args}, Timeout) of
+    {ok, _} = Ok ->
+      Ok;
+    Err ->
+      ?tp(critical, ?classy_hook_failure,
+          #{ reason    => Err
            , hook      => Fun
            , hookpoint => HookPoint
            }),
