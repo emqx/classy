@@ -26,7 +26,7 @@ Management of the local site and node.
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([hello/0, on_ptab_update/2]).
+-export([hello/0, on_ptab_update/2, notify_mem_deltas/2]).
 
 -include_lib("snabbkaffe/include/trace.hrl").
 -include("classy_internal.hrl").
@@ -53,11 +53,9 @@ Management of the local site and node.
         , cluster :: classy:cluster_id() | any
         }).
 -record(call_kick, {site :: classy:site(), intent :: term()}).
--record(cast_membership_change,
+-record(cast_mem_deltas,
         { cluster :: classy:cluster_id()
-        , local :: classy:site()
-        , remote :: classy:site()
-        , member :: boolean()
+        , data :: [classy_membership:event()]
         }).
 
 %%================================================================================
@@ -219,7 +217,6 @@ n_restarts() ->
 -record(s,
         { cluster :: classy:cluster_id() | undefined
         , site :: classy:site()
-        , peer_state = #{} :: #{classy:site() => {node(), boolean()}}
         }).
 
 -doc false.
@@ -232,7 +229,6 @@ init(_) ->
      }),
   ok = classy_table:open(?ptab, #{on_update => fun ?MODULE:on_ptab_update/2}),
   ok = classy_table:open(?site_info, #{ets_options => [{read_concurrency, true}]}),
-  classy:on_membership_change(fun on_membership_change/4, -100),
   increase_n_restarts(),
   classy_hook:foreach(?on_node_init, []),
   case init_cluster() of
@@ -270,7 +266,7 @@ handle_call(Call, From, S) ->
   {reply, {error, unknown_call}, S}.
 
 -doc false.
-handle_cast(#cast_membership_change{} = Cast, S) ->
+handle_cast(#cast_mem_deltas{} = Cast, S) ->
   handle_membership_change_event(Cast, S);
 handle_cast(Cast, S) ->
   ?tp(warning, ?classy_unknown_event,
@@ -292,12 +288,13 @@ handle_info(Info, S) ->
   {noreply, S}.
 
 -doc false.
-terminate(Reason, _S) ->
+terminate(Reason, S) ->
   classy_lib:is_normal_exit(Reason) orelse
     ?tp(warning, ?classy_abnormal_exit,
         #{ server => ?MODULE
          , reason => Reason
          }),
+  update_liveness_info(S, false),
   classy_table:stop(?ptab, 1_000),
   classy_table:stop(?site_info, 1_000),
   sync_set_run_level(?stopped),
@@ -343,55 +340,43 @@ on_ptab_update(_, Op) ->
       ok
   end.
 
+-doc false.
+-spec notify_mem_deltas(classy:cluster_id(), [classy_membership:event()]) -> ok.
+notify_mem_deltas(Cluster, Deltas) ->
+  gen_server:cast(
+    ?SERVER,
+    #cast_mem_deltas{ cluster = Cluster
+                    , data = Deltas
+                    }).
+
 %%================================================================================
 %% Internal functions
 %%================================================================================
 
-on_membership_change(Cluster, Local, Remote, Member) ->
-  gen_server:cast(?SERVER,
-                  #cast_membership_change{ cluster = Cluster
-                                         , local = Local
-                                         , remote = Remote
-                                         , member = Member
-                                         }).
-
 handle_membership_change_event(
-  #cast_membership_change{ cluster = Cluster
-                         , local = Local
-                         , remote = Remote
-                         , member = Member
-                         },
-  S0 = #s{cluster = ThisCluster, site = ThisSite}
+  #cast_mem_deltas{ cluster = Cluster
+                  , data = Deltas
+                  },
+  S0 = #s{cluster = ThisCluster, site = Local}
  ) ->
   ?tp(debug, membership_change,
       #{ cluster => Cluster
        , origin => Local
-       , target => Remote
-       , member => Member
+       , data => Deltas
        }),
-  if Cluster =:= ThisCluster,
-     Local =:= ThisSite,
-     Remote =:= ThisSite,
-     Member =:= false ->
-      %% We got kicked:
-      ?tp(warning, classy_kicked_remotely,
-          #{ cluster => Cluster
-           , local   => ThisSite
-           }),
-      case on_leave(S0, kicked) of
+  if Cluster =:= ThisCluster ->
+      case apply_deltas_with_effects(Deltas, S0) of
         {ok, S}      -> {noreply, S};
         {error, Err} -> {stop, Err, undefined}
       end;
-     Cluster =:= ThisCluster ->
-      {noreply, update_runtime(S0)};
      true ->
+      %% Update from the old cluster. Ignore it.
       {noreply, S0}
   end.
 
 -spec update_runtime(#s{}) -> #s{}.
-update_runtime(S0) ->
-  S = update_sites_status(S0),
-  adjust_run_level(S).
+update_runtime(S) ->
+  adjust_run_level(update_sites_status(S)).
 
 handle_kick(Cluster, Local, Target, Intent) ->
   case classy_hook:all(?on_pre_kick, [Cluster, Target, Intent]) of
@@ -478,9 +463,8 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
   end.
 
 on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
-  set_run_level(?stopped),
+  sync_set_run_level(?stopped),
   %% Sync with the business apps:
-  _ = classy_rl_changer:at_lower_level(?stopped, fun() -> ok end),
   classy_table:delete(?ptab, ?the_cluster),
   classy_hook:foreach(?on_post_kick, [Cluster, Local, Intent]),
   classy_table:clear(?site_info),
@@ -498,75 +482,21 @@ join_cluster(Cluster, JoinToNode, Local, Remote, Intent, S = #s{}) ->
   classy_table:dirty_write(?ptab, ?the_cluster, Cluster),
   classy_table:dirty_write(?ptab, ?parent_site, Remote),
   classy_table:flush(?ptab),
-  {ok, S#s{cluster = Cluster, peer_state = #{}}}.
+  {ok, S#s{cluster = Cluster}}.
 
 %% Update node tracking information
 -spec update_sites_status(#s{}) -> #s{}.
-update_sites_status(S0 = #s{cluster = Cluster, site = Local}) ->
-  %% Gather data:
-  Nodes = [node() | erlang:nodes()],
-  Members = classy_membership:members(Cluster, Local),
-  NodesOfSite = classy_membership:node_of_site(Cluster, Local),
-  %% Update members:
-  S1 = lists:foldl(
-         fun(Site, Acc) ->
-             case NodesOfSite of
-               #{Site := Node} ->
-                 IsConn = lists:member(Node, Nodes);
-               #{} ->
-                 Node = undefined,
-                 IsConn = false
-             end,
-             case classy_table:lookup(?site_info, Site) of
-               [#site_info{isconn = IsConn, node = Node}] ->
-                 %% No changes:
-                 ok;
-               _ ->
-                 classy_table:dirty_write(
-                   ?site_info,
-                   Site,
-                   #site_info{ isconn = IsConn
-                             , node = Node
-                             , last_update = classy_lib:time_s()
-                             })
-             end,
-             maybe_on_peer_connection_status_change(Acc, Site, Node, IsConn, true)
-        end,
-        S0,
-        Members),
-  %% Delete info of gone members:
-  S = ets:foldl(
-        fun(#classy_kv{k = Site, v = #site_info{node = Node}}, Acc) ->
-            case lists:member(Site, Members) of
-              true ->
-                Acc;
-              false ->
-                classy_table:dirty_delete(?site_info, Site),
-                maybe_on_peer_connection_status_change(Acc, Site, Node, false, false)
-            end
-        end,
-        S1,
-        ?site_info),
-  classy_table:flush(?site_info),
+update_sites_status(S) ->
+  Batch =
+    ets:foldl(
+      fun(#classy_kv{k = Peer, v = SiteInfo}, Acc) ->
+          update_site_info(Peer, SiteInfo, S) ++ Acc
+      end,
+      [],
+      ?site_info),
+  {ok, Effects} = classy_table:atomically(?site_info, Batch),
+  run_site_info_effects(Effects),
   S.
-
--spec maybe_on_peer_connection_status_change(#s{}, classy:site(), node() | undefined, boolean(), boolean()) -> #s{}.
-maybe_on_peer_connection_status_change(S = #s{cluster = Cluster, site = Local, peer_state = PS0}, Site, Node, IsConn, Keep) ->
-  Changed = case PS0 of
-              #{Site := {Node, IsConn}} ->
-                false;
-              #{} ->
-                classy_hook:foreach(?on_peer_connection_status_change, [Cluster, Local, Site, Node, IsConn]),
-                true
-            end,
-  PS = if Changed andalso Keep ->
-           PS0#{Site => {Node, IsConn}};
-          not Keep ->
-           maps:remove(Site, PS0);
-          true ->
-           PS0
-       end,
-  S#s{peer_state = PS}.
 
 init_cluster() ->
   maybe
@@ -579,6 +509,7 @@ init_cluster() ->
           #s{ cluster = Cluster
             , site = Site
             }),
+    update_liveness_info(S, true),
     ?tp(debug, classy_init_clustering, #{local => Site, cluster => Cluster}),
     {ok, S}
   else
@@ -626,7 +557,7 @@ adjust_run_level(S = #s{cluster = Cluster, site = Site}) ->
              end,
   set_run_level(RunLevel),
   %% Propagate info to peers:
-  Info = classy_hook:fold(?on_enrich_site_info, [], #{rl => RunLevel}),
+  Info = classy_hook:fold(?on_enrich_site_info, [], #{rl => RunLevel, vsn => ?classy_proto_vsn}),
   classy_membership:set_info(Cluster, Site, Info),
   S.
 
@@ -641,6 +572,10 @@ start_old_clusters(Site) ->
         end
     end,
     classy_membership:known_clusters(Site)).
+
+update_liveness_info(#s{cluster = Cluster, site = Site}, Running) ->
+  {ok, NR} = n_restarts(),
+  classy_membership:set_liveness(Cluster, Site, Site, NR, Running).
 
 -spec increase_n_restarts() -> ok.
 increase_n_restarts() ->
@@ -677,6 +612,193 @@ the_site() ->
     [] ->
       undefined
   end.
+
+-spec apply_deltas_with_effects([classy_membership:event()], #s{}) -> {ok, #s{}} | {error, _}.
+apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
+  {Updated, Kicked} = merge_deltas(Deltas),
+  {ok, MyNR} = n_restarts(),
+  case Kicked of
+    #{Local := _} ->
+      %% We got kicked remotely:
+      ?tp(warning, classy_kicked_remotely,
+          #{ cluster => Cluster
+           , local   => Local
+           }),
+      case on_leave(S0, kicked) of
+        {ok, S}      -> {noreply, S};
+        {error, Err} -> {stop, Err, undefined}
+      end;
+   #{} ->
+      case Updated of
+        #{Local := #site_info{isup = false, nrestarts = NR}} when NR >= MyNR ->
+          %% Handle network partition; peers decided that we're down:
+          ?tp(warning, classy_restarted_remotely,
+              #{ cluster => Cluster
+               , local   => Local
+               }),
+          maybe
+            {ok, S} ?= import_deltas(Updated, Kicked, S0),
+            on_remote_restart(S)
+          end;
+        _ ->
+          %% Normal flow:
+          import_deltas(Updated, Kicked, S0)
+      end
+  end.
+
+-spec on_remote_restart(_) -> no_return().
+on_remote_restart(S) ->
+  %% TODO
+  {ok, S}.
+
+-spec import_deltas( #{classy:site() => #site_info{}}, #{classy:site() => true}, #s{}) ->
+        {ok, #s{}} | {error, _}.
+import_deltas(Updated, Kicked, S0 = #s{cluster = Cluster, site = Local}) ->
+  %% 1. Process kicked nodes:
+  Batch1 =
+    maps:fold(
+      fun(Peer, _, Acc) ->
+          [ {d, Peer}
+          , {then, {?on_membership_change, [Cluster, Local, Peer, false]}}
+          | Acc
+          ]
+      end,
+      [],
+      Kicked),
+  %% 2. Process updated nodes:
+  Batch =
+    maps:fold(
+      fun(Peer, NewInfo, Acc) ->
+          case Kicked of
+            #{Peer := _} ->
+              %% Ignore kicked sites:
+              Acc;
+            #{} ->
+              update_site_info(Peer, NewInfo, S0) ++ Acc
+          end
+      end,
+      Batch1,
+      Updated),
+  maybe
+    {ok, Effects} ?= classy_table:atomically(?site_info, Batch),
+    run_site_info_effects(Effects),
+    %% TODO: update peer info or delete it
+    {ok, adjust_run_level(S0)}
+  end.
+
+%% 1. Calculate connectivity to the node
+%% 2. Diff the current information with the past
+%% 3. Schedule hooks to be run
+%% 4. Schedule writing of the updated data to the DB
+update_site_info(Peer, New0 = #site_info{isup = IsUp, nrestarts = NR}, #s{cluster = Cluster, site = Local}) ->
+  Node = maps:get(Peer, classy_membership:node_of_site(Cluster, Local), undefined),
+  IsConn = lists:member(Node, [node() | nodes()]),
+  New = New0#site_info{isconn = IsConn, node = Node},
+  case classy_table:lookup(?site_info, Peer) of
+    [New] ->
+      %% No change:
+      [];
+    Other  ->
+      case Other of
+        [#site_info{isup = IsUp0, nrestarts = NR0, node = Node0, isconn = IsConn0}] ->
+          ok;
+        [] ->
+          IsUp0 = false,
+          IsConn0 = false,
+          %% If we haven't seen this peer before, do not report it as
+          %% restarted:
+          NR0 = NR,
+          %% Do not report changed host as well:
+          Node0 = Node
+      end,
+      [{w, Peer, New#site_info{last_update = classy_lib:time_s()}}] ++
+        case Other of
+          [] ->
+            [{then, {?on_membership_change, [Cluster, Local, Peer, true]}}];
+           _ ->
+            []
+        end ++
+        if Peer =/= Local, IsUp0 =/= IsUp ->
+            [{then, {?on_peer_liveness_change, [Peer, IsUp]}}];
+           true ->
+            []
+        end ++
+        if Node =/= Node0 ->
+            [{then, {?on_peer_node_change, [Peer, Node0, Node]}}];
+           true ->
+            []
+        end ++
+        if Peer =/= Local, NR > NR0, IsUp ->
+            [{then, {?on_peer_restart, [Peer, NR]}}];
+           true ->
+            []
+        end ++
+        if Peer =/= Local, IsConn0 =/= IsConn ->
+            [{then, {?on_peer_connection_status_change, [Peer, Node, IsConn]}}];
+           true ->
+            []
+        end
+    end.
+
+run_site_info_effects(Effects) ->
+  [classy_hook:foreach(Hookpoint, Args) || {Hookpoint, Args} <:- Effects],
+  ok.
+
+-spec merge_deltas([classy_membership:event()]) -> {Updated, Kicked} when
+    Updated :: #{classy:site() => #site_info{}},
+    Kicked :: #{classy:site() => true}.
+merge_deltas(Data) ->
+  merge_deltas(Data, #{}, #{}).
+
+-spec merge_deltas([classy_membership:event()], Updated, Kicked) -> {Updated, Kicked} when
+    Updated :: #{classy:site() => #site_info{}},
+    Kicked :: #{classy:site() => true}.
+merge_deltas([], Updated, Kicked) ->
+  {Updated, Kicked};
+merge_deltas([Up | Rest], Updated0, Kicked0) ->
+  Get = fun(Peer) ->
+            case Updated0 of
+              #{Peer := Val} ->
+                Val;
+              #{} ->
+                case classy_table:lookup(?site_info, Peer) of
+                  [Val] -> Val;
+                  [] -> default_site_info()
+                end
+            end
+        end,
+  case Up of
+    {mem, Peer, true} ->
+      Updated = Updated0#{Peer => Get(Peer)},
+      Kicked = maps:remove(Peer, Kicked0);
+    {mem, Peer, false} ->
+      Updated = Updated0,
+      Kicked = Kicked0#{Peer => true};
+    {host, Peer, Host} ->
+      Info0 = Get(Peer),
+      Info = Info0#site_info{node = Host},
+      Updated = Updated0#{Peer => Info},
+      Kicked = Kicked0;
+    {meta, Peer, Meta} ->
+      Info0 = Get(Peer),
+      Info = Info0#site_info{meta = Meta},
+      Updated = Updated0#{Peer => Info},
+      Kicked = Kicked0;
+    {liveness, Peer, IsUp, NRestarts} ->
+      Info0 = Get(Peer),
+      Info = Info0#site_info{ isup = IsUp
+                            , nrestarts = NRestarts
+                            },
+      Updated = Updated0#{Peer => Info},
+      Kicked = Kicked0
+  end,
+  merge_deltas(Rest, Updated, Kicked).
+
+default_site_info() ->
+  #site_info{ isconn = false
+            , isup = false
+            , last_update = classy_lib:time_s()
+            }.
 
 -ifndef(TEST).
 %% In real live we change levels async-ly:

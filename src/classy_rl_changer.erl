@@ -68,7 +68,8 @@ to_atom(3) -> ?quorum.
 at_lower_level(RunLevel, Fun) ->
   gen_server:call(
     ?SERVER,
-    #call_at_run_level{level = RunLevel, function = Fun}).
+    #call_at_run_level{level = RunLevel, function = Fun},
+    infinity).
 
 %%================================================================================
 %% Internal exports
@@ -82,7 +83,8 @@ start_link() ->
 set(RunLevel) ->
   gen_server:call(
     ?SERVER,
-    #call_set{level = RunLevel}).
+    #call_set{level = RunLevel},
+    infinity).
 
 -spec set_sync(classy:run_level(), timeout()) -> ok | {error, timeout}.
 set_sync(RunLevel, Timeout) ->
@@ -118,7 +120,7 @@ handle_call(#call_set{level = Level}, _From, S0) ->
      true ->
       {reply, {error, badarg}, S0}
   end;
-handle_call(#call_at_run_level{level = Level, function = Fun} = Act, _From, #s{actions = AA} = S0) ->
+handle_call(#call_at_run_level{level = Level, function = Fun}, _From, #s{actions = AA} = S0) ->
   if ?valid_level(Level), is_function(Fun, 0) ->
       New = #call{ at = to_int(Level)
                  , f  = Fun
@@ -211,8 +213,6 @@ maybe_transition(#s{actions = AA0, set = Set, current = From, running = undefine
   end.
 
 run_hooks(From, Next, Actions) ->
-  Timeout = application:get_env(classy, run_level_timeout, infinity),
-  GracePeriod = application:get_env(classy, run_level_grace_period, 5_000),
   FromA = to_atom(From),
   NextA = to_atom(Next),
   Worker = spawn_link(
