@@ -25,6 +25,7 @@ Business code should not use it directly.
         , node_of_site/2
         , site_of_node/2
         , to_liveness/3
+        , from_liveness/1
         , dump/0
         ]).
 
@@ -44,6 +45,7 @@ Business code should not use it directly.
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
 -ifdef(TEST).
+-include_lib("proper/include/proper.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -389,6 +391,20 @@ to_liveness(NRestarts, Self, IsUp) when is_integer(NRestarts),
             false -> 0
           end,
   (NRestarts bsl 4) bor OnBehalf bor UpBit.
+
+-doc """
+Convert liveness bitfield to a tuple.
+""".
+-spec from_liveness(liveness()) -> {NRestarts, Self, IsUp} when
+    NRestarts :: non_neg_integer(),
+    Self :: boolean(),
+    IsUp :: boolean().
+from_liveness(Liveness) when is_integer(Liveness),
+                             Liveness >= 0 ->
+  NRestarts = Liveness bsr 4,
+  IsUp = (Liveness band 1) > 0,
+  Self = Liveness band 2#100 =:= 0,
+  {NRestarts, Self, IsUp}.
 
 -ifdef(TEST).
 
