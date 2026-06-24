@@ -582,14 +582,14 @@ increase_n_restarts() ->
         [N0] when is_integer(N0) ->
           N0 + 1;
         [] ->
-          0;
+          1;
         Other ->
           ?tp(warning, ?classy_bad_data,
               #{ table => ?globals
                , key   => ?n_restarts
                , val   => Other
                }),
-          0
+          1
       end,
   classy_table:write(?globals, ?n_restarts, N).
 
@@ -636,8 +636,9 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
           #{Local := #site_info{isup = false, nrestarts = NR}} when NR >= MyNR ->
             %% Handle network partition; peers decided that we're down:
             ?tp(warning, classy_restarted_remotely,
-                #{ cluster => Cluster
-                 , local   => Local
+                #{ cluster   => Cluster
+                 , local     => Local
+                 , nrestarts => MyNR
                  }),
             on_remote_restart(S);
           _ ->
@@ -797,6 +798,7 @@ merge_deltas([Up | Rest], Updated0, Kicked0) ->
 default_site_info() ->
   #site_info{ isconn = false
             , isup = false
+            , nrestarts = 0
             }.
 
 -ifndef(TEST).

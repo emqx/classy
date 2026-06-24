@@ -816,23 +816,23 @@ t_200_n_restarts(_) ->
      begin
        create_start_site(S, #{}),
        ?assertEqual(
-          {ok, 0},
+          {ok, 1},
           ?ON(S, classy_node:n_restarts())),
        %% Verify serial UID tuples:
        ?assertEqual(
-          {0, 1},
+          {1, 1},
           ?ON(S, classy_uid:site_unique_seq_tuple(seq))),
        ?assertEqual(
-          {0, 2},
+          {1, 2},
           ?ON(S, classy_uid:site_unique_seq_tuple(seq))),
        ?assertEqual(
-          {S, 0, 3},
+          {S, 1, 3},
           ?ON(S, classy_uid:cluster_unique_seq_tuple(seq))),
        %% Verify regular UID tuples:
-       {0, UI1} = ?ON(S, classy_uid:site_unique_tuple()),
-       {0, UI2} = ?ON(S, classy_uid:site_unique_tuple()),
-       {S, 0, UI3} = ?ON(S, classy_uid:cluster_unique_tuple()),
-       {S, 0, UI4} = ?ON(S, classy_uid:cluster_unique_tuple()),
+       {1, UI1} = ?ON(S, classy_uid:site_unique_tuple()),
+       {1, UI2} = ?ON(S, classy_uid:site_unique_tuple()),
+       {S, 1, UI3} = ?ON(S, classy_uid:cluster_unique_tuple()),
+       {S, 1, UI4} = ?ON(S, classy_uid:cluster_unique_tuple()),
        ?assertEqual(
           [UI1, UI2, UI3, UI4],
           lists:uniq([UI1, UI2, UI3, UI4])),
@@ -857,7 +857,7 @@ t_200_n_restarts(_) ->
                {S, Nr, UI} when is_integer(UI),
                ?ON(S, classy_uid:cluster_unique_tuple()))
         end
-        || Nr <- lists:seq(1, 5)]
+        || Nr <- lists:seq(2, 5)]
      end,
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1
