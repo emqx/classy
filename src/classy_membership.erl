@@ -24,6 +24,7 @@ Business code should not use it directly.
         , flush/2
         , node_of_site/2
         , site_of_node/2
+        , to_liveness/3
         , dump/0
         ]).
 
@@ -115,7 +116,6 @@ Business code should not use it directly.
 -record(call_flush, {}).
 -record(call_get_data, {since :: clock(), acked :: clock()}).
 
-
 -record(s,
         { %% Cluster ID:
           cluster :: classy:cluster_id()
@@ -155,6 +155,8 @@ Business code should not use it directly.
                  {host, classy:site(), node()} |
                  {meta, classy:site(), map()} |
                  {liveness, classy:site(), boolean(), non_neg_integer()}.
+
+-type liveness() :: non_neg_integer().
 
 %%================================================================================
 %% API functions
@@ -217,6 +219,10 @@ set_info(Cluster, Local, Info) ->
 
 -doc """
 Set site liveness info.
+
+Normally, liveness is only updated by the local site.
+The remotes can only update @code{IsUp} boolean on behalf of other nodes,
+but they must always keep @code{NRestarts} as is.
 """.
 -spec set_liveness(classy:cluster_id(), classy:site(), classy:site(), integer(), boolean()) -> ok | {error, _}.
 set_liveness(Cluster, Local, Target, NRestarts, IsUp) ->
@@ -345,6 +351,44 @@ dump() ->
     end,
     #{},
     ?ptab).
+
+-doc """
+Convert information about liveness to a sortable non-negative integer replicated via CRDT.
+
+Arguments:
+@enumerate
+  @item Number of restarts of the target site
+  @item @code{true} of the update is made by the site itself,
+        @code{false} if the target site is updated by the 3rd party.
+  @item @code{true} if the site is up.
+@end enumerate
+
+Bits in the integer are organized such that:
+@enumerate
+  @item Liveness information for the higher number of restarts always wins.
+  @item Liveness updates made by the 3rd party win.
+        This way the target site knows that its peers decided that it went down.
+@end enumerate
+""".
+-spec to_liveness(non_neg_integer(), boolean(), boolean()) -> liveness().
+to_liveness(NRestarts, Self, IsUp) when is_integer(NRestarts),
+                                        NRestarts >= 0,
+                                        is_boolean(Self),
+                                        is_boolean(IsUp) ->
+  %% Liveness bits:
+  %%
+  %%           always 0       always 0
+  %%              v               v
+  %% n_restarts | 0  | not Self | 0 | IsUp |
+  OnBehalf = case Self of
+               false -> 2#100;
+               true  -> 0
+             end,
+  UpBit = case IsUp of
+            true -> 1;
+            false -> 0
+          end,
+  (NRestarts bsl 4) bor OnBehalf bor UpBit.
 
 -ifdef(TEST).
 

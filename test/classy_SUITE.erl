@@ -662,7 +662,8 @@ t_091_node_of_site(_) ->
         || I <- Sites, J <- Sites, OnlyLive <- [true, false]],
        %% Shut down S2 and verify that S1 reacted on changes:
        stop_site(S2),
-       ?block_until(#{?snk_kind := classy_peer_disconnected, remote := S2}),
+       ?block_until(#{?snk_kind := classy_peer_disconnected, site := S2}),
+       ct:sleep(100),
        ?assertEqual(
           undefined,
           ?ON(S1, classy:node_of_site(S2, true))),
@@ -729,7 +730,8 @@ t_092_link_detect(_) ->
           CInfo2),
        %% Stop one of the sites:
        stop_site(S2),
-       ?block_until(#{?snk_kind := classy_peer_disconnected, remote := S2}),
+       ?block_until(#{?snk_kind := classy_peer_disconnected, site := S2}),
+       ct:sleep(100),
        CInfo3 = classy:info([N1, N2]),
        %% We can still derive that there's no bidirectional link:
        ?assertEqual(
@@ -1773,6 +1775,19 @@ wait_site_joined(WaitOnSites, Cluster, Site) ->
   %% Account for possible race condition since the hook emitting the event is the first:
   ct:sleep(10).
 
+sync_kick(ExecOn, Target, Intent, WaitOn) ->
+  Pred = fun(#{?snk_kind := classy_member_leave, remote := Target, local := Local}) ->
+             lists:member(Local, WaitOn);
+            (#{?snk_kind := classy_kicked_from_cluster, local := Target}) ->
+             true;
+            (_) ->
+             false
+         end,
+  {ok, Sub} = snabbkaffe:subscribe(Pred, length(WaitOn), infinity, 0),
+  ?ON(ExecOn, classy:kick_site(Target, Intent)),
+  {ok, _} = snabbkaffe:receive_events(Sub),
+  ok.
+
 wait_site_kicked(WaitOnSites, Cluster, Site) ->
   lists:foreach(
     fun(Local) ->
@@ -1783,7 +1798,13 @@ wait_site_kicked(WaitOnSites, Cluster, Site) ->
             , remote := Site
             })
     end,
-    WaitOnSites),
+    WaitOnSites -- [Site]),
+  case lists:member(Site, WaitOnSites) of
+    true ->
+      ?block_until(#{?snk_kind := classy_kicked_from_cluster, local := Site});
+    false ->
+      ok
+  end,
   %% Account for possible race condition since the hook emitting the event is the first:
   ct:sleep(10).
 
