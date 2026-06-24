@@ -19,6 +19,8 @@
 -include_lib("snabbkaffe/include/trace.hrl").
 -include("classy.hrl").
 
+-define(classy_proto_vsn, 1).
+
 -define(max_hook_prio, 100000).
 -define(min_hook_prio, -?max_hook_prio).
 
@@ -35,6 +37,9 @@
 -define(on_pre_autoclean, on_pre_autoclean).
 -define(on_pre_autocluster, on_pre_autocluster).
 -define(on_enrich_site_info, on_enrich_site_info).
+-define(on_peer_liveness_change, on_peer_liveness_change).
+-define(on_peer_restart, on_peer_restart).
+-define(on_peer_node_change, on_peer_node_change).
 
 %% Run levels:
 -define(stopped, stopped).
@@ -71,9 +76,12 @@
 -define(site_info, classy_site_status_tab).
 -record(site_info,
         { isconn
-        , liveness
+        , isup
+        , nrestarts
         , node
-        , last_update
+        , meta
+          %% Time when the the value of isconn last changed:
+        , conn_change_time
         , reserved = []
         }).
 %%    Number of restarts since creation of the site

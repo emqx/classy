@@ -348,8 +348,12 @@ t_061_run_level_timeouts(_) ->
                end,
                0)
            end),
+       %% Suspend `classy_node' for the duration of the test, so it
+       %% doesn't interfere:
+       ok = ?ON(S1, sys:suspend(classy_node, 1000)),
        %% 1. First try setting run level multiple times, faster than
        %% the hooks can handle:
+       ?tp(test_stage1, #{}),
        ?ON(S1, application:set_env(classy, hook_timeout, 1000)),
        {ok, Sub1} = snabbkaffe:subscribe(Pred, 100, 3000, 0),
        %% Issue a few conflicting commands in rapid succession:
@@ -366,6 +370,7 @@ t_061_run_level_timeouts(_) ->
           Events1),
        %% 2. Same logic applies when the system is stopped:
        %%    Prepare; go to the single state
+       ?tp(test_stage2, #{}),
        ?ON(S1,
            classy_rl_changer:set_sync(?single, 5_000)),
        %%    Request transition to quorum, and simultaneously stop
@@ -384,6 +389,7 @@ t_061_run_level_timeouts(_) ->
           ],
           Events2),
        %%   3. Verify that timeouts are handled normally:
+       ?tp(test_stage3, #{}),
        ?ON(S1,
            begin
              {ok, _} = supervisor:restart_child(classy_sup, run_level_mgr),
@@ -662,7 +668,8 @@ t_091_node_of_site(_) ->
         || I <- Sites, J <- Sites, OnlyLive <- [true, false]],
        %% Shut down S2 and verify that S1 reacted on changes:
        stop_site(S2),
-       ?block_until(#{?snk_kind := classy_peer_disconnected, remote := S2}),
+       ?block_until(#{?snk_kind := classy_peer_disconnected, site := S2}),
+       ct:sleep(100),
        ?assertEqual(
           undefined,
           ?ON(S1, classy:node_of_site(S2, true))),
@@ -729,7 +736,8 @@ t_092_link_detect(_) ->
           CInfo2),
        %% Stop one of the sites:
        stop_site(S2),
-       ?block_until(#{?snk_kind := classy_peer_disconnected, remote := S2}),
+       ?block_until(#{?snk_kind := classy_peer_disconnected, site := S2}),
+       ct:sleep(100),
        CInfo3 = classy:info([N1, N2]),
        %% We can still derive that there's no bidirectional link:
        ?assertEqual(
@@ -775,13 +783,25 @@ t_100_autocluster(_) ->
        [?ON(I,
             application:set_env(classy, discovery_strategy, Strategy))
         || I <- Sites],
-       %% Wait for the autocluster to do its job:
        ?block_until(#{?snk_kind := classy_member_join}),
-       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
+       ct:sleep(1000),
        %% Verify candidates function:
-       ?assertMatch(
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
+       ?assertEqual(
           {ok, [{Cluster, N2}]},
-          ?ON(S1, classy_autocluster:candidates()))
+          ?ON(S1, classy_autocluster:candidates())),
+       ?assertEqual(
+          {ok, [{Cluster, N1}]},
+          ?ON(S2, classy_autocluster:candidates())),
+       %% Verify that sites formed the cluster:
+       ?retry(100, 10,
+              begin
+                [?assertSameSet(
+                    [S1, S2],
+                    ?ON(I, classy:sites()),
+                    I)
+                 || I <- [S1, S2]]
+              end)
      end,
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1
@@ -1722,6 +1742,7 @@ create_start_site(Cluster, Site, CustomConf) ->
                         , cleanup_check_interval => 100
                         , vote_retry_interval => 100
                         , rpc_timeout => 100
+                        , discovery_interval => 100
                         }
               }},
   Fixtures = maps:get(fixtures, CustomConf, []),
@@ -1773,6 +1794,19 @@ wait_site_joined(WaitOnSites, Cluster, Site) ->
   %% Account for possible race condition since the hook emitting the event is the first:
   ct:sleep(10).
 
+sync_kick(ExecOn, Target, Intent, WaitOn) ->
+  Pred = fun(#{?snk_kind := classy_member_leave, remote := Target, local := Local}) ->
+             lists:member(Local, WaitOn);
+            (#{?snk_kind := classy_kicked_from_cluster, local := Target}) ->
+             true;
+            (_) ->
+             false
+         end,
+  {ok, Sub} = snabbkaffe:subscribe(Pred, length(WaitOn), infinity, 0),
+  ?ON(ExecOn, classy:kick_site(Target, Intent)),
+  {ok, _} = snabbkaffe:receive_events(Sub),
+  ok.
+
 wait_site_kicked(WaitOnSites, Cluster, Site) ->
   lists:foreach(
     fun(Local) ->
@@ -1783,7 +1817,13 @@ wait_site_kicked(WaitOnSites, Cluster, Site) ->
             , remote := Site
             })
     end,
-    WaitOnSites),
+    WaitOnSites -- [Site]),
+  case lists:member(Site, WaitOnSites) of
+    true ->
+      ?block_until(#{?snk_kind := classy_kicked_from_cluster, local := Site});
+    false ->
+      ok
+  end,
   %% Account for possible race condition since the hook emitting the event is the first:
   ct:sleep(10).
 

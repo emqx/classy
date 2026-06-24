@@ -34,6 +34,9 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , on_create_site/2
         , on_peer_connection_change/2
         , on_membership_change/2
+        , on_peer_liveness_change/2
+        , on_peer_node_change/2
+        , on_peer_restart/2
         , pre_join/2
         , post_join/2
         , pre_kick/2
@@ -55,7 +58,6 @@ This MFA can contain calls to various @code{classy:on_...} functions.
              , cluster_info/0
 
              , run_level/0
-             , membership_change_hook/0
              ]).
 
 -include("classy_internal.hrl").
@@ -99,8 +101,6 @@ Unique random persistent identifier of the site.
         #{ infos     := #{node() => info()}
          , bad_nodes := #{node() => _}
          }.
-
--type membership_change_hook() :: fun((cluster_id(), _Local :: site(), _Remote :: site(), _IsMember :: boolean()) -> _).
 
 -doc """
 Join intent is an arbitrary term passed to @ref{classy:pre_join/2} and @ref{classy:post_join/2} hooks.
@@ -430,18 +430,67 @@ WARNING: status change to @code{false} is not indicative of the remote site bein
 This can happen during a network partition.
 """.
 -spec on_peer_connection_change(Fun, classy_hook:prio()) -> classy_hook:hook()
-   when Fun :: fun((cluster_id(), Local, Remote, node(), _IsConnected :: boolean()) -> _),
-        Local :: site(),
+   when Fun :: fun((Remote, node(), _IsConnected :: boolean()) -> _),
         Remote :: site().
 on_peer_connection_change(Hook, Prio) ->
   classy_hook:insert(?on_peer_connection_status_change, Hook, Prio).
 
 -doc """
 Register a hook that is executed when a site joins or leaves a cluster.
+
+@anchor {node_hook_execution}
+Note: this hook can be executed multiple times if the local node is abruptly stopped while the hooks are running.
+If the remote site re-joins the cluster while the local was down,
+the hook may or may not run.
 """.
--spec on_membership_change(membership_change_hook(), classy_hook:prio()) -> classy_hook:hook().
+-spec on_membership_change(
+        fun((cluster_id(), _Local :: site(), _Remote :: site(), _IsMember :: boolean()) -> _),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
 on_membership_change(Hook, Prio) ->
   classy_hook:insert(?on_membership_change, Hook, Prio).
+
+-doc """
+Register a hook that is executed when a site changes status for up to down or vice versa.
+
+Note: this hook is different from @ref{classy:on_peer_connection_change/2},
+as care is taken to avoid firing it during a network partition.
+
+The decision to consider a peer down comes either from the peer itself when it shuts down gracefully
+or from the quorum of other running peers.
+
+@xref {node_hook_execution}.
+""".
+-spec on_peer_liveness_change(
+        fun((_Remote :: site(), _IsAlive :: boolean()) -> _),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
+on_peer_liveness_change(Hook, Prio) ->
+  classy_hook:insert(?on_peer_liveness_change, Hook, Prio).
+
+-doc """
+Register a hook that is executed when a peer site changes the Erlang node name.
+
+@xref {node_hook_execution}.
+""".
+-spec on_peer_node_change(
+        fun((_Remote :: site(), _OldNode :: node(), _NewNode :: node()) -> _),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
+on_peer_node_change(Hook, Prio) ->
+  classy_hook:insert(?on_peer_node_change, Hook, Prio).
+
+-doc """
+Register a hook that is executed when a peer restarts.
+
+@xref {node_hook_execution}.
+""".
+-spec on_peer_restart(
+        fun((_Remote :: site(), _NRestarts :: pos_integer()) -> _),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
+on_peer_restart(Hook, Prio) ->
+  classy_hook:insert(?on_peer_restart, Hook, Prio).
 
 -doc """
 Register a hook that is executed before the local node joins a different cluster.

@@ -25,7 +25,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([site_down_since/2]).
+-export([site_disconn_since/2]).
 
 -export_type([]).
 
@@ -82,12 +82,12 @@ terminate(_Reason, _S) ->
 %%================================================================================
 
 %% @doc RPC target.
--spec site_down_since(classy_lib:unix_time_s(), classy:site()) -> classy_lib:unix_time_s() | alive.
-site_down_since(RemoteT, Site) ->
+-spec site_disconn_since(classy_lib:unix_time_s(), classy:site()) -> classy_lib:unix_time_s() | alive.
+site_disconn_since(RemoteT, Site) ->
   case classy_table:lookup(?site_info, Site) of
     [#site_info{isconn = true}] ->
       alive;
-    [#site_info{isconn = false, last_update = DownSince}] ->
+    [#site_info{isconn = false, conn_change_time = DownSince}] ->
       classy_lib:adjust_time_s_skew(RemoteT, DownSince);
     [] ->
       %% We have never seen the site alive:
@@ -113,7 +113,7 @@ check_down_sites() ->
             %% Before asking the remote sites, check the local data first:
             [ #site_info{ node = Node
                         , isconn = false
-                        , last_update = LastUpdate
+                        , conn_change_time = LastUpdate
                         }
             ] ?= classy_table:lookup(?site_info, Site),
             true ?= LastUpdate < MinLastUpTime,
@@ -141,7 +141,7 @@ check_down_sites() ->
 last_alive_at(Site) ->
   Ret = erpc:multicall(
           classy:nodes(connected),
-          ?MODULE, site_down_since, [classy_lib:time_s(), Site],
+          ?MODULE, site_disconn_since, [classy_lib:time_s(), Site],
           classy_lib:rpc_timeout()),
   Results = [I || {ok, I} <- Ret],
   case length(Results) >= classy:quorum(running) of
