@@ -19,7 +19,6 @@ Management of the local site and node.
         , nodes/1
         , peer_info/0
         , node_of_site/2
-        , n_restarts/0
         ]).
 
 %% behavior callbacks:
@@ -42,7 +41,6 @@ Management of the local site and node.
 
 -define(SERVER, ?MODULE).
 
--define(globals, classy_node).
 -define(the_site, the_site).
 -define(the_cluster, the_cluster).
 -define(parent_site, parent_site).
@@ -196,20 +194,6 @@ node_of_site(Site, OnlyConnected) ->
       undefined
   end.
 
--doc """
-Return number of node restarts since creation of the site.
-
-This value is monotonically increasing.
-""".
--spec n_restarts() -> {ok, non_neg_integer()} | {error, nodedown}.
-n_restarts() ->
-  case classy_table:lookup(?globals, ?n_restarts) of
-    [N] ->
-      {ok, N};
-    _ ->
-      {error, nodedown}
-  end.
-
 %%================================================================================
 %% behavior callbacks
 %%================================================================================
@@ -229,7 +213,6 @@ init(_) ->
      }),
   ok = classy_table:open(?globals, #{on_update => fun ?MODULE:on_ptab_update/2}),
   ok = classy_table:open(?site_info, #{ets_options => [{read_concurrency, true}]}),
-  increase_n_restarts(),
   classy_hook:foreach(?on_node_init, []),
   case init_cluster() of
     {ok, _} = Ok ->
@@ -288,18 +271,19 @@ handle_info(Info, S) ->
   {noreply, S}.
 
 -doc false.
-terminate(Reason, S) ->
+terminate(Reason, _S) ->
   classy_lib:is_normal_exit(Reason) orelse
     ?tp(warning, ?classy_abnormal_exit,
         #{ server => ?MODULE
          , reason => Reason
          }),
-  update_liveness_info(S, false),
-  classy_table:stop(?globals, 1_000),
-  classy_table:stop(?site_info, 1_000),
+  classy_table:flush(?globals),
+  classy_table:flush(?site_info),
   sync_set_run_level(?stopped),
   persistent_term:erase(?pt_site),
-  persistent_term:erase(?pt_cluster).
+  persistent_term:erase(?pt_cluster),
+  classy_table:stop(?globals, 5_000),
+  classy_table:stop(?site_info, 5_000).
 
 %%================================================================================
 %% Internal exports
@@ -508,7 +492,6 @@ init_cluster() ->
           #s{ cluster = Cluster
             , site = Site
             }),
-    update_liveness_info(S, true),
     ?tp(debug, classy_init_clustering, #{local => Site, cluster => Cluster}),
     {ok, S}
   else
@@ -572,27 +555,6 @@ start_old_clusters(Site) ->
     end,
     classy_membership:known_clusters(Site)).
 
-update_liveness_info(#s{cluster = Cluster, site = Site}, Running) ->
-  {ok, NR} = n_restarts(),
-  classy_membership:set_liveness(Cluster, Site, Site, NR, true, Running).
-
--spec increase_n_restarts() -> ok.
-increase_n_restarts() ->
-  N = case classy_table:lookup(?globals, ?n_restarts) of
-        [N0] when is_integer(N0) ->
-          N0 + 1;
-        [] ->
-          1;
-        Other ->
-          ?tp(warning, ?classy_bad_data,
-              #{ table => ?globals
-               , key   => ?n_restarts
-               , val   => Other
-               }),
-          1
-      end,
-  classy_table:write(?globals, ?n_restarts, N).
-
 sync_set_run_level(Level) ->
   classy_rl_changer:set_sync(Level, infinity).
 
@@ -615,7 +577,7 @@ the_site() ->
 -spec apply_deltas_with_effects([classy_membership:event()], #s{}) -> {ok, #s{}} | {error, _}.
 apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
   {Updated, Kicked} = merge_deltas(Deltas),
-  {ok, MyNR} = n_restarts(),
+  {ok, MyNR} = classy_liveness:n_restarts(),
   case Kicked of
     #{Local := _} ->
       %% We got kicked remotely. In this case we don't bother

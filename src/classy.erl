@@ -16,6 +16,7 @@ This MFA can contain calls to various @code{classy:on_...} functions.
 -export([ info/0
         , info/1
         , info/2
+        , n_restarts/0
         , node_of_site/2
         , join_node/2
         , kick_site/2
@@ -210,6 +211,13 @@ info(_Hops, Nodes) ->
   #{ infos     => Infos
    , bad_nodes => BadNodes
    }.
+
+-doc """
+Return the total number of time the site has been restarted.
+""".
+-spec n_restarts() -> {ok, non_neg_integer()} | {error, _}.
+n_restarts() ->
+  classy_liveness:n_restarts().
 
 -doc """
 Locate a node that is currently hosting a site.

@@ -817,7 +817,7 @@ t_200_n_restarts(_) ->
        create_start_site(S, #{}),
        ?assertEqual(
           {ok, 1},
-          ?ON(S, classy_node:n_restarts())),
+          ?ON(S, classy:n_restarts())),
        %% Verify serial UID tuples:
        ?assertEqual(
           {1, 1},
@@ -841,7 +841,7 @@ t_200_n_restarts(_) ->
           restart_site(S),
           ?assertEqual(
              {ok, Nr},
-             ?ON(S, classy_node:n_restarts())),
+             ?ON(S, classy:n_restarts())),
           %% Verify serial UID tuples:
           ?assertEqual(
              {Nr, 1},

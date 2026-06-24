@@ -84,12 +84,10 @@
         , conn_change_time
         , reserved = []
         }).
+
+%% Shared classy tables and their keys:
+-define(globals, classy_node).
 %%    Number of restarts since creation of the site
 -define(n_restarts, n_restarts).
--record(liveness,
-        { nr
-        , isup
-        , reserved = []
-        }).
 
 -endif.

@@ -133,12 +133,12 @@ init(#top{}) ->
             , restart  => permanent
             , type     => worker
             },
-  Autoclean = #{ id       => autoclean
-               , start    => {classy_autoclean, start_link, []}
-               , shutdown => 10_000
-               , restart  => permanent
-               , type     => worker
-               },
+  Liveness = #{ id       => liveness
+              , start    => {classy_liveness, start_link, []}
+              , shutdown => 10_000
+              , restart  => permanent
+              , type     => worker
+              },
   Autocluster = #{ id       => autocluster
                  , start    => {classy_autocluster_sup, start_link, []}
                  , shutdown => infinity
@@ -152,7 +152,7 @@ init(#top{}) ->
              , UIDGen
              , sup_spec(#{id => ?VOTE_COORDINATOR_SUP, start => {?MODULE, start_link_vote_coordinator_sup, []}})
              , sup_spec(#{id => ?VOTE_PARTICIPANT_SUP, start => {?MODULE, start_link_vote_participant_sup, []}})
-             , Autoclean
+             , Liveness
              , Autocluster
              ],
   SupFlags = #{ strategy      => rest_for_one

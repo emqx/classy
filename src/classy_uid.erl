@@ -33,12 +33,6 @@ using various algorithms.
 
 -define(volatile_sequences, classy_uid_volatile_sequences_tab).
 
--define(pterm_uid_gen, classy_uid_gen).
-
--type pterm_uid_gen() :: #{ site       := classy:site()
-                          , n_restarts := non_neg_integer()
-                          }.
-
 -doc "Site-unique tuple".
 -type su_tuple() :: {non_neg_integer(), pos_integer()}.
 
@@ -70,7 +64,7 @@ Site-unique tuples can be used to order events within the site.
 """.
 -spec site_unique_tuple() -> su_tuple().
 site_unique_tuple() ->
-  #{n_restarts := NRestarts} = get_pterm(),
+  {ok, NRestarts} = classy_liveness:n_restarts(),
   {NRestarts, erlang:unique_integer([positive, monotonic])}.
 
 -doc """
@@ -83,7 +77,8 @@ but not globally.
 """.
 -spec cluster_unique_tuple() -> cu_tuple().
 cluster_unique_tuple() ->
-  #{n_restarts := NRestarts, site := Site} = get_pterm(),
+  Site = classy_node:maybe_site(),
+  {ok, NRestarts} = classy_liveness:n_restarts(),
   {Site, NRestarts, erlang:unique_integer([positive, monotonic])}.
 
 -doc """
@@ -98,7 +93,7 @@ but its values form a monotonic sequence.
 """.
 -spec site_unique_seq_tuple(sequence()) -> su_tuple().
 site_unique_seq_tuple(Sequence) ->
-  #{n_restarts := NRestarts} = get_pterm(),
+  {ok, NRestarts} = classy_liveness:n_restarts(),
   {NRestarts, volatile_counter(Sequence)}.
 
 -doc """
@@ -107,7 +102,8 @@ but includes site name.
 """.
 -spec cluster_unique_seq_tuple(sequence()) -> cu_tuple().
 cluster_unique_seq_tuple(Sequence) ->
-  #{n_restarts := NRestarts, site := Site} = get_pterm(),
+  Site = classy_node:maybe_site(),
+  {ok, NRestarts} = classy_liveness:n_restarts(),
   {Site, NRestarts, volatile_counter(Sequence)}.
 
 %%================================================================================
@@ -119,12 +115,7 @@ cluster_unique_seq_tuple(Sequence) ->
 -doc false.
 init(_) ->
   process_flag(trap_exit, true),
-  {ok, NRestarts} = classy_node:n_restarts(),
-  {ok, Site} = classy:the_site(),
   ets:new(?volatile_sequences, [set, named_table, public, {write_concurrency, true}]),
-  set_pterm(#{ site               => Site
-             , n_restarts         => NRestarts
-             }),
   S = #s{},
   {ok, S}.
 
@@ -158,7 +149,6 @@ handle_info(Info, S) ->
 
 -doc false.
 terminate(_Reason, _S) ->
-  persistent_term:erase(?pterm_uid_gen),
   ok.
 
 %%================================================================================
@@ -168,14 +158,6 @@ terminate(_Reason, _S) ->
 %%================================================================================
 %% Internal functions
 %%================================================================================
-
--spec set_pterm(pterm_uid_gen()) -> ok.
-set_pterm(PT) ->
-  persistent_term:put(?pterm_uid_gen, PT).
-
--spec get_pterm() -> pterm_uid_gen().
-get_pterm() ->
-  persistent_term:get(?pterm_uid_gen).
 
 -spec volatile_counter(sequence()) -> pos_integer().
 volatile_counter(Sequence) ->

@@ -1,31 +1,39 @@
 %%--------------------------------------------------------------------
 %% Copyright (c) 2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%--------------------------------------------------------------------
+-module(classy_liveness).
+-moduledoc """
+A process that is tasked with monitoring liveness status of peers.
+Its responsibilities include:
 
-%% @doc A process that automatically kicks sites that have been absent for a long time.
-%%
-%% Relevant configurations are `max_site_downtime' and `quorum'.
-%%
-%% == Network partitions ==
-%%
-%% In a partitioned network there is a risk that sites try to kick each other.
-%%
-%% Autoclean requires quorum of running nodes before making the decision to kick.
-%% Note: as `quorum(running)' is always >= `quorum(config)',
-%% even in a partition containing single node,
-%% autoclean won't activate if `quorum' config is set to a value > 1.
--module(classy_autoclean).
+@enumerate
+@item detecting that remote sites are down,
+making a coordinated decision that the site is down.
+
+@item automatically kick sites that have been down from the cluster.
+@end enumerate
+
+Relevant configurations are @ref{max_site_downtime} and @ref{quorum}.
+
+In a partitioned network there is a risk that sites try to kick each other.
+
+Liveness requires quorum of running nodes before making the decision to kick.
+Note: as @code{quorum(running)} is always >= @code{quorum(config)},
+even in a partition containing single node,
+liveness won't activate if @link{quorum} config is set to a value > 1.
+
+""".
 
 -behavior(gen_server).
 
 %% API:
--export([start_link/0]).
+-export([n_restarts/0, set_my_liveness_info/1]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([site_disconn_since/2]).
+-export([start_link/0, site_disconn_since/2, on_run_level/2]).
 
 -export_type([]).
 
@@ -44,9 +52,26 @@
 
 -define(SERVER, ?MODULE).
 
--spec start_link() -> {ok, pid()}.
-start_link() ->
-  gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+
+-doc """
+Return number of node restarts since creation of the site.
+
+This value is monotonically increasing.
+""".
+-spec n_restarts() -> {ok, non_neg_integer()} | {error, nodedown}.
+n_restarts() ->
+  case classy_table:lookup(?globals, ?n_restarts) of
+    [N] ->
+      {ok, N};
+    _ ->
+      {error, nodedown}
+  end.
+
+set_my_liveness_info(Running) ->
+  Cluster = classy_node:maybe_cluster(),
+  Site = classy_node:maybe_site(),
+  {ok, NR} = n_restarts(),
+  classy_membership:set_liveness(Cluster, Site, Site, NR, true, Running).
 
 %%================================================================================
 %% behavior callbacks
@@ -56,17 +81,21 @@ start_link() ->
         { t :: classy_lib:wakeup_timer()
         }).
 
+-doc false.
 init(_) ->
   process_flag(trap_exit, true),
   S = #s{},
   {ok, wakeup(S)}.
 
+-doc false.
 handle_call(_Call, _From, S) ->
   {reply, {error, unknown_call}, S}.
 
+-doc false.
 handle_cast(_Cast, S) ->
   {noreply, S}.
 
+-doc false.
 handle_info(#to_check{}, S0) ->
   S = S0#s{t = undefined},
   check_down_sites(),
@@ -74,6 +103,7 @@ handle_info(#to_check{}, S0) ->
 handle_info(_Info, S) ->
   {noreply, S}.
 
+-doc false.
 terminate(_Reason, _S) ->
   ok.
 
@@ -81,7 +111,23 @@ terminate(_Reason, _S) ->
 %% Internal exports
 %%================================================================================
 
-%% @doc RPC target.
+-doc false.
+-spec on_run_level(classy:run_level(), classy:run_level()) -> ok.
+on_run_level(stopped, single) ->
+  increase_n_restarts(),
+  set_my_liveness_info(true);
+on_run_level(single, stopped) ->
+  set_my_liveness_info(false);
+on_run_level(_, _) ->
+  ok.
+
+-doc false.
+-spec start_link() -> {ok, pid()}.
+start_link() ->
+  gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+
+%% RPC target.
+-doc false.
 -spec site_disconn_since(classy_lib:unix_time_s(), classy:site()) -> classy_lib:unix_time_s() | alive.
 site_disconn_since(RemoteT, Site) ->
   case classy_table:lookup(?site_info, Site) of
@@ -97,6 +143,23 @@ site_disconn_since(RemoteT, Site) ->
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+-spec increase_n_restarts() -> ok.
+increase_n_restarts() ->
+  N = case classy_table:lookup(?globals, ?n_restarts) of
+        [N0] when is_integer(N0) ->
+          N0 + 1;
+        [] ->
+          1;
+        Other ->
+          ?tp(warning, ?classy_bad_data,
+              #{ table => ?globals
+               , key   => ?n_restarts
+               , val   => Other
+               }),
+          1
+      end,
+  classy_table:write(?globals, ?n_restarts, N).
 
 check_down_sites() ->
   maybe

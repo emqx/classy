@@ -63,6 +63,8 @@ init() ->
   %% Default initialization:
   classy:on_node_init(fun classy_builtin_hooks:gen_random_site_id/0, ?min_hook_prio),
   classy:post_kick(fun classy_builtin_hooks:maybe_reinitialize_after_kick/3, ?min_hook_prio),
+  %% Liveness tracking:
+  classy:run_level(fun classy_liveness:on_run_level/2, ?max_hook_prio),
   %% Info logging:
   classy:on_create_site(fun classy_builtin_hooks:log_create_site/1, ?max_hook_prio),
   classy:on_create_cluster(fun classy_builtin_hooks:log_create_cluster/2, ?max_hook_prio),
