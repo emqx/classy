@@ -574,7 +574,7 @@ start_old_clusters(Site) ->
 
 update_liveness_info(#s{cluster = Cluster, site = Site}, Running) ->
   {ok, NR} = n_restarts(),
-  classy_membership:set_liveness(Cluster, Site, Site, NR, Running).
+  classy_membership:set_liveness(Cluster, Site, Site, NR, true, Running).
 
 -spec increase_n_restarts() -> ok.
 increase_n_restarts() ->
@@ -784,7 +784,7 @@ merge_deltas([Up | Rest], Updated0, Kicked0) ->
       Info = Info0#site_info{meta = Meta},
       Updated = Updated0#{Peer => Info},
       Kicked = Kicked0;
-    {liveness, Peer, IsUp, NRestarts} ->
+    {liveness, Peer, NRestarts, _Self, IsUp} ->
       Info0 = Get(Peer),
       Info = Info0#site_info{ isup = IsUp
                             , nrestarts = NRestarts

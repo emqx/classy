@@ -16,7 +16,7 @@ Business code should not use it directly.
 -export([ known_clusters/1
         , set_member/4
         , set_info/3
-        , set_liveness/5
+        , set_liveness/6
         , members/2
         , list_local_sites/1
         , get_data/4
@@ -156,7 +156,7 @@ Business code should not use it directly.
 -type event() :: {mem, classy:site(), boolean()} |
                  {host, classy:site(), node()} |
                  {meta, classy:site(), map()} |
-                 {liveness, classy:site(), boolean(), non_neg_integer()}.
+                 {liveness, classy:site(), _NRestarts :: non_neg_integer(), _Self :: boolean(), _IsUp :: boolean()}.
 
 -type liveness() :: non_neg_integer().
 
@@ -226,12 +226,12 @@ Normally, liveness is only updated by the local site.
 The remotes can only update @code{IsUp} boolean on behalf of other nodes,
 but they must always keep @code{NRestarts} as is.
 """.
--spec set_liveness(classy:cluster_id(), classy:site(), classy:site(), integer(), boolean()) -> ok | {error, _}.
-set_liveness(Cluster, Local, Target, NRestarts, IsUp) ->
+-spec set_liveness(classy:cluster_id(), classy:site(), classy:site(), integer(), boolean(), boolean()) -> ok | {error, _}.
+set_liveness(Cluster, Local, Target, NRestarts, Self, IsUp) ->
   try
     gen_server:call(
       ?via(Cluster, Local),
-      #call_set{k = #live{s = Target}, v = #liveness{nr = NRestarts, isup = IsUp}},
+      #call_set{k = #live{s = Target}, v = to_liveness(NRestarts, Self, IsUp)},
       ?call_timeout)
   catch
     EC:Err -> {error, {EC, Err}}
@@ -585,17 +585,12 @@ This is most likely to happen during a network partition.
 Please see theories/classy.v file for more details and some intricate requirements for this function.
 """.
 -spec ord(op()) -> ord().
-ord(#op_set{k = #live{}, val = #liveness{nr = NR, isup = IsUp}, c = C, origin = O}) ->
-  %% Liveness information is merged according to special rules:
-  %% here we use target's n_restarts for serialization (as it can only grow),
-  %% also "down" events take priority over "up" events.
-  %% This is to make sure that information about site getting down at a certain
-  %% "incarnation" is eventually propagated everywhere.
-  UpN = case IsUp of
-          true -> 0;
-          false -> 1
-        end,
-  {NR, UpN, C, O};
+ord(#op_set{k = #live{}, val = Liveness, c = C, origin = O}) ->
+  true = is_integer(Liveness),
+  %% Liveness information is merged according to special rules,
+  %% as the value itself is designed for a causal ordering serialization.
+  %% See bitfield definition in `to_liveness'
+  {Liveness, C, O};
 ord(#op_set{c = C, m = M, origin = O}) ->
   {C, M, O}.
 
@@ -730,8 +725,9 @@ notify(S = #s{clock = C, cluster = Cluster, events_since = EventsSince}) ->
                  [{host, Peer, Host}];
                 (#op_set{k = #info{s = Peer}, val = Meta}) ->
                  [{meta, Peer, Meta}];
-                (#op_set{k = #live{s = Peer}, val = #liveness{isup = IsUp, nr = NR}}) ->
-                 [{liveness, Peer, IsUp, NR}];
+                (#op_set{k = #live{s = Peer}, val = Liveness}) ->
+                 {NRestarts, Self, IsUp} = from_liveness(Liveness),
+                 [{liveness, Peer, NRestarts, Self, IsUp}];
                 (#op_set{}) ->
                  []
              end,
