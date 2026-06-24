@@ -166,6 +166,7 @@ info() ->
          , site        => MaybeSite
          , last_update => MyLU
          , peers       => PeerInfo
+         , n_restarts  => n_restarts()
          },
   classy_hook:fold(?on_enrich_site_info, [], Acc).
 
@@ -215,9 +216,12 @@ info(_Hops, Nodes) ->
 -doc """
 Return the total number of time the site has been restarted.
 """.
--spec n_restarts() -> {ok, non_neg_integer()} | {error, _}.
+-spec n_restarts() -> non_neg_integer() | undefined.
 n_restarts() ->
-  classy_liveness:n_restarts().
+  case classy_liveness:n_restarts() of
+    {ok, N} -> N;
+    _       -> undefined
+  end.
 
 -doc """
 Locate a node that is currently hosting a site.

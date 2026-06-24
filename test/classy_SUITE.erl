@@ -589,12 +589,14 @@ t_090_info(_) ->
         , peers       := Peers1_0
         , last_update := _
         , hello       := world
+        , n_restarts  := 1
         } = I1_0 = ?ON(S1, classy:info()),
        #{ cluster     := Cluster2_0
         , site        := S2
         , peers       := Peers2_0
         , last_update := _
         , hello       := world
+        , n_restarts  := 1
         } = I2_0 = ?ON(S2, classy:info()),
        ?assert(is_binary(Cluster1)),
        ?assertNotEqual(Cluster1, Cluster2_0),
@@ -816,7 +818,7 @@ t_200_n_restarts(_) ->
      begin
        create_start_site(S, #{}),
        ?assertEqual(
-          {ok, 1},
+          1,
           ?ON(S, classy:n_restarts())),
        %% Verify serial UID tuples:
        ?assertEqual(
@@ -840,7 +842,7 @@ t_200_n_restarts(_) ->
           stop_site(S),
           restart_site(S),
           ?assertEqual(
-             {ok, Nr},
+             Nr,
              ?ON(S, classy:n_restarts())),
           %% Verify serial UID tuples:
           ?assertEqual(
