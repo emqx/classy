@@ -313,6 +313,16 @@ The document was typeset with
       Minimum number of known peers necessary to advance @ref{t:classy:run_level/0,run level}
       from @code{single} to @code{cluster}.
 
+    @defen{to_cluster_sets, @code{[classy:node_set_name()]}, @code{[]}}
+
+      List of node set names used to additionally restrict when the node is considered joined to a cluster.
+      Sets from the lists are combined using set intersection operation.
+
+    @defen{quorum_sets, @code{[classy:node_set_name()]}, @code{[]}}
+
+      List of node set names used to additionally restrict when the node is considered having a quorum.
+      Sets from the lists are combined using set intersection operation.
+
     @defen{quorum, @code{pos_integer()}, 1}
 
       Minimum number of known peers necessary to advance @ref{t:classy:run_level/0,run level}

@@ -529,8 +529,9 @@ ensure_the_id(Key, OnCreateHook, HookArgs, Default) ->
 
 -spec adjust_run_level(#s{}) -> #s{}.
 adjust_run_level(S = #s{cluster = Cluster, site = Site}) ->
-  NKnown = length(classy_membership:members(Cluster, Site)),
-  NConnected = length(nodes(connected)),
+  %% NOTE: must be called after `classify':
+  NKnown = length(intersection([all | classy_lib:to_cluster_sets()])),
+  NConnected = length(intersection([connected | classy_lib:quorum_sets()])),
   RunLevel = case NKnown >= classy_lib:n_sites() of
                true  ->
                  case NConnected >= classy:quorum(config) of
@@ -799,7 +800,11 @@ default_site_info() ->
   #site_info{ isconn = false
             , isup = false
             , nrestarts = 0
+            , meta = #{}
             }.
+
+intersection(Sets) ->
+  ordsets:intersection([classy:nodes(S) || S <- Sets]).
 
 -ifndef(TEST).
 %% In real live we change levels async-ly:

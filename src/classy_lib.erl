@@ -21,6 +21,8 @@ Misc. utility functions.
 
 %% internal exports:
 -export([ rpc_timeout/0
+        , to_cluster_sets/0
+        , quorum_sets/0
         , n_sites/0
         , time_s/0
         , adjust_time_s_skew/2
@@ -285,6 +287,14 @@ fold_per_cluster(Fun, InitialAcc, #{infos := Infos}) ->
 -doc "Return value @ref{rpc_timeout} environment variable (with default)".
 rpc_timeout() ->
   application:get_env(classy, rpc_timeout, 5_000).
+
+-doc "Return value of @ref{to_cluster_sets} (with default)".
+to_cluster_sets() ->
+  application:get_env(classy, to_cluster_sets, []).
+
+-doc "Return value of @ref{quorum_sets} (with default)".
+quorum_sets() ->
+  application:get_env(classy, quorum_sets, []).
 
 -doc "Return value of @ref{n_sites} environment variable (with default)".
 n_sites() ->
