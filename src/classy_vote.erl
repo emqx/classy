@@ -267,7 +267,7 @@ Initiate a new vote, @pxref{t:classy_vote:options/0,options/0}.
 create(UserOptions) ->
   maybe
     %% Create a new vote:
-    ID = classy_uid:cluster_unique_seq_tuple(classy_vote_sequence),
+    ID = classy_uid:cluster_unique_tuple(),
     {ok, Options} ?= with_defaults(UserOptions),
     {ok, _} ?= classy_vote_coordinator:new(ID, Options),
     {ok, ID}

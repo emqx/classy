@@ -33,7 +33,16 @@ liveness won't activate if @link{quorum} config is set to a value > 1.
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([start_link/0, site_disconn_since/2, on_run_level/2]).
+-export([ start_link/0
+
+        , on_run_level/2
+        , on_peer_connection_change/3
+
+        , vote_down_prep/5
+        , vote_down_commit/4
+        , vote_kick_prep/4
+        , vote_kick_commit/3
+        ]).
 
 -export_type([]).
 
@@ -44,7 +53,15 @@ liveness won't activate if @link{quorum} config is set to a value > 1.
 %% Type declarations
 %%================================================================================
 
--record(to_check, {}).
+-record(to_autoclean, {}).
+
+-record(cast_check_site,
+        { site :: classy:site()
+        , node :: node()
+        }).
+-record(cast_quorum, {}).
+
+-define(vote_tag(SITE), {classy_liveness, SITE}).
 
 %%================================================================================
 %% API functions
@@ -67,42 +84,41 @@ n_restarts() ->
   end.
 
 %%================================================================================
-%% behavior callbacks
-%%================================================================================
-
--record(s,
-        { t :: classy_lib:wakeup_timer()
-        }).
-
--doc false.
-init(_) ->
-  process_flag(trap_exit, true),
-  S = #s{},
-  {ok, wakeup(S)}.
-
--doc false.
-handle_call(_Call, _From, S) ->
-  {reply, {error, unknown_call}, S}.
-
--doc false.
-handle_cast(_Cast, S) ->
-  {noreply, S}.
-
--doc false.
-handle_info(#to_check{}, S0) ->
-  S = S0#s{t = undefined},
-  check_down_sites(),
-  {noreply, wakeup(S)};
-handle_info(_Info, S) ->
-  {noreply, S}.
-
--doc false.
-terminate(_Reason, _S) ->
-  ok.
-
-%%================================================================================
 %% Internal exports
 %%================================================================================
+
+-doc false.
+-spec vote_down_prep(boolean(), classy_vote:id(), classy:cluster_id(), classy:site(), non_neg_integer()) -> boolean().
+vote_down_prep(_ForReal, _Id, Cluster, Target, NRestarts) ->
+  maybe
+    {ok, Cluster} ?= classy:the_cluster(),
+    {ok, NRestarts} ?= classy_node:n_restarts(Target),
+    disconnected(Target)
+  else
+    _ -> false
+  end.
+
+-doc false.
+-spec vote_down_commit(classy_vote:id(), classy:cluster_id(), classy:site(), non_neg_integer()) -> ok.
+vote_down_commit(_Id, Cluster, Target, NRestarts) ->
+  classy_membership:set_liveness(Cluster, classy_node:maybe_site(), Target, NRestarts, false, false).
+
+-doc false.
+-spec vote_kick_prep(boolean(), classy_vote:id(), classy:cluster_id(), classy:site()) -> boolean().
+vote_kick_prep(_ForReal, _Id, Cluster, Target) ->
+  can_be_kicked(Cluster, Target).
+
+-doc false.
+-spec vote_kick_commit(classy_vote:id(), classy:cluster_id(), classy:site()) -> ok.
+vote_kick_commit(_Id, _Cluster, Target) ->
+  classy:kick_site(Target, autoclean).
+
+-doc false.
+-spec on_peer_connection_change(classy:site(), node(), boolean()) -> ok.
+on_peer_connection_change(_Site, _Node, true) ->
+  ok;
+on_peer_connection_change(Site, Node, false) ->
+  gen_server:cast(?SERVER, #cast_check_site{site = Site, node = Node}).
 
 -doc false.
 -spec on_run_level(classy:run_level(), classy:run_level()) -> ok.
@@ -111,6 +127,9 @@ on_run_level(stopped, single) ->
   set_my_liveness_info(true);
 on_run_level(single, stopped) ->
   set_my_liveness_info(false);
+on_run_level(cluster, quorum) ->
+  gen_server:cast(?SERVER, #cast_quorum{}),
+  ok;
 on_run_level(_, _) ->
   ok.
 
@@ -119,23 +138,87 @@ on_run_level(_, _) ->
 start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-%% RPC target.
+%%================================================================================
+%% behavior callbacks
+%%================================================================================
+
+-record(s,
+        { periodic_timer :: classy_lib:wakeup_timer()
+        }).
+
 -doc false.
--spec site_disconn_since(classy_lib:unix_time_s(), classy:site()) -> classy_lib:unix_time_s() | alive.
-site_disconn_since(RemoteT, Site) ->
-  case classy_table:lookup(?site_info, Site) of
-    [#site_info{isconn = true}] ->
-      alive;
-    [#site_info{isconn = false, conn_change_time = DownSince}] ->
-      classy_lib:adjust_time_s_skew(RemoteT, DownSince);
-    [] ->
-      %% We have never seen the site alive:
-      0
-  end.
+init(_) ->
+  process_flag(trap_exit, true),
+  S = #s{},
+  check_down(S),
+  {ok, wakeup(S)}.
+
+-doc false.
+handle_call(Call, From, S) ->
+  ?tp(warning, ?classy_unknown_event,
+      #{ kind => call
+       , from => From
+       , content => Call
+       , server => ?MODULE
+       }),
+  {reply, {error, unknown_call}, S}.
+
+-doc false.
+handle_cast(#cast_quorum{}, S) ->
+  check_down(S),
+  {noreply, S};
+handle_cast(#cast_check_site{site = Site, node = _Node}, S) ->
+  check_down(Site, S),
+  {noreply, S};
+handle_cast(Cast, S) ->
+  ?tp(warning, ?classy_unknown_event,
+      #{ kind => cast
+       , content => Cast
+       , server => ?MODULE
+       }),
+  {noreply, S}.
+
+-doc false.
+handle_info(#to_autoclean{}, S0) ->
+  S = S0#s{periodic_timer = undefined},
+  check_down(S),
+  kick_down_sites(S),
+  {noreply, wakeup(S)};
+handle_info(Info, S) ->
+  ?tp(warning, ?classy_unknown_event,
+      #{ kind => info
+       , content => Info
+       , server => ?MODULE
+       }),
+  {noreply, S}.
+
+-doc false.
+terminate(_Reason, _S) ->
+  ok.
 
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+check_down(S) ->
+  [check_down(I, S) || I <- classy:sites(all)].
+
+check_down(Target, _S) ->
+  maybe
+    true ?= disconnected(Target),
+    {ok, NRestarts} ?= classy_node:n_restarts(Target),
+    {ok, Cluster} ?= classy:the_cluster(),
+    {ok, Consilium} ?= consilium(),
+    Actions = #{ prepare => {?MODULE, vote_down_prep, [Cluster, Target, NRestarts]}
+               , commit  => [{?MODULE, vote_down_commit, [Cluster, Target, NRestarts]}]
+               },
+    _ = classy_vote:create(#{ tag => ?vote_tag(Target)
+                            , actions => #{I => Actions || I <- Consilium}
+                            }),
+    ok
+  else
+    _ -> ok
+  end.
 
 set_my_liveness_info(Running) ->
   Cluster = classy_node:maybe_cluster(),
@@ -165,38 +248,25 @@ do_increase_n_restarts() ->
   classy_table:write(?globals, ?n_restarts, N),
   N.
 
-check_down_sites() ->
+kick_down_sites(_S) ->
   maybe
     {ok, Cluster} ?= classy:the_cluster(),
     {ok, Local} ?= classy:the_site(),
     %% Calculate minimum wall time when site should be alive:
     MaxDownSecs = max_downtime(),
     true ?= is_integer(MaxDownSecs),
-    MinLastUpTime = classy_lib:time_s() - MaxDownSecs,
     lists:foreach(
-      fun(Site) ->
+      fun(Target) ->
           maybe
-            true ?= Site =/= Local,
-            %% Before asking the remote sites, check the local data first:
-            [ #site_info{ node = Node
-                        , isconn = false
-                        , conn_change_time = LastUpdate
-                        }
-            ] ?= classy_table:lookup(?site_info, Site),
-            true ?= LastUpdate < MinLastUpTime,
-            %% Now check the quorum:
-            {ok, DownSince} ?= last_alive_at(Site),
-            true ?= is_integer(DownSince),
-            true ?= DownSince < MinLastUpTime,
-            %% Run hooks:
-            ok ?= classy_hook:all(?on_pre_autoclean, [Site]),
-            %% Now we're pretty certain that the site is really down:
-            ?tp(notice, automatically_kick_down_site,
-                #{ site          => Site
-                 , node          => Node
-                 , last_alive_at => LastUpdate
-                 }),
-            classy_node:kick_site(Site, autoclean)
+            true ?= can_be_kicked(Cluster, Target),
+            ok ?= classy_hook:all(?on_pre_autoclean, [Target]),
+            {ok, Consilium} ?= consilium(),
+            Actions = #{ prepare => {?MODULE, vote_kick_prep, [Cluster, Target]}
+                       , commit  => [{?MODULE, vote_kick_commit, [Cluster, Target]}]
+                       },
+            classy_vote:create(#{ tag => ?vote_tag(Target)
+                                , actions => #{I => Actions || I <- Consilium}
+                                })
           end
       end,
       classy_membership:members(Cluster, Local)),
@@ -204,24 +274,10 @@ check_down_sites() ->
   end,
   ok.
 
--spec last_alive_at(classy:site()) -> {ok, classy_lib:unix_time_s() | alive} | {error, no_quorum}.
-last_alive_at(Site) ->
-  Ret = erpc:multicall(
-          classy:nodes(connected),
-          ?MODULE, site_disconn_since, [classy_lib:time_s(), Site],
-          classy_lib:rpc_timeout()),
-  Results = [I || {ok, I} <- Ret],
-  case length(Results) >= classy:quorum(running) of
-    true ->
-      {ok, lists:max(Results)};
-    false ->
-      {error, no_quorum}
-  end.
-
 -spec wakeup(#s{}) -> #s{}.
-wakeup(S = #s{t = T0}) ->
-  T = classy_lib:wakeup_after(#to_check{}, check_interval(), T0),
-  S#s{t = T}.
+wakeup(S = #s{periodic_timer = T0}) ->
+  T = classy_lib:wakeup_after(#to_autoclean{}, check_interval(), T0),
+  S#s{periodic_timer = T}.
 
 -spec max_downtime() -> pos_integer() | infinity.
 max_downtime() ->
@@ -234,3 +290,47 @@ check_interval() ->
 -spec forget_after() -> pos_integer().
 forget_after() ->
   application:get_env(classy, forget_after, 7 * 24 * 60 * 60).
+
+-spec disconnected(classy:site()) -> boolean().
+disconnected(Site) ->
+  ordsets:is_element(Site, classy:sites(disconnected)) andalso
+    not ordsets:is_element(Site , classy:sites(down)).
+
+-spec site_disconn_since(classy:site()) -> {ok, classy_lib:unix_time_s()} | ignore.
+site_disconn_since(Site) ->
+  case classy_table:lookup(?site_info, Site) of
+    [#site_info{isconn = false, isup = false, conn_change_time = DownSince}] ->
+      {ok, DownSince};
+    [] ->
+      %% We have never seen the site alive:
+      {ok, 0};
+    [_] ->
+      ignore
+  end.
+
+can_be_kicked(Cluster, Target) ->
+  maybe
+    %% Self-checks:
+    {ok, Cluster} ?= classy:the_cluster(),
+    {ok, Local} ?= classy:the_site(),
+    true ?= Local =/= Target,
+    MaxDownSecs = max_downtime(),
+    true ?= is_integer(MaxDownSecs),
+    %% Check target:
+    true ?= ordsets:is_element(Target, classy:sites(down)),
+    {ok, DisconnectedSince} ?= site_disconn_since(Target),
+    classy_lib:time_s() - DisconnectedSince > MaxDownSecs
+  else
+    _ -> false
+  end.
+
+consilium() ->
+  Sites =
+    ordsets:intersection(
+      [classy:sites(Set) || Set <- classy_lib:quorum_sets()]),
+  case length(Sites) >= classy:quorum(config) of
+    true ->
+      {ok, Sites};
+    false ->
+      undefined
+  end.

@@ -289,12 +289,14 @@ rpc_timeout() ->
   application:get_env(classy, rpc_timeout, 5_000).
 
 -doc "Return value of @ref{to_cluster_sets} (with default)".
+-spec to_cluster_sets() -> [classy:node_set_name(), ...].
 to_cluster_sets() ->
-  application:get_env(classy, to_cluster_sets, []).
+  [all | application:get_env(classy, to_cluster_sets, [])].
 
 -doc "Return value of @ref{quorum_sets} (with default)".
+-spec quorum_sets() -> [classy:node_set_name(), ...].
 quorum_sets() ->
-  application:get_env(classy, quorum_sets, []).
+  [connected | application:get_env(classy, quorum_sets, [])].
 
 -doc "Return value of @ref{n_sites} environment variable (with default)".
 n_sites() ->

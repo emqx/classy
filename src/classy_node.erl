@@ -19,6 +19,7 @@ Management of the local site and node.
         , nodes/1
         , peer_info/0
         , node_of_site/2
+        , n_restarts/1
         ]).
 
 %% behavior callbacks:
@@ -194,6 +195,16 @@ node_of_site(Site, OnlyConnected) ->
       undefined
   end.
 
+-doc false.
+-spec n_restarts(classy:site()) -> {ok, non_neg_integer()} | undefined.
+n_restarts(Site) ->
+  case classy_table:lookup(?site_info, Site) of
+    [#site_info{nrestarts = NR}] ->
+      {ok, NR};
+    [] ->
+      undefined
+  end.
+
 %%================================================================================
 %% behavior callbacks
 %%================================================================================
@@ -281,6 +292,7 @@ terminate(Reason, _S) ->
   classy_table:flush(?site_info),
   sync_set_run_level(?stopped),
   persistent_term:erase(?pt_node_sets),
+  persistent_term:erase(?pt_site_sets),
   persistent_term:erase(?pt_site),
   persistent_term:erase(?pt_cluster),
   classy_table:stop(?globals, 5_000),
@@ -530,8 +542,8 @@ ensure_the_id(Key, OnCreateHook, HookArgs, Default) ->
 -spec adjust_run_level(#s{}) -> #s{}.
 adjust_run_level(S = #s{cluster = Cluster, site = Site}) ->
   %% NOTE: must be called after `classify':
-  NKnown = length(intersection([all | classy_lib:to_cluster_sets()])),
-  NConnected = length(intersection([connected | classy_lib:quorum_sets()])),
+  NKnown = length(intersection(classy_lib:to_cluster_sets())),
+  NConnected = length(intersection(classy_lib:quorum_sets())),
   RunLevel = case NKnown >= classy_lib:n_sites() of
                true  ->
                  case NConnected >= classy:quorum(config) of
@@ -615,8 +627,8 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
 
 -spec on_remote_restart(#s{}) -> {ok, #s{}}.
 on_remote_restart(S) ->
-  %% TODO
-  {ok, S}.
+  classy_rl_changer:set_sync(?stopped, 120_000),
+  {ok, adjust_run_level(S)}.
 
 -spec import_deltas( #{classy:site() => #site_info{}}, #{classy:site() => true}, #s{}) ->
         {ok, #s{}} | {error, _}.
@@ -762,24 +774,33 @@ merge_deltas([Up | Rest], Updated0, Kicked0) ->
 
 -spec classify() -> ok.
 classify() ->
-  Sets = ets:foldl(
-           fun(#classy_kv{v = Info}, Acc0) ->
-               #site_info{node = Node} = Info,
-               lists:foldl(
-                 fun(SetName, Acc) ->
-                     case Acc of
-                       #{SetName := Set0} -> ok;
-                       #{} -> Set0 = []
-                     end,
-                     Set = ordsets:add_element(Node, Set0),
-                     Acc#{SetName => Set}
-                 end,
-                 Acc0,
-                 sets_of_node(Info))
-           end,
-           #{},
-           ?site_info),
-  persistent_term:put(?pt_node_sets, Sets).
+  {NodeSets, SiteSets}
+    = ets:foldl(
+        fun(#classy_kv{k = Site, v = Info}, Acc0) ->
+            #site_info{node = Node} = Info,
+            lists:foldl(
+              fun(SetName, {AccNodes, AccSites}) ->
+                  case AccNodes of
+                    #{SetName := NSet0} -> ok;
+                    #{}                 -> NSet0 = []
+                  end,
+                  case AccSites of
+                    #{SetName := SSet0} -> ok;
+                    #{}                 -> SSet0 = []
+                  end,
+                  NSet = ordsets:add_element(Node, NSet0),
+                  SSet = ordsets:add_element(Site, SSet0),
+                  { AccNodes#{SetName => NSet}
+                  , AccSites#{SetName => SSet}
+                  }
+              end,
+              Acc0,
+              sets_of_node(Info))
+        end,
+        {#{}, #{}},
+        ?site_info),
+  persistent_term:put(?pt_node_sets, NodeSets),
+  persistent_term:put(?pt_site_sets, SiteSets).
 
 -spec sets_of_node(#site_info{}) -> [classy:node_set_name()].
 sets_of_node(#site_info{isconn = IsConn, isup = IsUp, meta = Meta}) ->

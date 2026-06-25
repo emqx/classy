@@ -92,5 +92,6 @@
 -define(n_restarts, n_restarts).
 
 -define(pt_node_sets, classy_pt_node_sets).
+-define(pt_site_sets, classy_pt_site_sets).
 
 -endif.

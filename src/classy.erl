@@ -17,11 +17,13 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , info/1
         , info/2
         , n_restarts/0
+        , n_restarts/1
         , node_of_site/2
         , join_node/2
         , kick_site/2
         , kick_node/2
         , sites/0
+        , sites/1
         , nodes/1
         , quorum/1
         , fault_tolerance/1
@@ -156,9 +158,13 @@ names of all previously seen nodes that belong
 (or belonged, if the site is currently down)
 to the cluster members.
 @item up
+
 @item down
 @item connected
+there's an Erlang distribution connection to the node hosting the site.
 @item disconnected
+there's no Erlang distribution connection to the node hosting the site,
+but site is not considered down.
 @end table
 """.
 -type node_set_name() :: all | up | down | connected | disconnected | term().
@@ -251,6 +257,17 @@ n_restarts() ->
   end.
 
 -doc """
+Get cached value of the number of restarts of a remote site.
+
+Note: for the local site,
+please call @ref{classy:n_restarts/0},
+as values returned by this function may by out-of-date.
+""".
+-spec n_restarts(site()) -> {ok, non_neg_integer()} | undefined.
+n_restarts(Site) ->
+  classy_node:n_restarts(Site).
+
+-doc """
 Locate a node that is currently hosting a site.
 
 If @code{OnlyConnected} flag is set,
@@ -340,6 +357,18 @@ sites() ->
   else
     _ ->
       []
+  end.
+
+-doc """
+Get contents of a site set.
+
+Note: argument is the same as for node sets.
+""".
+-spec sites(node_set_name()) -> [site()].
+sites(SetName) ->
+  case persistent_term:get(?pt_site_sets, #{}) of
+    #{SetName := Set} -> Set;
+    #{} -> []
   end.
 
 -doc """
