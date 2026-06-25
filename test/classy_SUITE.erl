@@ -393,7 +393,7 @@ t_061_run_level_timeouts(_) ->
        ?ON(S1,
            begin
              {ok, _} = supervisor:restart_child(classy_sup, run_level_mgr),
-             application:set_env(classy, hook_timeout, 10)
+             application:set_env(classy, hook_timeout, 90)
            end),
        {ok, Sub3} = snabbkaffe:subscribe(Pred, 100, 3000, 0),
        ?ON(S1,

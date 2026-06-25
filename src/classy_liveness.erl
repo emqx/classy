@@ -27,7 +27,7 @@ liveness won't activate if @link{quorum} config is set to a value > 1.
 -behavior(gen_server).
 
 %% API:
--export([n_restarts/0, set_my_liveness_info/1]).
+-export([n_restarts/0]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -66,12 +66,6 @@ n_restarts() ->
     _ ->
       {error, nodedown}
   end.
-
-set_my_liveness_info(Running) ->
-  Cluster = classy_node:maybe_cluster(),
-  Site = classy_node:maybe_site(),
-  {ok, NR} = n_restarts(),
-  classy_membership:set_liveness(Cluster, Site, Site, NR, true, Running).
 
 %%================================================================================
 %% behavior callbacks
@@ -144,8 +138,18 @@ site_disconn_since(RemoteT, Site) ->
 %% Internal functions
 %%================================================================================
 
--spec increase_n_restarts() -> ok.
+set_my_liveness_info(Running) ->
+  Cluster = classy_node:maybe_cluster(),
+  Site = classy_node:maybe_site(),
+  {ok, NR} = n_restarts(),
+  classy_membership:set_liveness(Cluster, Site, Site, NR, true, Running).
+
+-spec increase_n_restarts() -> non_neg_integer().
 increase_n_restarts() ->
+  %% TODO: run this in a critical section:
+  do_increase_n_restarts().
+
+do_increase_n_restarts() ->
   N = case classy_table:lookup(?globals, ?n_restarts) of
         [N0] when is_integer(N0) ->
           N0 + 1;
@@ -159,7 +163,8 @@ increase_n_restarts() ->
                }),
           1
       end,
-  classy_table:write(?globals, ?n_restarts, N).
+  classy_table:write(?globals, ?n_restarts, N),
+  N.
 
 check_down_sites() ->
   maybe
