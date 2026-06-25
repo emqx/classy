@@ -280,6 +280,7 @@ terminate(Reason, _S) ->
   classy_table:flush(?globals),
   classy_table:flush(?site_info),
   sync_set_run_level(?stopped),
+  persistent_term:erase(?pt_node_sets),
   persistent_term:erase(?pt_site),
   persistent_term:erase(?pt_cluster),
   classy_table:stop(?globals, 5_000),
@@ -479,6 +480,7 @@ update_sites_status(S) ->
         [],
         ?site_info),
   ok = classy_table:flush(?site_info),
+  classify(),
   S.
 
 init_cluster() ->
@@ -588,8 +590,8 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
            , local   => Local
            }),
       case on_leave(S0, kicked) of
-        {ok, S}      -> {ok, S};
-        {error, Err} -> {stop, Err, undefined}
+        {ok, S}          -> {ok, S};
+        {error, _} = Err -> Err
       end;
    #{} ->
       maybe
@@ -610,7 +612,7 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
       end
   end.
 
--spec on_remote_restart(_) -> no_return().
+-spec on_remote_restart(#s{}) -> {ok, #s{}}.
 on_remote_restart(S) ->
   %% TODO
   {ok, S}.
@@ -639,7 +641,7 @@ import_deltas(Updated, Kicked, S0 = #s{cluster = Cluster, site = Local}) ->
     Updated),
   maybe
     ok ?= classy_table:flush(?site_info),
-    %% TODO: update peer info or delete it
+    classify(),
     {ok, adjust_run_level(S0)}
   end.
 
@@ -756,6 +758,42 @@ merge_deltas([Up | Rest], Updated0, Kicked0) ->
       Kicked = Kicked0
   end,
   merge_deltas(Rest, Updated, Kicked).
+
+-spec classify() -> ok.
+classify() ->
+  Sets = ets:foldl(
+           fun(#classy_kv{v = Info}, Acc0) ->
+               #site_info{node = Node} = Info,
+               lists:foldl(
+                 fun(SetName, Acc) ->
+                     case Acc of
+                       #{SetName := Set0} -> ok;
+                       #{} -> Set0 = []
+                     end,
+                     Set = ordsets:add_element(Node, Set0),
+                     Acc#{SetName => Set}
+                 end,
+                 Acc0,
+                 sets_of_node(Info))
+           end,
+           #{},
+           ?site_info),
+  persistent_term:put(?pt_node_sets, Sets).
+
+-spec sets_of_node(#site_info{}) -> [classy:node_set_name()].
+sets_of_node(#site_info{isconn = IsConn, isup = IsUp, meta = Meta}) ->
+  [ case IsConn of
+      true -> connected;
+      _    -> disconnected
+    end
+  , case IsUp of
+      true  -> up;
+      false -> down
+    end
+  , all
+  | lists:flatten(
+      classy_hook:map(?on_node_classify, [Meta]))
+  ].
 
 default_site_info() ->
   #site_info{ isconn = false

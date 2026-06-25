@@ -52,7 +52,6 @@ liveness won't activate if @link{quorum} config is set to a value > 1.
 
 -define(SERVER, ?MODULE).
 
-
 -doc """
 Return number of node restarts since creation of the site.
 

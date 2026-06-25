@@ -40,6 +40,7 @@
 -define(on_peer_liveness_change, on_peer_liveness_change).
 -define(on_peer_restart, on_peer_restart).
 -define(on_peer_node_change, on_peer_node_change).
+-define(on_node_classify, on_node_classify).
 
 %% Run levels:
 -define(stopped, stopped).
@@ -89,5 +90,7 @@
 -define(globals, classy_node).
 %%    Number of restarts since creation of the site
 -define(n_restarts, n_restarts).
+
+-define(pt_node_sets, classy_pt_node_sets).
 
 -endif.

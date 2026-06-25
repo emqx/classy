@@ -12,6 +12,7 @@ Module responsible for managing the hooks.
         , insert/3
         , unhook/1
         , foreach/2
+        , map/2
         , fold/3
         , all/2
         , first_match/2
@@ -141,6 +142,25 @@ fold(Hookpoint, Args, Acc0) ->
     {stop, Result} ->
       Result
   end.
+
+-doc """
+Apply every hook to the arguments
+and return the list of outputs for each hook.
+
+Failures are ignored (logged).
+""".
+-spec map(hookpoint(), list()) -> list().
+map(Hookpoint, Args) ->
+  lists:filtermap(
+    fun(Hook) ->
+        case safe_apply(Hookpoint, Hook, Args) of
+          {ok, Result} ->
+            {true, Result};
+          _ ->
+            false
+        end
+    end,
+    hooks(Hookpoint)).
 
 -doc """
 Ensure that all functions hooked into @code{Hookpoint} return @code{ok}.

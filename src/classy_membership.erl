@@ -226,7 +226,7 @@ Normally, liveness is only updated by the local site.
 The remotes can only update @code{IsUp} boolean on behalf of other nodes,
 but they must always keep @code{NRestarts} as is.
 """.
--spec set_liveness(classy:cluster_id(), classy:site(), classy:site(), integer(), boolean(), boolean()) -> ok | {error, _}.
+-spec set_liveness(classy:cluster_id(), classy:site(), classy:site(), non_neg_integer(), boolean(), boolean()) -> ok | {error, _}.
 set_liveness(Cluster, Local, Target, NRestarts, Self, IsUp) ->
   try
     gen_server:call(

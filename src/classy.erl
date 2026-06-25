@@ -28,6 +28,7 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , at_lower_level/2
         , the_site/0
         , the_cluster/0
+        , node_sets/0
         ]).
 
 -export([ on_node_init/2
@@ -38,6 +39,7 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , on_peer_liveness_change/2
         , on_peer_node_change/2
         , on_peer_restart/2
+        , on_node_classify/2
         , pre_join/2
         , post_join/2
         , pre_kick/2
@@ -59,6 +61,9 @@ This MFA can contain calls to various @code{classy:on_...} functions.
              , cluster_info/0
 
              , run_level/0
+
+             , node_set_name/0
+             , node_set/0
              ]).
 
 -include("classy_internal.hrl").
@@ -141,6 +146,28 @@ Site is kicked by the autoclean logic.
 """.
 -type run_level() :: ?stopped | ?single | ?cluster | ?quorum.
 
+-doc """
+An arbitrary ID of a node set.
+
+Predefined sets are:
+@table @code
+@item all
+names of all previously seen nodes that belong
+(or belonged, if the site is currently down)
+to the cluster members.
+@item up
+@item down
+@item connected
+@item disconnected
+@end table
+""".
+-type node_set_name() :: all | up | down | connected | disconnected | term().
+
+-doc """
+A set of nodes.
+""".
+-type node_set() :: ordsets:ordset(node()).
+
 %%================================================================================
 %% API functions
 %%================================================================================
@@ -214,7 +241,7 @@ info(_Hops, Nodes) ->
    }.
 
 -doc """
-Return the total number of time the site has been restarted.
+Return the total number of times the site has been restarted.
 """.
 -spec n_restarts() -> non_neg_integer() | undefined.
 n_restarts() ->
@@ -316,16 +343,26 @@ sites() ->
   end.
 
 -doc """
-List all peer nodes.
+List peer nodes that belong to a node set.
 
 Important to note: this function returns node names of @emph{peer sites}.
 Random connected nodes,
 such as shells or classy sites that are not member of the current cluster,
 are excluded.
 """.
--spec nodes(all | connected | disconnected) -> [node()].
-nodes(Query) ->
-  classy_node:nodes(Query).
+-spec nodes(node_set_name()) -> [node()].
+nodes(Name) ->
+  case node_sets() of
+    #{Name := V} -> V;
+    #{}          -> []
+  end.
+
+-doc """
+Return a map of all node sets.
+""".
+-spec node_sets() -> #{node_set_name() => node_set()}.
+node_sets() ->
+  persistent_term:get(?pt_node_sets, #{}).
 
 -doc """
 This function can be used to
@@ -503,6 +540,19 @@ Register a hook that is executed when a peer restarts.
        ) -> classy_hook:hook().
 on_peer_restart(Hook, Prio) ->
   classy_hook:insert(?on_peer_restart, Hook, Prio).
+
+-doc """
+Register a hook that can place a site's node into an arbitrary number of custom node sets,
+based on @ref{t:classy:info/0}.
+
+@xref{classy:enrich_site_info/2}, @xref{classy:node_sets/0}.
+""".
+-spec on_node_classify(
+        fun((map()) -> [node_set()]),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
+on_node_classify(Hook, Prio) ->
+  classy_hook:insert(?on_node_classify, Hook, Prio).
 
 -doc """
 Register a hook that is executed before the local node joins a different cluster.
