@@ -16,6 +16,7 @@
         , log_peer_liveness_change/2
         , log_peer_restart/2
         , log_peer_node_change/3
+        , log_autoclean/1
         ]).
 
 -include("classy_internal.hrl").
@@ -121,6 +122,11 @@ log_peer_node_change(Peer, From, To) ->
       #{ site => Peer
        , from => From
        , to => To
+       }).
+
+log_autoclean(Target) ->
+  ?tp(debug, classy_peer_autoclean,
+      #{ site => Target
        }).
 
 %%================================================================================

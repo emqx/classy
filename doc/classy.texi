@@ -345,7 +345,7 @@ The document was typeset with
       Note: to prevent network-isolated nodes from kicking their peers,
       quorum among the running nodes is required to perform the act.
 
-    @defen{cleanup_check_interval, @code{pos_integer()}, 30_000}
+    @defen{cleanup_check_interval, @code{pos_integer()}, 5_000}
 
       @emph{Unit}: ms.
 

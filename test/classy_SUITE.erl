@@ -431,15 +431,16 @@ t_070_cleanup(_) ->
   Sites = [S1, S2, S3],
   AppConf = {familiar_app,
              #{ app => classy
-              , env => #{ quorum            => 2
-                        , max_site_downtime => 1
-                        , forget_after      => 0
-                        , rpc_timeout       => 100
+              , env => #{ quorum                 => 2
+                        , max_site_downtime      => 1
+                        , forget_after           => 0
+                        , rpc_timeout            => 100
+                        , cleanup_check_interval => 100
                         }
               }},
   Conf = #{fixtures => [AppConf]},
   ?check_trace(
-     #{timetrap => 20_000},
+     #{timetrap => 30_000},
      begin
        %% Prepare system:
        N1 = create_start_site(S1, Conf),
@@ -459,7 +460,7 @@ t_070_cleanup(_) ->
        %% Bring up S2 and restore quorum, that should lead to deletion of S3:
        ?wait_async_action(
           restart_site(S2),
-          #{?snk_kind := automatically_kick_down_site}),
+          #{?snk_kind := classy_member_leave, remote := S3}),
        wait_site_kicked([S1, S2], Cluster, S3),
        ?assertSameSet([S1, S2], ?ON(S1, classy:sites())),
        ?assertSameSet([S1, S2], ?ON(S2, classy:sites()))

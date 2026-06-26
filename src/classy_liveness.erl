@@ -285,7 +285,7 @@ max_downtime() ->
 
 -spec check_interval() -> pos_integer().
 check_interval() ->
-  application:get_env(classy, cleanup_check_interval, 30_000).
+  application:get_env(classy, cleanup_check_interval, 5_000).
 
 -spec forget_after() -> pos_integer().
 forget_after() ->

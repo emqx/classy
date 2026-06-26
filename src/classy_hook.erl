@@ -78,6 +78,7 @@ init() ->
   classy:on_peer_liveness_change(fun classy_builtin_hooks:log_peer_liveness_change/2, ?max_hook_prio),
   classy:on_peer_restart(fun classy_builtin_hooks:log_peer_restart/2, ?max_hook_prio),
   classy:on_peer_node_change(fun classy_builtin_hooks:log_peer_node_change/3, ?max_hook_prio),
+  classy:pre_autoclean(fun classy_builtin_hooks:log_autoclean/1, ?max_hook_prio),
   %% Discovery strategies:
   classy_discovery_static:hook(),
   classy_discovery_dns:hook(),
