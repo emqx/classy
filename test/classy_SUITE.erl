@@ -1350,12 +1350,12 @@ t_411_commit_actions_after_restart(_) ->
        [ok = restart_site(S) || S <- Sites],
        ?assert(classy_vote:test_wait_conclude(ID)),
        verify_no_votes(Nodes),
-       Nodes
+       {ID, Nodes}
      end,
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1
      , {"commit events",
-        fun([_N1, N2], Trace) ->
+        fun({_ID, [_N1, N2]}, Trace) ->
             ?assertMatch(
                [ #{?snk_kind := test_go}
                , #{ ?snk_kind := classy_test_vote_commit
@@ -1374,7 +1374,14 @@ t_411_commit_actions_after_restart(_) ->
                ?of_kind(classy_test_post_vote, Trace))
         end}
      , {"participant stages",
-        fun([_N1, _N2], Trace) ->
+        fun({ID, [_N1, _N2]}, Trace0) ->
+            Trace = lists:filter(
+                      fun(#{?snk_kind := test_go}) -> true;
+                         (#{?snk_kind := classy_test_vote_commit}) -> true;
+                         (#{?snk_kind := ?classy_vote_part_stage, id := I}) when I =:= ID -> true;
+                         (_) -> false
+                      end,
+                      Trace0),
             ?assertMatch(
                [ #{from := 0, to := 0} %% Enter prepare
                , #{from := 0, to := 1} %% Enter wait outcome
@@ -1383,7 +1390,7 @@ t_411_commit_actions_after_restart(_) ->
                , #{from := 2, to := 2} %% Restored state into commit stage
                , #{?snk_kind := classy_test_vote_commit}
                ],
-               ?of_kind([?classy_vote_part_stage, test_go, classy_test_vote_commit], Trace))
+               Trace)
         end}
      | classy_vote:trace_props()
      ]).
@@ -1429,12 +1436,12 @@ t_412_commit_action_crash(_) ->
        [ok = restart_site(S) || S <- Sites],
        ?assert(classy_vote:test_wait_conclude(ID)),
        verify_no_votes(Nodes),
-       Nodes
+       {Nodes, ID}
      end,
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1
      , {"coordinator history",
-        fun([N1, _N2], Trace) ->
+        fun({[N1, _N2], _ID}, Trace) ->
             ?assertMatch(
                [ #{from := 0, to := 0} %% Enter vote
                , #{from := 0, to := 10} %% Enter commit
@@ -1452,7 +1459,14 @@ t_412_commit_action_crash(_) ->
                            Trace)))
         end}
      , {"participant history",
-        fun([_N1, N2], Trace) ->
+        fun({[_N1, N2], ID}, Trace0) ->
+            Trace = lists:filter(
+                      fun(#{?snk_kind := classy_test_vote_commit}) -> true;
+                         (#{?snk_kind := classy_test_vote_on_fail}) -> true;
+                         (#{?snk_kind := ?classy_vote_part_stage, id := I}) when I =:= ID -> true;
+                         (_) -> false
+                      end,
+                      ?of_node(N2, Trace0)),
             ?assertMatch(
                [ #{from := 0, to := 0} %% Enter prepare
                , #{from := 0, to := 1} %% Enter wait outcome
@@ -1464,12 +1478,7 @@ t_412_commit_action_crash(_) ->
                , #{?snk_kind := classy_test_vote_commit, ref := Ref1, step := 2}
                , #{?snk_kind := classy_test_vote_commit, ref := Ref1, step := 3}
                ],
-               ?of_node(N2,
-                        ?of_kind([ ?classy_vote_part_stage
-                                 , classy_test_vote_commit
-                                 , classy_test_vote_on_fail
-                                 ],
-                                 Trace)))
+               Trace)
         end}
      | classy_vote:trace_props()
      ]).
@@ -1894,8 +1903,14 @@ vote_on_fail(FailInfo, Ref) ->
   ?tp(classy_test_vote_on_fail, FailInfo#{test_ref => Ref}).
 
 verify_no_votes(Nodes) ->
-  Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
-  [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)].
+  %% TODO: using retry due to sporadic votes spawned by
+  %% `classy_liveness'. Find a way to filter them out.
+  ?retry(100, 10,
+         begin
+           Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
+           %% Filter out node down votes that may occur sporadically:
+           [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
+         end).
 
 -spec proper_printout(string(), list()) -> _.
 proper_printout(Char, []) when Char =:= ".";
