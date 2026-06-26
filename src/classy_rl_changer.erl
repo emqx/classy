@@ -86,15 +86,17 @@ set(RunLevel) ->
     #call_set{level = RunLevel},
     infinity).
 
+%% Warning: this function only works for _lowering_ the layer.
 -spec set_sync(classy:run_level(), timeout()) -> ok | {error, timeout}.
 set_sync(RunLevel, Timeout) ->
   set(RunLevel),
-  Parent = self(),
+  Parent = erlang:alias([reply]),
   Ref = make_ref(),
   at_lower_level(RunLevel, fun() -> Parent ! Ref end),
   receive
     Ref -> ok
   after Timeout ->
+      unalias(Parent),
       {error, timeout}
   end.
 
