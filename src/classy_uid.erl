@@ -77,7 +77,7 @@ but not globally.
 """.
 -spec cluster_unique_tuple() -> cu_tuple().
 cluster_unique_tuple() ->
-  Site = classy_node:maybe_site(),
+  {ok, Site} = classy:the_site(),
   {ok, NRestarts} = classy_liveness:n_restarts(),
   {Site, NRestarts, erlang:unique_integer([positive, monotonic])}.
 
@@ -102,7 +102,7 @@ but includes site name.
 """.
 -spec cluster_unique_seq_tuple(sequence()) -> cu_tuple().
 cluster_unique_seq_tuple(Sequence) ->
-  Site = classy_node:maybe_site(),
+  {ok, Site} = classy:the_site(),
   {ok, NRestarts} = classy_liveness:n_restarts(),
   {Site, NRestarts, volatile_counter(Sequence)}.
 

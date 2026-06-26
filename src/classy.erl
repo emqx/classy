@@ -261,7 +261,7 @@ Get cached value of the number of restarts of a remote site.
 
 Note: for the local site,
 please call @ref{classy:n_restarts/0},
-as values returned by this function may by out-of-date.
+as values returned by this function may be out-of-date.
 """.
 -spec n_restarts(site()) -> {ok, non_neg_integer()} | undefined.
 n_restarts(Site) ->
