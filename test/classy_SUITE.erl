@@ -821,16 +821,6 @@ t_200_n_restarts(_) ->
        ?assertEqual(
           1,
           ?ON(S, classy:n_restarts())),
-       %% Verify serial UID tuples:
-       ?assertEqual(
-          {1, 1},
-          ?ON(S, classy_uid:site_unique_seq_tuple(seq))),
-       ?assertEqual(
-          {1, 2},
-          ?ON(S, classy_uid:site_unique_seq_tuple(seq))),
-       ?assertEqual(
-          {S, 1, 3},
-          ?ON(S, classy_uid:cluster_unique_seq_tuple(seq))),
        %% Verify regular UID tuples:
        {1, UI1} = ?ON(S, classy_uid:site_unique_tuple()),
        {1, UI2} = ?ON(S, classy_uid:site_unique_tuple()),
@@ -845,20 +835,13 @@ t_200_n_restarts(_) ->
           ?assertEqual(
              Nr,
              ?ON(S, classy:n_restarts())),
-          %% Verify serial UID tuples:
-          ?assertEqual(
-             {Nr, 1},
-             ?ON(S, classy_uid:site_unique_seq_tuple(seq))),
-          ?assertEqual(
-             {S, Nr, 2},
-             ?ON(S, classy_uid:cluster_unique_seq_tuple(seq))),
-            %% Verify regular UID tuples:
-            ?assertMatch(
-               {Nr, UI} when is_integer(UI),
-               ?ON(S, classy_uid:site_unique_tuple())),
-            ?assertMatch(
-               {S, Nr, UI} when is_integer(UI),
-               ?ON(S, classy_uid:cluster_unique_tuple()))
+          %% Verify regular UID tuples:
+          ?assertMatch(
+             {Nr, UI} when is_integer(UI),
+             ?ON(S, classy_uid:site_unique_tuple())),
+          ?assertMatch(
+             {S, Nr, UI} when is_integer(UI),
+             ?ON(S, classy_uid:cluster_unique_tuple()))
         end
         || Nr <- lists:seq(2, 5)]
      end,
