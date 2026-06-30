@@ -19,6 +19,8 @@
 -include_lib("snabbkaffe/include/trace.hrl").
 -include("classy.hrl").
 
+-define(classy_proto_vsn, 1).
+
 -define(max_hook_prio, 100000).
 -define(min_hook_prio, -?max_hook_prio).
 
@@ -35,6 +37,10 @@
 -define(on_pre_autoclean, on_pre_autoclean).
 -define(on_pre_autocluster, on_pre_autocluster).
 -define(on_enrich_site_info, on_enrich_site_info).
+-define(on_peer_liveness_change, on_peer_liveness_change).
+-define(on_peer_restart, on_peer_restart).
+-define(on_peer_node_change, on_peer_node_change).
+-define(on_node_classify, on_node_classify).
 
 %% Run levels:
 -define(stopped, stopped).
@@ -47,6 +53,8 @@
 -define(classy_abnormal_exit, classy_abnormal_exit).
 -define(classy_table_anomaly, classy_table_anomaly).
 -define(classy_bad_data, classy_bad_data).
+-define(classy_run_level_change_error, classy_run_level_change_error).
+-define(classy_hook_failure, classy_hook_failure).
 
 -define(classy_vote_pre_results, classy_vote_pre_results).
 -define(classy_vote_coord_stage, classy_vote_coord_stage).
@@ -69,12 +77,21 @@
 -define(site_info, classy_site_status_tab).
 -record(site_info,
         { isconn
-        , liveness
+        , isup
+        , nrestarts
         , node
-        , last_update
+        , meta
+          %% Time when the the value of isconn last changed:
+        , conn_change_time
         , reserved = []
         }).
+
+%% Shared classy tables and their keys:
+-define(globals, classy_node).
 %%    Number of restarts since creation of the site
 -define(n_restarts, n_restarts).
+
+-define(pt_node_sets, classy_pt_node_sets).
+-define(pt_site_sets, classy_pt_site_sets).
 
 -endif.

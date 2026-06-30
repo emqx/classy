@@ -165,11 +165,6 @@ handle_event({call, ReplyTo}, VoteData = #c_vote{}, Stage, D) ->
 handle_event(state_timeout, ?state_timeout, Stage, D) ->
   handle_state_timeout(Stage, D);
 %% Common:
-handle_event(info, {'EXIT', _, Reason}, _, _) ->
-  case Reason of
-    normal -> keep_state_and_data;
-    _      -> {stop, shutdown}
-  end;
 handle_event(ET, Event, State, _Data) ->
   %% TODO: put ID and MFAs into error messages
   ?tp(warning, ?classy_unknown_event,
@@ -445,7 +440,7 @@ prepare(
   #d{id = Id, tag = Tag, opts = #opts{on_fail = OnFail}},
   #act{prepare = Prep, commit = Commit, rollback = Rollback}
  ) ->
-  {ok, Self} = classy_node:the_site(),
+  {ok, Self} = classy:the_site(),
   #prepare{ id = Id
           , tag = Tag
           , prepare = Prep

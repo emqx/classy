@@ -177,11 +177,6 @@ handle_event(enter, OldStage, Stage, D) ->
 handle_event(state_timeout, ?state_timeout, ?s_prepare, D) ->
   %% Perform the actual vote:
   do_real_vote(D);
-handle_event(info, {'EXIT', _, Reason}, _, _) ->
-  case Reason of
-    normal -> keep_state_and_data;
-    _      -> {stop, shutdown}
-  end;
 handle_event({call, From}, #c_outcome{} = Outcome, ?s_wait_outcome, D) ->
   do_receive_outcome(From, Outcome, D);
 handle_event(ET, Event, State, _Data) ->
@@ -209,7 +204,7 @@ terminate(Reason, State, _Data) ->
 %%================================================================================
 
 do_receive_outcome(From, #c_outcome{result = Result}, D0 = #d{vote = MyVote, prep = Prep}) ->
-  {ok, Self} = classy_node:the_site(),
+  {ok, Self} = classy:the_site(),
   ?tp(debug, ?classy_vote_part_recv_outcome,
       #{ outcome => Result
        , id => Prep#prepare.id
@@ -322,7 +317,7 @@ do_prepare(
   end.
 
 send_vote(#d{vote = Vote, prep = Prep = #prepare{id = ID}}) ->
-  {ok, Self} = classy_node:the_site(),
+  {ok, Self} = classy:the_site(),
   #prepare{id = Id, coordinator = Coordinator} = Prep,
   Arg = #c_vote{ id = Id
                , vote = Vote
@@ -354,7 +349,7 @@ db_establish(Stage, Vote, CompletedActions, Prep) ->
                  [ {w, DataKey, Prep}
                  , {w, StateKey, State}
                  ]),
-    {ok, Site} = classy_node:the_site(),
+    {ok, Site} = classy:the_site(),
     ?tp(debug, ?classy_vote_part_established, #{id => ID, tag => Tag, site => Site}),
     {ok, #d{ prep = Prep
            , vote = Vote

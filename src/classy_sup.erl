@@ -115,24 +115,24 @@ start_link_vote_participant_sup() ->
 
 init(#top{}) ->
   _ = classy_hook:init(),
+  RLChanger = #{ id       => run_level_mgr
+               , start    => {classy_rl_changer, start_link, []}
+               , shutdown => infinity
+               , restart  => permanent
+               , type     => worker
+               },
   Node = #{ id       => node
           , start    => {classy_node, start_link, []}
           , shutdown => 10_000
           , restart  => permanent
           , type     => worker
           },
-  UIDGen = #{ id       => uid
-            , start    => {classy_uid, start_link, []}
-            , shutdown => 5_000
-            , restart  => permanent
-            , type     => worker
-            },
-  Autoclean = #{ id       => autoclean
-               , start    => {classy_autoclean, start_link, []}
-               , shutdown => 10_000
-               , restart  => permanent
-               , type     => worker
-               },
+  Liveness = #{ id       => liveness
+              , start    => {classy_liveness, start_link, []}
+              , shutdown => 10_000
+              , restart  => permanent
+              , type     => worker
+              },
   Autocluster = #{ id       => autocluster
                  , start    => {classy_autocluster_sup, start_link, []}
                  , shutdown => infinity
@@ -141,11 +141,11 @@ init(#top{}) ->
                  },
   Children = [ sup_spec(#{id => ?TABLE_SUP, start => {?MODULE, start_link_table_sup, []}})
              , sup_spec(#{id => ?MEMBERSHIP_SUP, start => {?MODULE, start_link_membership_sup, []}})
+             , RLChanger
              , Node
-             , UIDGen
              , sup_spec(#{id => ?VOTE_COORDINATOR_SUP, start => {?MODULE, start_link_vote_coordinator_sup, []}})
              , sup_spec(#{id => ?VOTE_PARTICIPANT_SUP, start => {?MODULE, start_link_vote_participant_sup, []}})
-             , Autoclean
+             , Liveness
              , Autocluster
              ],
   SupFlags = #{ strategy      => rest_for_one

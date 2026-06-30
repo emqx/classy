@@ -292,6 +292,13 @@ The document was typeset with
       @emph{Unit}: ms
 
       Default timeout for remote procedure calls.
+
+    @defen{hook_timeout, @code{timeout()}, 30_000}
+
+      @emph{Unit}: ms
+
+      Maximum run time for any hook.
+
   @section Peer
 
     @defen{sync_timeout, @code{non_neg_integer()}, 1000}
@@ -305,6 +312,16 @@ The document was typeset with
 
       Minimum number of known peers necessary to advance @ref{t:classy:run_level/0,run level}
       from @code{single} to @code{cluster}.
+
+    @defen{to_cluster_sets, @code{[classy:node_set_name()]}, @code{[]}}
+
+      List of node set names used to additionally restrict when the node is considered joined to a cluster.
+      Sets from the lists are combined using set intersection operation.
+
+    @defen{quorum_sets, @code{[classy:node_set_name()]}, @code{[]}}
+
+      List of node set names used to additionally restrict when the node is considered having a quorum.
+      Sets from the lists are combined using set intersection operation.
 
     @defen{quorum, @code{pos_integer()}, 1}
 
@@ -328,7 +345,7 @@ The document was typeset with
       Note: to prevent network-isolated nodes from kicking their peers,
       quorum among the running nodes is required to perform the act.
 
-    @defen{cleanup_check_interval, @code{pos_integer()}, 30_000}
+    @defen{cleanup_check_interval, @code{pos_integer()}, 5_000}
 
       @emph{Unit}: ms.
 

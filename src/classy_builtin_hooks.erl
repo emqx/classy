@@ -9,10 +9,14 @@
         , log_create_site/1
         , log_create_cluster/2
         , log_pre_join/4
-        , log_post_join/3
+        , log_post_join/4
         , log_membership_change/4
         , log_run_level/2
-        , log_peer_connection_change/5
+        , log_peer_connection_change/3
+        , log_peer_liveness_change/2
+        , log_peer_restart/2
+        , log_peer_node_change/3
+        , log_autoclean/1
         ]).
 
 -include("classy_internal.hrl").
@@ -59,11 +63,12 @@ log_pre_join(Cluster, Remote, Node, UserArg) ->
        , user_arg => UserArg
        }).
 
-log_post_join(Cluster, Local, JoinToNode) ->
+log_post_join(Cluster, Local, JoinToNode, Intent) ->
   ?tp(notice, classy_joined_cluster,
       #{ cluster => Cluster
        , local => Local
        , joined_to_node => JoinToNode
+       , intent => Intent
        }).
 
 log_membership_change(Cluster, Local, Remote, Member) ->
@@ -81,20 +86,47 @@ log_run_level(From, To) ->
   ?tp(info, classy_change_run_level,
       #{ from => From
        , to => To
+       , local => classy_node:maybe_site()
        }).
 
-log_peer_connection_change(_Cluster, Local, Remote, Node, ConnStatus) ->
+log_peer_connection_change(Site, Node, ConnStatus) ->
   Kind = case ConnStatus of
-           true -> classy_peer_connected;
+           true  -> classy_peer_connected;
            false -> classy_peer_disconnected
          end,
-  Level = case Remote of
-            Local -> debug;
-            _     -> notice
+  Level = case classy_node:maybe_site() of
+            Site -> debug;
+            _    -> notice
           end,
   ?tp(Level, Kind,
-      #{ remote => Remote
-       , node   => Node
+      #{ site => Site
+       , node => Node
+       }).
+
+log_peer_liveness_change(Peer, IsLive) ->
+  case IsLive of
+    true ->
+      Level = info,
+      Kind = classy_peer_up;
+    false ->
+      Level = warning,
+      Kind = classy_peer_down
+  end,
+  ?tp(Level, Kind, #{site => Peer}).
+
+log_peer_restart(Peer, NRestarts) ->
+  ?tp(info, classy_peer_restarted, #{site => Peer, n_restarts => NRestarts}).
+
+log_peer_node_change(Peer, From, To) ->
+  ?tp(warning, classy_peer_node_change,
+      #{ site => Peer
+       , from => From
+       , to => To
+       }).
+
+log_autoclean(Target) ->
+  ?tp(debug, classy_peer_autoclean,
+      #{ site => Target
        }).
 
 %%================================================================================

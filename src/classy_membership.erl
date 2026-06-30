@@ -15,6 +15,8 @@ Business code should not use it directly.
 %% API:
 -export([ known_clusters/1
         , set_member/4
+        , set_info/3
+        , set_liveness/6
         , members/2
         , list_local_sites/1
         , get_data/4
@@ -22,6 +24,8 @@ Business code should not use it directly.
         , flush/2
         , node_of_site/2
         , site_of_node/2
+        , to_liveness/3
+        , from_liveness/1
         , dump/0
         ]).
 
@@ -35,12 +39,13 @@ Business code should not use it directly.
 -export([reset_acked_out/4]).
 -endif.
 
--export_type([start_args/0, op/0, ord/0, clock/0, sync_data/0, pk_last/0, pv_last/0]).
+-export_type([start_args/0, op/0, ord/0, clock/0, sync_data/0, pk_last/0, pv_last/0, event/0]).
 
 -include("classy_internal.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
 -ifdef(TEST).
+-include_lib("proper/include/proper.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -66,7 +71,9 @@ Business code should not use it directly.
 %% Types of keys stored in the cluster CRDT.
 -record(mem, {s :: classy:site() | atom()}).
 -record(host, {s :: classy:site() | atom()}).
--type key() :: #mem{} | #host{}.
+-record(info, {s :: classy:site() | atom()}).
+-record(live, {s :: classy:site() | atom()}).
+-type key() :: #mem{} | #host{} | #info{} | #live{}.
 
 -doc "Arbitrary term used to break ties between commands with the same logical timestamp.".
 -type magic() :: term().
@@ -119,6 +126,8 @@ Business code should not use it directly.
         , sync_timer :: classy_lib:wakeup_timer()
           %% Logical clock:
         , clock :: clock()
+          %% Logical clock of the last update sent to `classy_node' worker
+        , events_since = 0
         }).
 
 %% Persistent table keys:
@@ -136,8 +145,6 @@ Business code should not use it directly.
 %% Last set command for the site:
 -record(pk_last, {c, l, k}).
 -type pk_last() :: #pk_last{c :: classy:cluster_id(), l :: classy:site(), k :: key()}.
-%% Hooks have been executed for all site states older than this:
--record(pk_hooks_ran, {c :: classy:cluster_id(), l :: classy:site()}).
 
 %% Composite table values:
 -record(pv_last,
@@ -145,6 +152,13 @@ Business code should not use it directly.
         , toi   % Local logical time of importing the op
         }).
 -type pv_last() :: #pv_last{op :: op(), toi :: clock()}.
+
+-type event() :: {mem, classy:site(), boolean()} |
+                 {host, classy:site(), node()} |
+                 {meta, classy:site(), map()} |
+                 {liveness, classy:site(), _NRestarts :: non_neg_integer(), _Self :: boolean(), _IsUp :: boolean()}.
+
+-type liveness() :: non_neg_integer().
 
 %%================================================================================
 %% API functions
@@ -184,6 +198,40 @@ set_member(Cluster, Local, Target, IsMember) when is_boolean(IsMember) ->
     gen_server:call(
       ?via(Cluster, Local),
       #call_set{k = #mem{s = Target}, v = IsMember},
+      ?call_timeout)
+  catch
+    EC:Err -> {error, {EC, Err}}
+  end.
+
+-doc """
+Set site information.
+
+This function is called by the site itself.
+""".
+-spec set_info(classy:cluster_id(), classy:site(), _Info) -> ok | {error, _}.
+set_info(Cluster, Local, Info) ->
+  try
+    gen_server:call(
+      ?via(Cluster, Local),
+      #call_set{k = #info{s = Local}, v = Info},
+      ?call_timeout)
+  catch
+    EC:Err -> {error, {EC, Err}}
+  end.
+
+-doc """
+Set site liveness info.
+
+Normally, liveness is only updated by the local site.
+The remotes can only update @code{IsUp} boolean on behalf of other nodes,
+but they must always keep @code{NRestarts} as is.
+""".
+-spec set_liveness(classy:cluster_id(), classy:site(), classy:site(), non_neg_integer(), boolean(), boolean()) -> ok | {error, _}.
+set_liveness(Cluster, Local, Target, NRestarts, Self, IsUp) ->
+  try
+    gen_server:call(
+      ?via(Cluster, Local),
+      #call_set{k = #live{s = Target}, v = to_liveness(NRestarts, Self, IsUp)},
       ?call_timeout)
   catch
     EC:Err -> {error, {EC, Err}}
@@ -278,7 +326,9 @@ dump() ->
             Info = {Val, #{origin => Origin, ltime => Clock, wtime => OWT, ltime_imported => TOI}},
             Path = case Key of
                      #mem{s = Target}  -> [peers, Target, mem];
-                     #host{s = Target} -> [peers, Target, host]
+                     #host{s = Target} -> [peers, Target, host];
+                     #info{s = Target} -> [peers, Target, info];
+                     #live{s = Target} -> [peers, Target, liveness]
                    end,
             classy_lib:map_deep_insert(
               [{Cluster, Local} | Path],
@@ -298,16 +348,63 @@ dump() ->
             classy_lib:map_deep_insert(
               [{Cluster, Local}, clock],
               V,
-              Acc);
-          #pk_hooks_ran{c = Cluster, l = Local} ->
-            classy_lib:map_deep_insert(
-              [{Cluster, Local}, hook_ran],
-              V,
               Acc)
         end
     end,
     #{},
     ?ptab).
+
+-doc """
+Convert information about liveness to a sortable non-negative integer replicated via CRDT.
+
+Arguments:
+@enumerate
+  @item Number of restarts of the target site
+  @item @code{true} of the update is made by the site itself,
+        @code{false} if the target site is updated by the 3rd party.
+  @item @code{true} if the site is up.
+@end enumerate
+
+Bits in the integer are organized such that:
+@enumerate
+  @item Liveness information for the higher number of restarts always wins.
+  @item Liveness updates made by the 3rd party win.
+        This way the target site knows that its peers decided that it went down.
+@end enumerate
+""".
+-spec to_liveness(non_neg_integer(), boolean(), boolean()) -> liveness().
+to_liveness(NRestarts, Self, IsUp) when is_integer(NRestarts),
+                                        NRestarts >= 0,
+                                        is_boolean(Self),
+                                        is_boolean(IsUp) ->
+  %% Liveness bits:
+  %%
+  %%           always 0       always 0
+  %%              v               v
+  %% n_restarts | 0  | not Self | 0 | IsUp |
+  OnBehalf = case Self of
+               false -> 2#100;
+               true  -> 0
+             end,
+  UpBit = case IsUp of
+            true -> 1;
+            false -> 0
+          end,
+  (NRestarts bsl 4) bor OnBehalf bor UpBit.
+
+-doc """
+Convert liveness bitfield to a tuple.
+""".
+-spec from_liveness(liveness()) -> {NRestarts, Self, IsUp} when
+    NRestarts :: non_neg_integer(),
+    Self :: boolean(),
+    IsUp :: boolean().
+from_liveness(Liveness) when is_integer(Liveness),
+                             Liveness >= 0 ->
+  NRestarts = Liveness bsr 4,
+  IsUp = (Liveness band 1) > 0,
+  Self = Liveness band 2#100 =:= 0,
+  {NRestarts, Self, IsUp}.
 
 -ifdef(TEST).
 
@@ -471,8 +568,7 @@ handle_flush(S0) ->
   S = handle_sync_out(S0),
   ok = classy_table:flush(?ptab),
   %% This one updates hook cursor persistently, no need to flush again:
-  run_hooks(S),
-  S.
+  notify(S).
 
 -doc """
 Total order of the operation.
@@ -489,12 +585,14 @@ This is most likely to happen during a network partition.
 Please see theories/classy.v file for more details and some intricate requirements for this function.
 """.
 -spec ord(op()) -> ord().
+ord(#op_set{k = #live{}, val = Liveness, c = C, origin = O}) ->
+  true = is_integer(Liveness),
+  %% Liveness information is merged according to special rules,
+  %% as the value itself is designed for a causal ordering serialization.
+  %% See bitfield definition in `to_liveness'
+  {Liveness, C, O};
 ord(#op_set{c = C, m = M, origin = O}) ->
   {C, M, O}.
-
--spec state(op()) -> boolean().
-state(#op_set{val = Val}) ->
-  Val.
 
 -spec local_command(#call_set{}, #s{}) -> #s{}.
 local_command(Cmd, S0) ->
@@ -617,21 +715,32 @@ merge(LTime, Op, S) ->
       true
   end.
 
-run_hooks(S = #s{clock = C, cluster = Cluster, site = Local}) ->
-  UpdatedEntries = memtab_since(hooks_ran(S) + 1, S),
-  lists:foreach(
-    fun(Op = #op_set{k = #mem{s = Peer}}) ->
-        IsConn = state(Op),
-        classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, IsConn]);
-       (#op_set{}) ->
-        ok
-    end,
-    UpdatedEntries),
-  classy_table:write(?ptab, #pk_hooks_ran{c = Cluster, l = Local}, C).
+notify(S = #s{clock = C, cluster = Cluster, events_since = EventsSince}) ->
+  %% Find out what changed:
+  UpdatedEntries = memtab_since(EventsSince + 1, S),
+  Deltas = lists:flatmap(
+             fun(#op_set{k = #mem{s = Peer}, val = IsMember}) ->
+                 [{mem, Peer, IsMember}];
+                (#op_set{k = #host{s = Peer}, val = Host}) ->
+                 [{host, Peer, Host}];
+                (#op_set{k = #info{s = Peer}, val = Meta}) ->
+                 [{meta, Peer, Meta}];
+                (#op_set{k = #live{s = Peer}, val = Liveness}) ->
+                 {NRestarts, Self, IsUp} = from_liveness(Liveness),
+                 [{liveness, Peer, NRestarts, Self, IsUp}];
+                (#op_set{}) ->
+                 []
+             end,
+             UpdatedEntries),
+  case Deltas of
+    [] -> ok;
+    _  -> classy_node:notify_mem_deltas(Cluster, Deltas)
+  end,
+  S#s{events_since = C}.
 
 -spec handle_cleanup(pos_integer(), #s{}) -> ok.
-handle_cleanup(ForgetAfter, S) ->
-  Sites = sites_for_cleanup(ForgetAfter, S),
+handle_cleanup(ForgetAfter, S = #s{site = Self}) ->
+  Sites = sites_for_cleanup(Self, ForgetAfter, S),
   ?tp(debug, classy_membership_forget,
       #{ interval => ForgetAfter
        , sites => Sites
@@ -645,18 +754,20 @@ handle_cleanup(ForgetAfter, S) ->
 %% 1. Peer has been kicked from the cluster
 %% 2. It happened at least SecsDown ago
 %% 3. Other active peers have received all data about the peer
--spec sites_for_cleanup(integer(), #s{}) -> [classy:site()].
-sites_for_cleanup(SecsDown, S) ->
+-spec sites_for_cleanup(classy:site(), integer(), #s{}) -> [classy:site()].
+sites_for_cleanup(Self, SecsDown, S) ->
   MinTimeWhenKicked = classy_lib:time_s() - SecsDown,
   Peers = peers(S),
   LongGone = [I || I <- Peers, is_long_gone(MinTimeWhenKicked, I, S)],
   ActiveMembers = Peers -- LongGone,
-  MinAcked = min_acked(ActiveMembers, S),
+  MinAcked = min_acked(ActiveMembers -- [Self], S),
   [I || I <- LongGone, max_toi(I, S) =< MinAcked].
 
 forget_site(Site, #s{cluster = Cluster, site = Local}) when is_binary(Site) ->
   classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, k = #mem{s = Site}}),
   classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, k = #host{s = Site}}),
+  classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, k = #info{s = Site}}),
+  classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, k = #live{s = Site}}),
   classy_table:dirty_delete(?ptab, #pk_acked_in{c = Cluster, l = Local, r = Site}),
   classy_table:dirty_delete(?ptab, #pk_acked_out{c = Cluster, l = Local, r = Site}),
   ok.
@@ -718,20 +829,14 @@ select_nodes(Cluster, Local, Action) ->
   ets:select(?ptab, [MS]).
 
 -doc """
-Find minimal Lamport clock, such that:
-@itemize
-@item All hooks for the events preceding it are executed locally.
-@item All sites from the list have acked it.
-@end itemize
+Find minimal Lamport clock,
+such that all sites from the list have acked it.
 """.
 -spec min_acked([classy:site()], #s{}) -> clock() | undefined.
-min_acked(Sites, S = #s{site = Local}) ->
+min_acked(Sites, S = #s{}) ->
   lists:foldl(
     fun(Peer, Acc) ->
-        case Peer of
-          Local -> hooks_ran(S);
-          _     -> min(get_acked_out(Peer, S), Acc)
-        end
+        min(get_acked_out(Peer, S), Acc)
     end,
     undefined,
     Sites).
@@ -755,7 +860,7 @@ max_toi(Site, #s{cluster = Cluster, site = Local}) ->
                     }
         , []
         , ['$1']
-        } || Key <- [#mem{s = Site}, #host{s = Site}]],
+        } || Key <- [#mem{s = Site}, #host{s = Site}, #info{s = Site}, #live{s = Site}]],
   L = ets:select(?ptab, MS),
   case L of
     [] -> undefined;
@@ -816,15 +921,6 @@ get_acked_out(Site, #s{cluster = C, site = Local}) ->
   case classy_table:lookup(?ptab, #pk_acked_out{c = C, l = Local, r = Site}) of
     [Clock] -> Clock;
     []      -> 0
-  end.
-
--spec hooks_ran(#s{}) -> clock().
-hooks_ran(#s{cluster = Cluster, site = Local}) ->
-  case classy_table:lookup(?ptab, #pk_hooks_ran{c = Cluster, l = Local}) of
-    [Clock] ->
-      Clock;
-    [] ->
-      0
   end.
 
 -spec set_acked_in(classy:site(), clock(), #s{}) -> ok.

@@ -16,15 +16,21 @@ This MFA can contain calls to various @code{classy:on_...} functions.
 -export([ info/0
         , info/1
         , info/2
+        , n_restarts/0
+        , n_restarts/1
         , node_of_site/2
         , join_node/2
         , kick_site/2
         , kick_node/2
         , sites/0
+        , sites/1
         , nodes/1
         , quorum/1
         , fault_tolerance/1
         , at_lower_level/2
+        , the_site/0
+        , the_cluster/0
+        , node_sets/0
         ]).
 
 -export([ on_node_init/2
@@ -32,6 +38,10 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , on_create_site/2
         , on_peer_connection_change/2
         , on_membership_change/2
+        , on_peer_liveness_change/2
+        , on_peer_node_change/2
+        , on_peer_restart/2
+        , on_node_classify/2
         , pre_join/2
         , post_join/2
         , pre_kick/2
@@ -53,7 +63,9 @@ This MFA can contain calls to various @code{classy:on_...} functions.
              , cluster_info/0
 
              , run_level/0
-             , membership_change_hook/0
+
+             , node_set_name/0
+             , node_set/0
              ]).
 
 -include("classy_internal.hrl").
@@ -98,8 +110,6 @@ Unique random persistent identifier of the site.
          , bad_nodes := #{node() => _}
          }.
 
--type membership_change_hook() :: fun((cluster_id(), _Local :: site(), _Remote :: site(), _IsMember :: boolean()) -> _).
-
 -doc """
 Join intent is an arbitrary term passed to @ref{classy:pre_join/2} and @ref{classy:post_join/2} hooks.
 @code{pre_join} may match on intent to prevent join in certain cases,
@@ -136,7 +146,33 @@ Site is kicked by the autoclean logic.
 -doc """
 @xref{Run level}
 """.
--type run_level() :: stopped | single | cluster | quorum.
+-type run_level() :: ?stopped | ?single | ?cluster | ?quorum.
+
+-doc """
+An arbitrary ID of a node set.
+
+Predefined sets are:
+@table @code
+@item all
+names of all previously seen nodes that belong
+(or belonged, if the site is currently down)
+to the cluster members.
+@item up
+
+@item down
+@item connected
+there's an Erlang distribution connection to the node hosting the site.
+@item disconnected
+there's no Erlang distribution connection to the node hosting the site,
+but site is not considered down.
+@end table
+""".
+-type node_set_name() :: all | up | down | connected | disconnected | term().
+
+-doc """
+A set of nodes.
+""".
+-type node_set() :: ordsets:ordset(node()).
 
 %%================================================================================
 %% API functions
@@ -149,14 +185,8 @@ Provide general information about the local node.
 -spec info() -> info().
 info() ->
   %% Note: this is an RPC target.
-  case classy_node:the_cluster() of
-    {ok, MaybeCluster} -> ok;
-    _                  -> MaybeCluster = undefined
-  end,
-  case classy_node:the_site() of
-    {ok, MaybeSite} -> ok;
-    _               -> MaybeSite = undefined
-  end,
+  MaybeCluster = classy_node:maybe_cluster(),
+  MaybeSite = classy_node:maybe_site(),
   PeerInfo0 = classy_node:peer_info(),
   case maps:take(MaybeSite, PeerInfo0) of
     {#{last_update := MyLU}, PeerInfo} ->
@@ -169,6 +199,7 @@ info() ->
          , site        => MaybeSite
          , last_update => MyLU
          , peers       => PeerInfo
+         , n_restarts  => n_restarts()
          },
   classy_hook:fold(?on_enrich_site_info, [], Acc).
 
@@ -214,6 +245,27 @@ info(_Hops, Nodes) ->
   #{ infos     => Infos
    , bad_nodes => BadNodes
    }.
+
+-doc """
+Return the total number of times the site has been restarted.
+""".
+-spec n_restarts() -> non_neg_integer() | undefined.
+n_restarts() ->
+  case classy_liveness:n_restarts() of
+    {ok, N} -> N;
+    _       -> undefined
+  end.
+
+-doc """
+Get cached value of the number of restarts of a remote site.
+
+Note: for the local site,
+please call @ref{classy:n_restarts/0},
+as values returned by this function may be out-of-date.
+""".
+-spec n_restarts(site()) -> {ok, non_neg_integer()} | undefined.
+n_restarts(Site) ->
+  classy_node:n_restarts(Site).
 
 -doc """
 Locate a node that is currently hosting a site.
@@ -281,7 +333,7 @@ Translate node name to a site ID and kick it via @ref{classy:kick_site/2}.
 """.
 -spec kick_node(node(), kick_intent()) -> ok | {error, _}.
 kick_node(Node, Intent) ->
-  case {classy_node:the_cluster(), classy_node:the_site()} of
+  case {the_cluster(), the_site()} of
     {{ok, Cluster}, {ok, Local}} ->
       case classy_membership:site_of_node(Cluster, Local) of
         #{Node := Site} ->
@@ -299,8 +351,8 @@ List IDs of peer sites.
 -spec sites() -> [site()].
 sites() ->
   maybe
-    {ok, Cluster} ?= classy_node:the_cluster(),
-    {ok, Local} ?= classy_node:the_site(),
+    {ok, Cluster} ?= the_cluster(),
+    {ok, Local} ?= the_site(),
     classy_membership:members(Cluster, Local)
   else
     _ ->
@@ -308,28 +360,77 @@ sites() ->
   end.
 
 -doc """
-List all peer nodes.
+Get contents of a site set.
+
+Note: argument is the same as for node sets.
+""".
+-spec sites(node_set_name()) -> [site()].
+sites(SetName) ->
+  case persistent_term:get(?pt_site_sets, #{}) of
+    #{SetName := Set} -> Set;
+    #{} -> []
+  end.
+
+-doc """
+List peer nodes that belong to a node set.
 
 Important to note: this function returns node names of @emph{peer sites}.
 Random connected nodes,
 such as shells or classy sites that are not member of the current cluster,
 are excluded.
 """.
--spec nodes(all | connected | disconnected) -> [node()].
-nodes(Query) ->
-  classy_node:nodes(Query).
+-spec nodes(node_set_name()) -> [node()].
+nodes(Name) ->
+  case node_sets() of
+    #{Name := V} -> V;
+    #{}          -> []
+  end.
 
 -doc """
-Lower the run level to the given value and run the specified function.
+Return a map of all node sets.
+""".
+-spec node_sets() -> #{node_set_name() => node_set()}.
+node_sets() ->
+  persistent_term:get(?pt_node_sets, #{}).
+
+-doc """
+This function can be used to
+lower the run level of the system to the given value
+and run the specified function.
 
 This function can be used to implement migrations that
 require business applications to be stopped.
+
+Note: this function returns immediately after scheduling the action,
+but before the function is executed.
 """.
--spec at_lower_level(classy_node:run_level_atom(), fun(() -> Ret)) ->
-        {ok, Ret} |
-        {error | exit | throw, _Reason, _Stacktrace}.
+-spec at_lower_level(run_level(), fun(() -> any())) -> ok | {error, _}.
 at_lower_level(RunLevel, Fun) ->
-  classy_node:at_lower_level(RunLevel, Fun).
+  classy_rl_changer:at_lower_level(RunLevel, Fun).
+
+-doc """
+Get ID of the local site.
+""".
+-spec the_site() -> {ok, site()} | undefined.
+the_site() ->
+  case classy_node:maybe_site() of
+    Site when is_binary(Site) ->
+      {ok, Site};
+    undefined ->
+      undefined
+  end.
+
+-doc """
+Get ID of the cluster.
+""".
+-spec the_cluster() -> {ok, cluster_id()} | undefined.
+the_cluster() ->
+  case classy_node:maybe_cluster() of
+    Cluster when is_binary(Cluster) ->
+      {ok, Cluster};
+    undefined ->
+      undefined
+  end.
 
 %%--------------------------------------------------------------------------------
 %% Misc.
@@ -372,7 +473,7 @@ fault_tolerance(N) ->
 -doc """
 Register a hook that is executed when the node (not the site) starts.
 
-It is called before @ref{classy_node:the_site/0} and @code{classy_node:the_cluster/0}
+It is called before @ref{classy:the_site/0} and @code{classy:the_cluster/0}
 are initialized,
 and can be used to override the default cluster and site initialization logic.
 """.
@@ -407,18 +508,80 @@ WARNING: status change to @code{false} is not indicative of the remote site bein
 This can happen during a network partition.
 """.
 -spec on_peer_connection_change(Fun, classy_hook:prio()) -> classy_hook:hook()
-   when Fun :: fun((cluster_id(), Local, Remote, node(), _IsConnected :: boolean()) -> _),
-        Local :: site(),
+   when Fun :: fun((Remote, node(), _IsConnected :: boolean()) -> _),
         Remote :: site().
 on_peer_connection_change(Hook, Prio) ->
   classy_hook:insert(?on_peer_connection_status_change, Hook, Prio).
 
 -doc """
 Register a hook that is executed when a site joins or leaves a cluster.
+
+@anchor {node_hook_execution}
+Note: this hook can be executed multiple times if the local node is abruptly stopped while the hooks are running.
+If the remote site re-joins the cluster while the local was down,
+the hook may or may not run.
 """.
--spec on_membership_change(membership_change_hook(), classy_hook:prio()) -> classy_hook:hook().
+-spec on_membership_change(
+        fun((cluster_id(), _Local :: site(), _Remote :: site(), _IsMember :: boolean()) -> _),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
 on_membership_change(Hook, Prio) ->
   classy_hook:insert(?on_membership_change, Hook, Prio).
+
+-doc """
+Register a hook that is executed when a site changes status for up to down or vice versa.
+
+Note: this hook is different from @ref{classy:on_peer_connection_change/2},
+as care is taken to avoid firing it during a network partition.
+
+The decision to consider a peer down comes either from the peer itself when it shuts down gracefully
+or from the quorum of other running peers.
+
+@xref {node_hook_execution}.
+""".
+-spec on_peer_liveness_change(
+        fun((_Remote :: site(), _IsAlive :: boolean()) -> _),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
+on_peer_liveness_change(Hook, Prio) ->
+  classy_hook:insert(?on_peer_liveness_change, Hook, Prio).
+
+-doc """
+Register a hook that is executed when a peer site changes the Erlang node name.
+
+@xref {node_hook_execution}.
+""".
+-spec on_peer_node_change(
+        fun((_Remote :: site(), _OldNode :: node(), _NewNode :: node()) -> _),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
+on_peer_node_change(Hook, Prio) ->
+  classy_hook:insert(?on_peer_node_change, Hook, Prio).
+
+-doc """
+Register a hook that is executed when a peer restarts.
+
+@xref {node_hook_execution}.
+""".
+-spec on_peer_restart(
+        fun((_Remote :: site(), _NRestarts :: pos_integer()) -> _),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
+on_peer_restart(Hook, Prio) ->
+  classy_hook:insert(?on_peer_restart, Hook, Prio).
+
+-doc """
+Register a hook that can place a site's node into an arbitrary number of custom node sets,
+based on @ref{t:classy:info/0}.
+
+@xref{classy:enrich_site_info/2}, @xref{classy:node_sets/0}.
+""".
+-spec on_node_classify(
+        fun((map()) -> [node_set()]),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
+on_node_classify(Hook, Prio) ->
+  classy_hook:insert(?on_node_classify, Hook, Prio).
 
 -doc """
 Register a hook that is executed before the local node joins a different cluster.
@@ -441,7 +604,7 @@ It is guaranteed to be called @emph{at least} once,
 and must be idempotent.
 """.
 -spec post_join(
-        fun((cluster_id(), Local, JoinedTo) -> _),
+        fun((cluster_id(), Local, JoinedTo, join_intent()) -> _),
         classy_hook:prio()
        ) -> classy_hook:hook()
   when Local :: site(),

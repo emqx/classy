@@ -12,9 +12,11 @@ Module responsible for managing the hooks.
         , insert/3
         , unhook/1
         , foreach/2
+        , map/2
         , fold/3
         , all/2
         , first_match/2
+        , timeout/0
         ]).
 
 -export_type([ hookpoint/0
@@ -50,20 +52,33 @@ It can be used to unregister the hook.
 %% API functions
 %%================================================================================
 
+-doc """
+Get the configured hook timeout value (with defaults).
+""".
+timeout() ->
+  application:get_env(classy, hook_timeout, 30_000).
+
 -doc false.
 init() ->
   ets:new(?tab, [named_table, ordered_set, public, {keypos, 1}]),
   %% Default initialization:
   classy:on_node_init(fun classy_builtin_hooks:gen_random_site_id/0, ?min_hook_prio),
   classy:post_kick(fun classy_builtin_hooks:maybe_reinitialize_after_kick/3, ?min_hook_prio),
+  %% Liveness tracking:
+  classy:run_level(fun classy_liveness:on_run_level/2, ?max_hook_prio),
+  classy:on_peer_connection_change(fun classy_liveness:on_peer_connection_change/3, ?max_hook_prio),
   %% Info logging:
   classy:on_create_site(fun classy_builtin_hooks:log_create_site/1, ?max_hook_prio),
   classy:on_create_cluster(fun classy_builtin_hooks:log_create_cluster/2, ?max_hook_prio),
   classy:pre_join(fun classy_builtin_hooks:log_pre_join/4, ?max_hook_prio),
-  classy:post_join(fun classy_builtin_hooks:log_post_join/3, ?min_hook_prio),
+  classy:post_join(fun classy_builtin_hooks:log_post_join/4, ?min_hook_prio),
   classy:on_membership_change(fun classy_builtin_hooks:log_membership_change/4, ?max_hook_prio),
   classy:run_level(fun classy_builtin_hooks:log_run_level/2, ?min_hook_prio),
-  classy:on_peer_connection_change(fun classy_builtin_hooks:log_peer_connection_change/5, ?max_hook_prio),
+  classy:on_peer_connection_change(fun classy_builtin_hooks:log_peer_connection_change/3, ?max_hook_prio),
+  classy:on_peer_liveness_change(fun classy_builtin_hooks:log_peer_liveness_change/2, ?max_hook_prio),
+  classy:on_peer_restart(fun classy_builtin_hooks:log_peer_restart/2, ?max_hook_prio),
+  classy:on_peer_node_change(fun classy_builtin_hooks:log_peer_node_change/3, ?max_hook_prio),
+  classy:pre_autoclean(fun classy_builtin_hooks:log_autoclean/1, ?max_hook_prio),
   %% Discovery strategies:
   classy_discovery_static:hook(),
   classy_discovery_dns:hook(),
@@ -131,6 +146,25 @@ fold(Hookpoint, Args, Acc0) ->
   end.
 
 -doc """
+Apply every hook to the arguments
+and return the list of outputs for each hook.
+
+Failures are ignored (logged).
+""".
+-spec map(hookpoint(), list()) -> list().
+map(Hookpoint, Args) ->
+  lists:filtermap(
+    fun(Hook) ->
+        case safe_apply(Hookpoint, Hook, Args) of
+          {ok, Result} ->
+            {true, Result};
+          _ ->
+            false
+        end
+    end,
+    hooks(Hookpoint)).
+
+-doc """
 Ensure that all functions hooked into @code{Hookpoint} return @code{ok}.
 
 If any function returns other value or throws an exception,
@@ -186,14 +220,14 @@ hooks(Hookpoint) ->
   ets:select(?tab, [MS]).
 
 -spec safe_apply(hookpoint(), fun(), list()) -> {ok, _Val} | error.
-safe_apply(HookPoint, Fun, A) ->
-  try
-    {ok, apply(Fun, A)}
-  catch
-    EC:Err:Stack ->
-      ?tp(warning, classy_hook_failure,
-          #{ EC        => Err
-           , stack     => Stack
+safe_apply(HookPoint, Fun, Args) ->
+  Timeout = timeout(),
+  case classy_lib:safe_apply_with_timeout({Fun, Args}, Timeout) of
+    {ok, _} = Ok ->
+      Ok;
+    Err ->
+      ?tp(critical, ?classy_hook_failure,
+          #{ reason    => Err
            , hook      => Fun
            , hookpoint => HookPoint
            }),

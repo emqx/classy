@@ -13,6 +13,7 @@ Misc. utility functions.
         , sites_to_nodes/1
         , safe_apply/1
         , safe_apply/3
+        , safe_apply_with_timeout/2
         , multicast/1
         , multicall/1
         , multicall/2
@@ -20,6 +21,8 @@ Misc. utility functions.
 
 %% internal exports:
 -export([ rpc_timeout/0
+        , to_cluster_sets/0
+        , quorum_sets/0
         , n_sites/0
         , time_s/0
         , adjust_time_s_skew/2
@@ -50,6 +53,8 @@ Misc. utility functions.
 
 -type mfargs() :: {module(), atom(), list()}.
 
+-type callback() :: mfargs() | {function(), list()}.
+
 -type multicall_target() :: classy:site() |
                             {classy:site(), _Token}.
 
@@ -77,9 +82,11 @@ Misc. utility functions.
 -doc """
 @xref{classy_lib:safe_apply/3}
 """.
--spec safe_apply(mfargs()) -> {ok, term()} | wrapped_exception().
+-spec safe_apply(callback()) -> {ok, term()} | wrapped_exception().
 safe_apply({M, F, A}) ->
-  safe_apply(M, F, A).
+  safe_apply(M, F, A);
+safe_apply({Fun, Args}) when is_function(Fun), is_list(Args) ->
+  safe_apply({erlang, apply, [Fun, Args]}).
 
 -doc """
 Apply a function while catching all exceptions and returning them as a term.
@@ -96,6 +103,23 @@ safe_apply(Module, Function, Args) ->
       {error, {exit, Reason}}
   end.
 
+-doc """
+Apply a function in a separate process with a timeout.
+""".
+-spec safe_apply_with_timeout(callback(), timeout()) -> {ok, term()} | wrapped_exception() | {error, timeout}.
+safe_apply_with_timeout(Callback, Timeout) ->
+  {Pid, MRef} = spawn_monitor(
+                  fun() ->
+                      exit(safe_apply(Callback))
+                  end),
+  receive
+    {'DOWN', MRef, process, Pid, Reason} ->
+      Reason
+  after Timeout ->
+      demonitor(MRef, [flush]),
+      exit(Pid, kill),
+      {error, timeout}
+  end.
 
 -doc """
 Call functions on multiple sites similarly to @ref{classy_lib:multicall/2}
@@ -263,6 +287,16 @@ fold_per_cluster(Fun, InitialAcc, #{infos := Infos}) ->
 -doc "Return value @ref{rpc_timeout} environment variable (with default)".
 rpc_timeout() ->
   application:get_env(classy, rpc_timeout, 5_000).
+
+-doc "Return value of @ref{to_cluster_sets} (with default)".
+-spec to_cluster_sets() -> [classy:node_set_name(), ...].
+to_cluster_sets() ->
+  [all | application:get_env(classy, to_cluster_sets, [])].
+
+-doc "Return value of @ref{quorum_sets} (with default)".
+-spec quorum_sets() -> [classy:node_set_name(), ...].
+quorum_sets() ->
+  [connected | application:get_env(classy, quorum_sets, [])].
 
 -doc "Return value of @ref{n_sites} environment variable (with default)".
 n_sites() ->
