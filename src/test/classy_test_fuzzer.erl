@@ -46,7 +46,10 @@
 -include_lib("proper/include/proper.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
+-ifndef(SNK_COLLECTOR).
 -define(SNK_COLLECTOR, true).
+-endif.
+
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
 -dialyzer({nowarn_function,
