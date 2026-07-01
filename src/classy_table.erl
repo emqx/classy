@@ -426,7 +426,7 @@ clear(Tab) ->
 """.
 -spec dump_wal(tab()) -> {ok, list()} | {error, _}.
 dump_wal(Tab) when is_atom(Tab) ->
-  dump_wal(application:get_env(classy, table_dir, "."), Tab).
+  dump_wal(classy_lib:table_dir(), Tab).
 
 -doc """
 Dump WAL for debugging.
@@ -483,7 +483,7 @@ init([TabName, Options]) ->
         , wal_version = ?default_wal_version
         , ets = ets:new(TabName, [named_table, protected, {keypos, #classy_kv.k} | ETSOpts])
         , dirty = #{}
-        , dir = application:get_env(classy, table_dir, ".")
+        , dir = classy_lib:table_dir()
         , badness_threshold = BadnessThreshold
         , on_update = maps:get(on_update, Options, undefined)
         },
