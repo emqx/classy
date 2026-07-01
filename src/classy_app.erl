@@ -30,6 +30,7 @@
 %%================================================================================
 
 start(_StartType, _StartArgs) ->
+  ok = filelib:ensure_path(classy_lib:table_dir()),
   classy_sup:start_link().
 
 stop(_) ->

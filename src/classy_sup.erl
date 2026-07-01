@@ -123,7 +123,7 @@ init(#top{}) ->
                },
   Node = #{ id       => node
           , start    => {classy_node, start_link, []}
-          , shutdown => 10_000
+          , shutdown => infinity
           , restart  => permanent
           , type     => worker
           },

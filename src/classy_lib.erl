@@ -23,6 +23,7 @@ Misc. utility functions.
 -export([ rpc_timeout/0
         , to_cluster_sets/0
         , quorum_sets/0
+        , table_dir/0
         , n_sites/0
         , time_s/0
         , adjust_time_s_skew/2
@@ -297,6 +298,10 @@ to_cluster_sets() ->
 -spec quorum_sets() -> [classy:node_set_name(), ...].
 quorum_sets() ->
   [connected | application:get_env(classy, quorum_sets, [])].
+
+-doc "Return value of @ref{table_dir} (with default)".
+table_dir() ->
+  application:get_env(classy, table_dir, ".").
 
 -doc "Return value of @ref{n_sites} environment variable (with default)".
 n_sites() ->
