@@ -14,6 +14,7 @@
         , ensure_membership/2
         , ensure_vote_coordinator/1
         , ensure_vote_participant/1
+        , prep_stop/0
         ]).
 
 %% behavior callbacks:
@@ -76,6 +77,10 @@ ensure_vote_coordinator(Args) ->
 -spec ensure_vote_participant(_) -> {ok, pid()} | {error, _}.
 ensure_vote_participant(Args) ->
   simple_one_for_one_ensure_child(?VOTE_PARTICIPANT_SUP, Args).
+
+-spec prep_stop() -> ok.
+prep_stop() ->
+  gen_server:stop(?SUP, shutdown, infinity).
 
 %%================================================================================
 %% Internal exports
