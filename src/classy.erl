@@ -31,6 +31,7 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , the_site/0
         , the_cluster/0
         , node_sets/0
+        , prep_stop/0
         ]).
 
 -export([ on_node_init/2
@@ -277,6 +278,18 @@ If @code{OnlyConnected} flag is set,
 -spec node_of_site(site(), boolean()) -> {ok, node()} | undefined.
 node_of_site(Site, OnlyConnected) ->
   classy_node:node_of_site(Site, OnlyConnected).
+
+-doc """
+This function can be called before the Erlang node shuts down.
+
+It gracefully lowers the run level to stopped,
+without blocking the application controller.
+
+This is helpful if changing the run level involves stopping or starting OTP applications.
+""".
+-spec prep_stop() -> ok.
+prep_stop() ->
+  classy_sup:prep_stop().
 
 %%--------------------------------------------------------------------------------
 %% Cluster management
@@ -668,6 +681,11 @@ pre_autocluster(Hook, Prio) ->
 
 -doc """
 Register a hook that is executed on change of the run level of the local site.
+
+WARNING: if the callback interacts with the OTP application controller
+(e.g. it starts or stops an OTP application),
+then stopping classy application using @code{application:stop(classy)} will lead to a deadlock.
+Use @code{classy:prep_stop()} function to safely lower the run level and shut down classy.
 """.
 -spec run_level(
         fun((run_level(), run_level()) -> _),

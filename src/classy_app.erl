@@ -34,7 +34,7 @@ start(_StartType, _StartArgs) ->
   classy_sup:start_link().
 
 stop(_) ->
-  classy_sup:stop(infinity).
+  ok.
 
 %%================================================================================
 %% Internal exports
