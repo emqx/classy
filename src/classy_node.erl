@@ -54,7 +54,7 @@ Management of the local site and node.
 -record(call_kick, {site :: classy:site(), intent :: term()}).
 -record(cast_mem_deltas,
         { cluster :: classy:cluster_id()
-        , data :: [classy_membership:event()]
+        , data :: #{classy:site() => classy_membership:update()}
         }).
 
 %%================================================================================
@@ -338,12 +338,12 @@ on_ptab_update(_, Op) ->
   end.
 
 -doc false.
--spec notify_mem_deltas(classy:cluster_id(), [classy_membership:event()]) -> ok.
+-spec notify_mem_deltas(classy:cluster_id(), #{classy:site() => classy_membership:update()}) -> ok.
 notify_mem_deltas(Cluster, Deltas) ->
   gen_server:cast(
     ?SERVER,
     #cast_mem_deltas{ cluster = Cluster
-                    , data = Deltas
+                    , data    = Deltas
                     }).
 
 %%================================================================================
@@ -589,12 +589,11 @@ the_site() ->
       undefined
   end.
 
--spec apply_deltas_with_effects([classy_membership:event()], #s{}) -> {ok, #s{}} | {error, _}.
+-spec apply_deltas_with_effects(#{classy:site() => classy_membership:update()}, #s{}) -> {ok, #s{}} | {error, _}.
 apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
-  {Updated, Kicked} = merge_deltas(Deltas),
   {ok, MyNR} = classy_liveness:n_restarts(),
-  case Kicked of
-    #{Local := _} ->
+  case Deltas of
+    #{Local := #{mem := false}} ->
       %% We got kicked remotely. In this case we don't bother
       %% importing the data and running the hooks, and go straight to
       %% `on_leave':
@@ -606,17 +605,11 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
         {ok, S}          -> {ok, S};
         {error, _} = Err -> Err
       end;
-   #{} ->
+    #{} ->
       maybe
-        {ok, S} ?= import_deltas(Updated, Kicked, S0),
-        case Updated of
-          #{Local := #site_info{isup = false, nrestarts = NR}} when NR >= MyNR ->
-            %% Handle network partition; peers decided that we're down:
-            ?tp(warning, classy_restarted_remotely,
-                #{ cluster   => Cluster
-                 , local     => Local
-                 , nrestarts => MyNR
-                 }),
+        {ok, S} ?= import_deltas(Deltas, S0),
+        case Deltas of
+          #{Local := #{mem := true, liveness := {NR, false, false}}} when NR >= MyNR ->
             on_remote_restart(S);
           _ ->
             %% Nothing happened:
@@ -630,26 +623,36 @@ on_remote_restart(S) ->
   classy_rl_changer:set_sync(?stopped, 120_000),
   {ok, adjust_run_level(S)}.
 
--spec import_deltas( #{classy:site() => #site_info{}}, #{classy:site() => true}, #s{}) ->
+-spec import_deltas(#{classy:site() => classy_membership:update()}, #s{}) ->
         {ok, #s{}} | {error, _}.
-import_deltas(Updated, Kicked, S0 = #s{cluster = Cluster, site = Local}) ->
-  %% 1. Process kicked nodes:
+import_deltas(Updated, S0 = #s{cluster = Cluster, site = Local}) ->
   maps:foreach(
-    fun(Peer, _) ->
+    fun(Peer, #{mem := false}) ->
         classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, false]),
-        classy_table:dirty_delete(?site_info, Peer)
-    end,
-    Kicked),
-  %% 2. Process updated nodes:
-  maps:foreach(
-    fun(Peer, NewInfo) ->
-        case Kicked of
-          #{Peer := _} ->
-            %% Ignore kicked sites:
-            ok;
-          #{} ->
-            update_site_info(Peer, NewInfo, S0)
-        end
+        classy_table:dirty_delete(?site_info, Peer);
+       (Peer, #{mem := true} = Update) ->
+        case classy_table:lookup(?site_info, Peer) of
+          [Info0] -> ok;
+          []      -> Info0 = default_site_info()
+        end,
+        Info1 = case Update of
+                  #{host := Host} -> Info0#site_info{node = Host};
+                  #{}             -> Info0
+                end,
+        Info2 = case Update of
+                  #{meta := Meta} -> Info1#site_info{meta = Meta};
+                  #{}             -> Info1
+                end,
+        Info = case Update of
+                 #{liveness := Liveness} ->
+                   {NRestarts, _BySelf, IsUp} = Liveness,
+                   Info2#site_info{ nrestarts = NRestarts
+                                  , isup = IsUp
+                                  };
+                 #{} ->
+                   Info2
+               end,
+        update_site_info(Peer, Info, S0)
     end,
     Updated),
   maybe
@@ -721,56 +724,6 @@ update_site_info(Peer, New0 = #site_info{isup = IsUp, nrestarts = NR}, #s{cluste
      true ->
       []
   end.
-
--spec merge_deltas([classy_membership:event()]) -> {Updated, Kicked} when
-    Updated :: #{classy:site() => #site_info{}},
-    Kicked :: #{classy:site() => true}.
-merge_deltas(Data) ->
-  merge_deltas(Data, #{}, #{}).
-
--spec merge_deltas([classy_membership:event()], Updated, Kicked) -> {Updated, Kicked} when
-    Updated :: #{classy:site() => #site_info{}},
-    Kicked :: #{classy:site() => true}.
-merge_deltas([], Updated, Kicked) ->
-  {Updated, Kicked};
-merge_deltas([Up | Rest], Updated0, Kicked0) ->
-  Get = fun(Peer) ->
-            case Updated0 of
-              #{Peer := Val} ->
-                Val;
-              #{} ->
-                case classy_table:lookup(?site_info, Peer) of
-                  [Val] -> Val;
-                  [] -> default_site_info()
-                end
-            end
-        end,
-  case Up of
-    {mem, Peer, true} ->
-      Updated = Updated0#{Peer => Get(Peer)},
-      Kicked = maps:remove(Peer, Kicked0);
-    {mem, Peer, false} ->
-      Updated = Updated0,
-      Kicked = Kicked0#{Peer => true};
-    {host, Peer, Host} ->
-      Info0 = Get(Peer),
-      Info = Info0#site_info{node = Host},
-      Updated = Updated0#{Peer => Info},
-      Kicked = Kicked0;
-    {meta, Peer, Meta} ->
-      Info0 = Get(Peer),
-      Info = Info0#site_info{meta = Meta},
-      Updated = Updated0#{Peer => Info},
-      Kicked = Kicked0;
-    {liveness, Peer, NRestarts, _Self, IsUp} ->
-      Info0 = Get(Peer),
-      Info = Info0#site_info{ isup = IsUp
-                            , nrestarts = NRestarts
-                            },
-      Updated = Updated0#{Peer => Info},
-      Kicked = Kicked0
-  end,
-  merge_deltas(Rest, Updated, Kicked).
 
 -spec classify() -> ok.
 classify() ->
