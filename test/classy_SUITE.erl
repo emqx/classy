@@ -657,8 +657,8 @@ t_091_node_of_site(_) ->
            {ok, maps:get(I, NodeMap)},
            ?ON(I, classy:node_of_site(I, OnlyLive)))
         || I <- Sites, OnlyLive <- [true, false]],
-       [?assertEqual(
-           undefined,
+       [?assertMatch(
+           {error, {_, J}},
            ?ON(I, classy:node_of_site(J, OnlyLive)))
         || I <- Sites, J <- Sites, I =/= J, OnlyLive <- [true, false]],
        %% Form cluster:
@@ -674,7 +674,7 @@ t_091_node_of_site(_) ->
        ?block_until(#{?snk_kind := classy_peer_disconnected, site := S2}),
        ct:sleep(100),
        ?assertEqual(
-          undefined,
+          {error, {disconnected, S2}},
           ?ON(S1, classy:node_of_site(S2, true))),
        ?assertEqual(
           {ok, N2},
