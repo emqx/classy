@@ -275,9 +275,16 @@ If @code{OnlyConnected} flag is set,
 @code{undefined} is returned when the site is locally unreachable
 (even if its node is otherwise known).
 """.
--spec node_of_site(site(), boolean()) -> {ok, node()} | undefined.
+-spec node_of_site(site(), boolean()) -> {ok, node()} | {error, {unknown_node | disconnected, site()}}.
 node_of_site(Site, OnlyConnected) ->
-  classy_node:node_of_site(Site, OnlyConnected).
+  case classy_node:node_of_site(Site, OnlyConnected) of
+    {ok, _} = Ok ->
+      Ok;
+    undefined when OnlyConnected ->
+      {error, {disconnected, Site}};
+    undefined ->
+      {error, {unknown_node, Site}}
+  end.
 
 -doc """
 This function can be called before the Erlang node shuts down.

@@ -39,7 +39,7 @@ Business code should not use it directly.
 -export([reset_acked_out/4]).
 -endif.
 
--export_type([start_args/0, op/0, ord/0, clock/0, sync_data/0, pk_last/0, pv_last/0, event/0]).
+-export_type([start_args/0, op/0, ord/0, clock/0, sync_data/0, pk_last/0, pv_last/0, update/0]).
 
 -include("classy_internal.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
@@ -74,6 +74,15 @@ Business code should not use it directly.
 -record(info, {s :: classy:site() | atom()}).
 -record(live, {s :: classy:site() | atom()}).
 -type key() :: #mem{} | #host{} | #info{} | #live{}.
+
+-type update() ::
+        #{ mem      := false
+         } |
+        #{ mem      := true
+         , host     => node()
+         , meta     => map()
+         , liveness => {_NRestarts :: non_neg_integer(), _SetBySelf :: boolean(), _IsLive :: boolean()}
+         }.
 
 -doc "Arbitrary term used to break ties between commands with the same logical timestamp.".
 -type magic() :: term().
@@ -152,11 +161,6 @@ Business code should not use it directly.
         , toi   % Local logical time of importing the op
         }).
 -type pv_last() :: #pv_last{op :: op(), toi :: clock()}.
-
--type event() :: {mem, classy:site(), boolean()} |
-                 {host, classy:site(), node()} |
-                 {meta, classy:site(), map()} |
-                 {liveness, classy:site(), _NRestarts :: non_neg_integer(), _Self :: boolean(), _IsUp :: boolean()}.
 
 -type liveness() :: non_neg_integer().
 
@@ -715,28 +719,55 @@ merge(LTime, Op, S) ->
       true
   end.
 
-notify(S = #s{clock = C, cluster = Cluster, events_since = EventsSince}) ->
+notify(S = #s{cluster = Cluster, site = Local, clock = C, events_since = EventsSince}) ->
   %% Find out what changed:
   UpdatedEntries = memtab_since(EventsSince + 1, S),
-  Deltas = lists:flatmap(
-             fun(#op_set{k = #mem{s = Peer}, val = IsMember}) ->
-                 [{mem, Peer, IsMember}];
-                (#op_set{k = #host{s = Peer}, val = Host}) ->
-                 [{host, Peer, Host}];
-                (#op_set{k = #info{s = Peer}, val = Meta}) ->
-                 [{meta, Peer, Meta}];
-                (#op_set{k = #live{s = Peer}, val = Liveness}) ->
-                 {NRestarts, Self, IsUp} = from_liveness(Liveness),
-                 [{liveness, Peer, NRestarts, Self, IsUp}];
-                (#op_set{}) ->
-                 []
-             end,
-             UpdatedEntries),
-  case Deltas of
-    [] -> ok;
-    _  -> classy_node:notify_mem_deltas(Cluster, Deltas)
+  UpdatedSites = lists:foldl(
+                   fun(#op_set{k = #mem{s = Peer}}, Acc) ->
+                       Acc#{Peer => true};
+                      (#op_set{k = #host{s = Peer}}, Acc) ->
+                       Acc#{Peer => true};
+                      (#op_set{k = #info{s = Peer}}, Acc) ->
+                       Acc#{Peer => true};
+                      (#op_set{k = #live{s = Peer}}, Acc) ->
+                       Acc#{Peer => true};
+                      (#op_set{}, Acc) ->
+                       Acc
+                   end,
+                   #{},
+                   UpdatedEntries),
+  Deltas = #{Peer => peer_to_update(Cluster, Local, Peer) || Peer := _ <- UpdatedSites},
+  case maps:size(Deltas) of
+    0 -> ok;
+    _ -> classy_node:notify_mem_deltas(Cluster, Deltas)
   end,
   S#s{events_since = C}.
+
+-spec peer_to_update(classy:cluster_id(), classy:site(), classy:site()) -> update().
+peer_to_update(Cluster, Local, Site) ->
+  Get = fun(Key) ->
+            [Val || #pv_last{op = #op_set{val = Val}} <- classy_table:lookup(
+                                                           ?ptab,
+                                                           #pk_last{c = Cluster, l = Local, k = Key})]
+        end,
+  case Get(#mem{s = Site}) of
+    [true] ->
+      U0 = #{mem => true},
+      U1 = case Get(#host{s = Site}) of
+             [Host] -> U0#{host => Host};
+             []     -> U0
+           end,
+      U = case Get(#info{s = Site}) of
+            [Meta] -> U1#{meta => Meta};
+            []     -> U1
+          end,
+      case Get(#live{s = Site}) of
+        [Live] -> U#{liveness => from_liveness(Live)};
+        []     -> U
+      end;
+    _ ->
+      #{mem => false}
+  end.
 
 -spec handle_cleanup(pos_integer(), #s{}) -> ok.
 handle_cleanup(ForgetAfter, S = #s{site = Self}) ->
