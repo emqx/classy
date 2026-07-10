@@ -107,7 +107,11 @@ safe_apply(Module, Function, Args) ->
 -doc """
 Apply a function in a separate process with a timeout.
 """.
--spec safe_apply_with_timeout(callback(), timeout()) -> {ok, term()} | wrapped_exception() | {error, timeout}.
+-spec safe_apply_with_timeout(callback(), timeout()) ->
+        {ok, term()} |
+        wrapped_exception() |
+        {error, {timeout, Info}} when
+    Info :: list() | undefined.
 safe_apply_with_timeout(Callback, Timeout) ->
   {Pid, MRef} = spawn_monitor(
                   fun() ->
@@ -117,9 +121,10 @@ safe_apply_with_timeout(Callback, Timeout) ->
     {'DOWN', MRef, process, Pid, Reason} ->
       Reason
   after Timeout ->
+      Info = process_info(Pid, [current_stacktrace]),
       demonitor(MRef, [flush]),
       exit(Pid, kill),
-      {error, timeout}
+      {error, {timeout, Info}}
   end.
 
 -doc """
