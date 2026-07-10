@@ -20,6 +20,7 @@ Management of the local site and node.
         , peer_info/0
         , node_of_site/2
         , n_restarts/1
+        , prep_stop/1
         ]).
 
 %% behavior callbacks:
@@ -290,7 +291,7 @@ terminate(Reason, _S) ->
          }),
   classy_table:flush(?globals),
   classy_table:flush(?site_info),
-  sync_set_run_level(?stopped),
+  prep_stop(shutdown, infinity),
   persistent_term:erase(?pt_node_sets),
   persistent_term:erase(?pt_site_sets),
   persistent_term:erase(?pt_site),
@@ -345,6 +346,10 @@ notify_mem_deltas(Cluster, Deltas) ->
     #cast_mem_deltas{ cluster = Cluster
                     , data    = Deltas
                     }).
+
+-doc false.
+prep_stop(Reason) ->
+  classy_hook:foreach(?on_prep_stop, [Reason]).
 
 %%================================================================================
 %% Internal functions
@@ -460,7 +465,7 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
   end.
 
 on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
-  sync_set_run_level(?stopped),
+  prep_stop(leave, infinity),
   %% Sync with the business apps:
   classy_table:delete(?globals, ?the_cluster),
   classy_hook:foreach(?on_post_kick, [Cluster, Local, Intent]),
@@ -570,8 +575,9 @@ start_old_clusters(Site) ->
     end,
     classy_membership:known_clusters(Site)).
 
-sync_set_run_level(Level) ->
-  classy_rl_changer:set_sync(Level, infinity).
+prep_stop(Reason, Timeout) ->
+  prep_stop(Reason),
+  classy_rl_changer:set_sync(?stopped, Timeout).
 
 the_cluster() ->
   case classy_table:lookup(?globals, ?the_cluster) of
@@ -620,7 +626,7 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
 
 -spec on_remote_restart(#s{}) -> {ok, #s{}}.
 on_remote_restart(S) ->
-  classy_rl_changer:set_sync(?stopped, 120_000),
+  prep_stop(remote_restart, 120_000),
   {ok, adjust_run_level(S)}.
 
 -spec import_deltas(#{classy:site() => classy_membership:update()}, #s{}) ->

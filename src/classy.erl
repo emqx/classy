@@ -32,9 +32,11 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , the_cluster/0
         , node_sets/0
         , prep_stop/0
+        , prep_stop/1
         ]).
 
 -export([ on_node_init/2
+        , on_prep_stop/2
         , on_create_cluster/2
         , on_create_site/2
         , on_peer_connection_change/2
@@ -287,6 +289,13 @@ node_of_site(Site, OnlyConnected) ->
   end.
 
 -doc """
+Equivalent to @code{prep_stop(shutdown)}.
+""".
+-spec prep_stop() -> ok.
+prep_stop() ->
+  prep_stop(shutdown).
+
+-doc """
 This function can be called before the Erlang node shuts down.
 
 It gracefully lowers the run level to stopped,
@@ -294,8 +303,9 @@ without blocking the application controller.
 
 This is helpful if changing the run level involves stopping or starting OTP applications.
 """.
--spec prep_stop() -> ok.
-prep_stop() ->
+-spec prep_stop(term()) -> ok.
+prep_stop(Reason) ->
+  classy_node:prep_stop(Reason),
   classy_sup:prep_stop().
 
 %%--------------------------------------------------------------------------------
@@ -500,6 +510,16 @@ and can be used to override the default cluster and site initialization logic.
 -spec on_node_init(fun(() -> _), classy_hook:prio()) -> classy_hook:hook().
 on_node_init(Hook, Prio) ->
   classy_hook:insert(?on_node_init, Hook, Prio).
+
+-doc """
+Register a hook that is executed before shutting down business applications.
+
+It is called before classy application starts the shutdown procedure,
+as well when the site leaves a cluster or heals from a network partition.
+""".
+-spec on_prep_stop(fun((_Reason) -> _), classy_hook:prio()) -> classy_hook:hook().
+on_prep_stop(Hook, Prio) ->
+  classy_hook:insert(?on_prep_stop, Hook, Prio).
 
 -doc """
 This callback is executed once per cluster by the site that originally creates the cluster.
