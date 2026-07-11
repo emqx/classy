@@ -88,6 +88,7 @@ They must not contain any sort of heavy or long-running tasks.
         , flush/1
         , force_compaction/1
         , lookup/2
+        , select/2
           %% For debugging:
         , dump_wal/1
         , dump_wal/2
@@ -406,6 +407,24 @@ lookup(Tab, Key) ->
       %% Avoid reads while table is not fully restored:
       optvar:read(?optvar(Tab)),
       [V || #classy_kv{v = V} <- ets:lookup(Tab, Key)]
+  end.
+
+-doc """
+Run @code{ets:select} on the table after making sure it's open and restored.
+
+WARNING: this function can block the caller until the table is fully restored.
+""".
+-spec select(tab(), ets:match_spec()) -> list().
+select(Tab, MS) ->
+  case ets:whereis(Tab) of
+    undefined ->
+      %% Protection against typos and deadlocks. If this happens, the
+      %% user must fix application startup order.
+      error({badtable, Tab});
+    _ ->
+      %% Avoid reads while table is not fully restored:
+      optvar:read(?optvar(Tab)),
+      ets:select(Tab, MS)
   end.
 
 -doc """

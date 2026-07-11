@@ -258,7 +258,7 @@ members(Cluster, Local) ->
        , []
        , ['$1']
        },
-  ets:select(?ptab, [MS]).
+  classy_table:select(?ptab, [MS]).
 
 -doc "List local sites and clusters.".
 -spec list_local_sites(running | all) -> [{classy:cluster_id(), classy:site()}].
@@ -273,7 +273,7 @@ list_local_sites(all) ->
        , []
        , [{{'$1', '$2'}}]
        },
-  ets:select(?ptab, [MS]).
+  classy_table:select(?ptab, [MS]).
 
 -doc """
 Return mapping of nodes to sites.
@@ -833,7 +833,7 @@ memtab_since(Since, #s{cluster = Cluster, site = Local}) ->
        , [{'>=', '$2', Since}]
        , ['$1']
        },
-  ets:select(?ptab, [MS]).
+  classy_table:select(?ptab, [MS]).
 
 -spec peers(#s{}) -> [classy:site()].
 peers(#s{cluster = Cluster, site = Local}) ->
@@ -843,7 +843,7 @@ peers(#s{cluster = Cluster, site = Local}) ->
        , []
        , ['$1']
        },
-  ets:select(?ptab, [MS]).
+  classy_table:select(?ptab, [MS]).
 
 -spec nodes_of_cluster(#s{}) -> #{classy:site() => node()}.
 nodes_of_cluster(#s{cluster = Cluster, site = Local}) ->
@@ -857,7 +857,7 @@ select_nodes(Cluster, Local, Action) ->
        , []
        , [Action]
        },
-  ets:select(?ptab, [MS]).
+  classy_table:select(?ptab, [MS]).
 
 -doc """
 Find minimal Lamport clock,
@@ -892,7 +892,7 @@ max_toi(Site, #s{cluster = Cluster, site = Local}) ->
         , []
         , ['$1']
         } || Key <- [#mem{s = Site}, #host{s = Site}, #info{s = Site}, #live{s = Site}]],
-  L = ets:select(?ptab, MS),
+  L = classy_table:select(?ptab, MS),
   case L of
     [] -> undefined;
     _  -> lists:max(L)
