@@ -396,6 +396,7 @@ update_runtime(S) ->
 handle_kick(Cluster, Local, Target, Intent) ->
   case classy_hook:all(?on_pre_kick, [Cluster, Target, Intent]) of
     ok ->
+      classy_hook:foreach(?on_kick_decided, [Cluster, Target, Intent]),
       Ret = classy_membership:set_member(Cluster, Local, Target, false),
       classy_membership:flush(Cluster, Local),
       Ret;
