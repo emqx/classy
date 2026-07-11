@@ -18,6 +18,7 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , info/2
         , n_restarts/0
         , n_restarts/1
+        , node_to_site/0
         , node_of_site/2
         , join_node/2
         , kick_site/2
@@ -48,7 +49,8 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , pre_join/2
         , post_join/2
         , pre_kick/2
-        , post_kick/2
+        , on_kick_decided/2
+        , on_leave/2
         , pre_autoclean/2
         , pre_autocluster/2
         , run_level/2
@@ -127,9 +129,9 @@ When join is triggered by autocluster.
 -type join_intent() :: term().
 
 -doc """
-Kick intent is an arbitrary term passed to @ref{classy:pre_kick/2} and @ref{classy:post_kick/2} hooks.
-@code{pre_kick} may match on intent to prevent node from leaving the cluster in certain cases,
-while to @code{post_kick} this value is merely informational.
+Kick intent is an arbitrary term passed to @link{classy:pre_kick/2}, @link{classy:on_kick_decided/2} and @link{classy:on_leave/2} hooks.
+@code{pre_kick} may use intent to make a decision leaving the cluster in certain cases,
+while to @code{on_leave} this value is merely informational.
 
 Classy itself uses the following intents:
 @itemize
@@ -271,6 +273,20 @@ n_restarts(Site) ->
   classy_node:n_restarts(Site).
 
 -doc """
+Return a mapping from known node names to site IDs.
+""".
+-spec node_to_site() -> {ok, #{node() => site()}} | {error, not_in_cluster}.
+node_to_site() ->
+  maybe
+    {ok, _TheSite} ?= the_site(),
+    {ok, _TheCluster} ?= the_cluster(),
+    {ok, classy_node:node_to_site()}
+  else
+    undefined ->
+      {error, not_in_cluster}
+  end.
+
+-doc """
 Locate a node that is currently hosting a site.
 
 If @code{OnlyConnected} flag is set,
@@ -346,13 +362,13 @@ with @code{Intent} equal to the value of the argument:
 @item @ref{classy:pre_kick/2}.
 It can decide that removing a site is unsafe and abort the command.
 
-@item @ref{classy:post_kick/2}.
+@item @ref{classy:on_leave/2}.
 This hook is executed after the target is successfully kicked.
 @end enumerate
 
+NOTE: the intent is not propagated across different sites.
 If the target site is not the same as the local site,
-then it also runs @ref{classy:post_kick/2} with pre-defined intent @code{kicked}.
-
+then the target runs @ref{classy:on_leave/2} with pre-defined intent @code{kicked}.
 """.
 -spec kick_site(site(), kick_intent()) -> ok | {error, _}.
 kick_site(Site, Intent) ->
@@ -659,25 +675,49 @@ This hook runs on the node that initiates the kick.
 WARNING: this hook cannot have side effects.
 """.
 -spec pre_kick(
-        fun((cluster_id(), Remote, kick_intent()) -> ok | {error, _}),
+        fun((cluster_id(), Target, kick_intent()) -> ok | {error, _}),
         classy_hook:prio()
        ) -> classy_hook:hook()
-  when Remote :: site().
+  when Target :: site().
 pre_kick(Hook, Prio) ->
   classy_hook:insert(?on_pre_kick, Hook, Prio).
+
+-doc """
+Register a hook that is executed after @ref{classy:pre_kick/2} hooks allow the kick to proceed,
+but before the membership change is applied and before the site left the cluster.
+
+This hook is executed only on the node that initiates the kick procedure.
+It can be used to trigger some side effects while the site is still part of the cluster.
+
+WARNING: theoretically, kick procedure can be aborted after this hook fires,
+or in the middle of its execution.
+In this case kick procedure @emph{won't} be retried.
+Then side effects of this hook will be observed,
+but the site will stay in the cluster.
+As such, it's not recommended to perform any destructive actions here.
+
+Normally, such actions should be performed in @link{classy:on_membership_change/2}.
+""".
+-spec on_kick_decided(
+        fun((cluster_id(), Target, kick_intent()) -> _),
+        classy_hook:prio()
+       ) -> classy_hook:hook()
+  when Target :: site().
+on_kick_decided(Hook, Prio) ->
+  classy_hook:insert(?on_kick_decided, Hook, Prio).
 
 -doc """
 Register a hook that is executed after the local site leaves a cluster.
 This hook can perform destructive actions associated with cleanup.
 """.
--spec post_kick(
+-spec on_leave(
         fun((OldCluster, Local, kick_intent()) -> _),
         classy_hook:prio()
        ) -> classy_hook:hook()
   when OldCluster :: cluster_id(),
        Local :: site().
-post_kick(Hook, Prio) ->
-  classy_hook:insert(?on_post_kick, Hook, Prio).
+on_leave(Hook, Prio) ->
+  classy_hook:insert(?on_leave, Hook, Prio).
 
 -doc """
 Register a hook that runs before autoclean finalizes the decision to kick a down site.

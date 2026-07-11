@@ -33,7 +33,8 @@
 -define(on_pre_join, on_pre_join).
 -define(on_post_join, on_post_join).
 -define(on_pre_kick, on_pre_kick).
--define(on_post_kick, on_post_kick).
+-define(on_kick_decided, on_kick_decided).
+-define(on_leave, on_leave).
 -define(on_change_run_level, on_change_run_level).
 -define(on_pre_autoclean, on_pre_autoclean).
 -define(on_pre_autocluster, on_pre_autocluster).

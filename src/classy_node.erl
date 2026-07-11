@@ -19,6 +19,7 @@ Management of the local site and node.
         , nodes/1
         , peer_info/0
         , node_of_site/2
+        , node_to_site/0
         , n_restarts/1
         , prep_stop/1
         ]).
@@ -195,6 +196,18 @@ node_of_site(Site, OnlyConnected) ->
     _ ->
       undefined
   end.
+
+-doc false.
+-spec node_to_site() -> #{node() => classy:site()}.
+node_to_site() ->
+  MS = { #classy_kv{ k = '$2'
+                   , v = #site_info{node = '$1', _ = '_'}
+                   , _ = '_'
+                   }
+       , [{'=/=', '$1', undefined}]
+       , [{{'$1', '$2'}}]
+       },
+  maps:from_list(classy_table:select(?site_info, [MS])).
 
 -doc false.
 -spec n_restarts(classy:site()) -> {ok, non_neg_integer()} | undefined.
@@ -383,6 +396,7 @@ update_runtime(S) ->
 handle_kick(Cluster, Local, Target, Intent) ->
   case classy_hook:all(?on_pre_kick, [Cluster, Target, Intent]) of
     ok ->
+      classy_hook:foreach(?on_kick_decided, [Cluster, Target, Intent]),
       Ret = classy_membership:set_member(Cluster, Local, Target, false),
       classy_membership:flush(Cluster, Local),
       Ret;
@@ -468,7 +482,7 @@ on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
   prep_stop(leave, infinity),
   %% Sync with the business apps:
   classy_table:delete(?globals, ?the_cluster),
-  classy_hook:foreach(?on_post_kick, [Cluster, Local, Intent]),
+  classy_hook:foreach(?on_leave, [Cluster, Local, Intent]),
   classy_table:clear(?site_info),
   case Intent of
     join ->
