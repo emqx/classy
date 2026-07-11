@@ -482,7 +482,7 @@ on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
   prep_stop(leave, infinity),
   %% Sync with the business apps:
   classy_table:delete(?globals, ?the_cluster),
-  classy_hook:foreach(?on_post_kick, [Cluster, Local, Intent]),
+  classy_hook:foreach(?on_leave, [Cluster, Local, Intent]),
   classy_table:clear(?site_info),
   case Intent of
     join ->

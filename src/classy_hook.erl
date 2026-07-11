@@ -63,7 +63,7 @@ init() ->
   ets:new(?tab, [named_table, ordered_set, public, {keypos, 1}]),
   %% Default initialization:
   classy:on_node_init(fun classy_builtin_hooks:gen_random_site_id/0, ?min_hook_prio),
-  classy:post_kick(fun classy_builtin_hooks:maybe_reinitialize_after_kick/3, ?min_hook_prio),
+  classy:on_leave(fun classy_builtin_hooks:maybe_reinitialize_after_leave/3, ?min_hook_prio),
   %% Liveness tracking:
   classy:run_level(fun classy_liveness:on_run_level/2, ?max_hook_prio),
   classy:on_peer_connection_change(fun classy_liveness:on_peer_connection_change/3, ?max_hook_prio),

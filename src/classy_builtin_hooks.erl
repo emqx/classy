@@ -5,7 +5,7 @@
 
 %% API:
 -export([ gen_random_site_id/0
-        , maybe_reinitialize_after_kick/3
+        , maybe_reinitialize_after_leave/3
         , log_create_site/1
         , log_create_cluster/2
         , log_pre_join/4
@@ -34,7 +34,7 @@ gen_random_site_id() ->
   classy_node:maybe_init_the_site(undefined).
 
 %% @doc Create a new cluster after getting kicked.
-maybe_reinitialize_after_kick(OldCluster, Local, Intent) ->
+maybe_reinitialize_after_leave(OldCluster, Local, Intent) ->
   ?tp(info, classy_kicked_from_cluster,
       #{ old_cluster => OldCluster
        , local => Local

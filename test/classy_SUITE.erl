@@ -960,7 +960,7 @@ t_310_rpc_to_failing_node(_) ->
      begin
        %% Prepare
        N1 = create_start_site(S1, #{}),
-       N2 = create_start_site(S2, #{}),
+       _N2 = create_start_site(S2, #{}),
        {ok, Cluster} = ?ON(S1, classy:the_cluster()),
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
        wait_site_joined([S1, S2], Cluster, S2),
@@ -1491,22 +1491,22 @@ t_413_fold_votes(_) ->
   ?check_trace(
      #{timetrap => 30_000},
      begin
-       N1 = create_start_site(S1, #{peer => #{shutdown => halt}}),
+       _N1 = create_start_site(S1, #{peer => #{shutdown => halt}}),
        %% Make sure votes hang long enough for us to inspect them:
        ?force_ordering(
           #{?snk_kind := test_go},
           #{?snk_kind := K} when K =:= classy_test_vote_commit;
                                  K =:= classy_test_post_vote),
-       {ok, ID1} = ?ON(S1,
+       {ok, _ID1} = ?ON(S1,
                        classy_vote:create(#{ tag => Ref1
-                                           , actions => #{S1 => make_vote(true, true, Ref1, 1)}
-                                           , post_vote => make_post_vote(Ref1)
-                                           })),
-       {ok, ID2} = ?ON(S1,
-                       classy_vote:create(#{ tag => Ref2
-                                           , actions => #{S1 => make_vote(true, true, Ref2, 1)}
-                                           , post_vote => make_post_vote(Ref2)
-                                           })),
+                                            , actions => #{S1 => make_vote(true, true, Ref1, 1)}
+                                            , post_vote => make_post_vote(Ref1)
+                                            })),
+       {ok, _ID2} = ?ON(S1,
+                        classy_vote:create(#{ tag => Ref2
+                                            , actions => #{S1 => make_vote(true, true, Ref2, 1)}
+                                            , post_vote => make_post_vote(Ref2)
+                                            })),
        ct:sleep(100),
        ?assertMatch(
           [ #{ id := _
