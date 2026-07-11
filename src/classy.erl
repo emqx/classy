@@ -18,6 +18,7 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , info/2
         , n_restarts/0
         , n_restarts/1
+        , node_to_site/0
         , node_of_site/2
         , join_node/2
         , kick_site/2
@@ -269,6 +270,20 @@ as values returned by this function may be out-of-date.
 -spec n_restarts(site()) -> {ok, non_neg_integer()} | undefined.
 n_restarts(Site) ->
   classy_node:n_restarts(Site).
+
+-doc """
+Return a mapping from known node names to site IDs.
+""".
+-spec node_to_site() -> {ok, #{node() => site()}} | {error, not_in_cluster}.
+node_to_site() ->
+  maybe
+    {ok, _TheSite} ?= the_site(),
+    {ok, _TheCluster} ?= the_cluster(),
+    {ok, classy_node:node_to_site()}
+  else
+    undefined ->
+      {error, not_in_cluster}
+  end.
 
 -doc """
 Locate a node that is currently hosting a site.

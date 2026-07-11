@@ -661,6 +661,13 @@ t_091_node_of_site(_) ->
            {error, {_, J}},
            ?ON(I, classy:node_of_site(J, OnlyLive)))
         || I <- Sites, J <- Sites, I =/= J, OnlyLive <- [true, false]],
+       %%    Verify node_to_site:
+       ?assertEqual(
+           {ok, #{N1 => S1}},
+          ?ON(S1, classy:node_to_site())),
+       ?assertEqual(
+           {ok, #{N2 => S2}},
+          ?ON(S2, classy:node_to_site())),
        %% Form cluster:
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
        wait_site_joined(Sites, Cluster1, S2),
@@ -669,6 +676,11 @@ t_091_node_of_site(_) ->
            {ok, maps:get(J, NodeMap)},
            ?ON(I, classy:node_of_site(J, OnlyLive)))
         || I <- Sites, J <- Sites, OnlyLive <- [true, false]],
+       %%    Verify node_to_site:
+       [?assertEqual(
+           {ok, #{N1 => S1, N2 => S2}},
+           ?ON(I, classy:node_to_site()))
+        || I <- [S1, S2]],
        %% Shut down S2 and verify that S1 reacted on changes:
        stop_site(S2),
        ?block_until(#{?snk_kind := classy_peer_disconnected, site := S2}),
@@ -678,7 +690,11 @@ t_091_node_of_site(_) ->
           ?ON(S1, classy:node_of_site(S2, true))),
        ?assertEqual(
           {ok, N2},
-          ?ON(S1, classy:node_of_site(S2, false)))
+          ?ON(S1, classy:node_of_site(S2, false))),
+       %%    Verify node_to_site doesn't change (returns last known node name):
+       ?assertEqual(
+          {ok, #{N1 => S1, N2 => S2}},
+          ?ON(S1, classy:node_to_site()))
      end,
      [ fun no_unexpected_events/1
      , fun events_on_all_sites/1
