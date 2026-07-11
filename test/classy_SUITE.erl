@@ -405,18 +405,18 @@ t_061_run_level_timeouts(_) ->
        ?assertMatch(
           [ %% Advance:
             #{f := ?stopped, t := ?single}
-          , #{?snk_kind := ?classy_hook_failure, reason := {error, timeout}}
+          , #{?snk_kind := ?classy_hook_failure, reason := {error, {timeout, _}}}
           , #{f := ?single, t := ?cluster}
-          , #{?snk_kind := ?classy_hook_failure, reason := {error, timeout}}
+          , #{?snk_kind := ?classy_hook_failure, reason := {error, {timeout, _}}}
           , #{f := ?cluster, t := ?quorum}
-          , #{?snk_kind := ?classy_hook_failure, reason := {error, timeout}}
+          , #{?snk_kind := ?classy_hook_failure, reason := {error, {timeout, _}}}
             %% Retard:
           , #{f := ?quorum, t := ?cluster}
-          , #{?snk_kind := ?classy_hook_failure, reason := {error, timeout}}
+          , #{?snk_kind := ?classy_hook_failure, reason := {error, {timeout, _}}}
           , #{f := ?cluster, t := ?single}
-          , #{?snk_kind := ?classy_hook_failure, reason := {error, timeout}}
+          , #{?snk_kind := ?classy_hook_failure, reason := {error, {timeout, _}}}
           , #{f := ?single, t := ?stopped}
-          , #{?snk_kind := ?classy_hook_failure, reason := {error, timeout}}
+          , #{?snk_kind := ?classy_hook_failure, reason := {error, {timeout, _}}}
           ],
           Events3)
      end,

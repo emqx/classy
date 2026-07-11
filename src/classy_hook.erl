@@ -230,6 +230,7 @@ safe_apply(HookPoint, Fun, Args) ->
           #{ reason    => Err
            , hook      => Fun
            , hookpoint => HookPoint
+           , args      => Args
            }),
       error
   end.
