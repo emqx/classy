@@ -236,14 +236,14 @@ do_increase_n_restarts() ->
         [N0] when is_integer(N0) ->
           N0 + 1;
         [] ->
-          1;
+          ?default_n_restarts;
         Other ->
           ?tp(warning, ?classy_bad_data,
               #{ table => ?globals
                , key   => ?n_restarts
                , val   => Other
                }),
-          1
+          ?default_n_restarts
       end,
   classy_table:write(?globals, ?n_restarts, N),
   N.
