@@ -611,7 +611,15 @@ the_site() ->
 
 -spec apply_deltas_with_effects(#{classy:site() => classy_membership:update()}, #s{}) -> {ok, #s{}} | {error, _}.
 apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
-  {ok, MyNR} = classy_liveness:n_restarts(),
+  case classy_liveness:n_restarts() of
+    {ok, MyNR} ->
+      ok;
+    {error, nodedown} ->
+      %% `classy_membership' is a separate process that can start
+      %% sending effects at any time, incl. before full initialization
+      %% of the node, so use the default value.
+      MyNR = ?default_n_restarts
+  end,
   case Deltas of
     #{Local := #{mem := false}} ->
       %% We got kicked remotely. In this case we don't bother
