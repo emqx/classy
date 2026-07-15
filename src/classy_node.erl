@@ -503,7 +503,7 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
       {ok, update_runtime(S0)};
     {ok, OldCluster} when OldCluster =/= Cluster ->
       %% Site is currently in a different cluster. Leave it first:
-      LeaveIntent = join,
+      LeaveIntent = {join, #{node => Node, cluster => Cluster, join_intent => JoinIntent}},
       case handle_kick(OldCluster, Local, Local, LeaveIntent) of
         ok ->
           {ok, S} = on_leave(S0, LeaveIntent),
@@ -524,7 +524,7 @@ on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
   classy_hook:foreach(?on_leave, [Cluster, Local, Intent]),
   classy_table:clear(?site_info),
   case Intent of
-    join ->
+    {join, _} ->
       {ok, S#s{cluster = undefined}};
     _ ->
       init_cluster()

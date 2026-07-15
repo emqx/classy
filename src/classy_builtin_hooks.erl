@@ -40,9 +40,13 @@ maybe_reinitialize_after_leave(OldCluster, Local, Intent) ->
        , local => Local
        , intent => Intent
        }),
-  %% Re-initialize the local cluster upon getting kicked:
-  Intent =/= join andalso
-    classy_node:maybe_init_the_site(Local).
+  case Intent of
+    {join, _} ->
+      ok;
+    _ ->
+      %% Re-initialize the local cluster upon getting kicked:
+      classy_node:maybe_init_the_site(Local)
+  end.
 
 log_create_site(Site) ->
   ?tp(info, classy_create_new_site,
