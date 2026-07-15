@@ -786,6 +786,47 @@ t_092_link_detect(_) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies `classy_node:global_(set|lookup|delete)' APIs
+t_093_globals(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  ?check_trace(
+     #{timetrap => 20_000},
+     begin
+       N1 = create_start_site(S1, #{}),
+       #{ site := S1
+        , cluster := Cluster1
+        } = ?ON(S1, classy_node:hello()),
+       _N2 = create_start_site(S2, #{}),
+       %% First, all globals are empty:
+       ?assertMatch([], ?ON(S1, classy_node:global_lookup(foo))),
+       %% Set a global:
+       ?assertMatch(ok, ?ON(S1, classy_node:global_set(foo, foo))),
+       ?assertMatch(ok, ?ON(S2, classy_node:global_set(bar, bar))),
+       ?assertMatch([foo], ?ON(S1, classy_node:global_lookup(foo))),
+       ?assertMatch([bar], ?ON(S2, classy_node:global_lookup(bar))),
+       %% Restart node, the value should remain:
+       [stop_site(I) || I <- [S1, S2]],
+       [restart_site(I) || I <- [S1, S2]],
+       ?assertMatch([foo], ?ON(S1, classy_node:global_lookup(foo))),
+       ?assertMatch([bar], ?ON(S2, classy_node:global_lookup(bar))),
+       %% Join the nodes:
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       wait_site_joined([S1, S2], Cluster1, S2),
+       %% Both should retain their globals:
+       ?assertMatch([foo], ?ON(S1, classy_node:global_lookup(foo))),
+       ?assertMatch([bar], ?ON(S2, classy_node:global_lookup(bar))),
+       %% Test deletion.
+       ?assertMatch(ok, ?ON(S1, classy_node:global_delete(foo))),
+       ?assertMatch([], ?ON(S1, classy_node:global_lookup(foo))),
+       %% Restart site, deletion should be preserved:
+       stop_site(S1),
+       restart_site(S1),
+       ?assertMatch([], ?ON(S1, classy_node:global_lookup(foo)))
+     end,
+     [ fun no_unexpected_events/1
+     ]).
+
 %% This testcase verifies basic functionality of autocluster.
 t_100_autocluster(_) ->
   S1 = <<"s1">>,
