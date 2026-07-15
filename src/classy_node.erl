@@ -22,6 +22,9 @@ Management of the local site and node.
         , node_to_site/0
         , n_restarts/1
         , prep_stop/1
+        , global_set/2
+        , global_lookup/1
+        , global_delete/1
         ]).
 
 %% behavior callbacks:
@@ -58,6 +61,9 @@ Management of the local site and node.
         { cluster :: classy:cluster_id()
         , data :: #{classy:site() => classy_membership:update()}
         }).
+
+%% Type of records used to store arbitrary data in the ?globals table.
+-record(custom_g, {k}).
 
 %%================================================================================
 %% API functions
@@ -363,6 +369,39 @@ notify_mem_deltas(Cluster, Deltas) ->
 -doc false.
 prep_stop(Reason) ->
   classy_hook:foreach(?on_prep_stop, [Reason]).
+
+-doc """
+Set a global persistent node property.
+
+These properties survive all cluster changes,
+they don't get cleaned automatically.
+
+WARNING: The purpose of node globals is to aid with node migration activities,
+such as migrating to classy application or between major releases.
+
+Do NOT use this feature for arbitrary application data,
+use separate @code{classy_table}s instead.
+""".
+-spec global_set(term(), term()) -> ok.
+global_set(Key, Val) ->
+  classy_table:write(
+    ?globals,
+    #custom_g{k = Key},
+    Val).
+
+-doc """
+Lookup a global property.
+""".
+-spec global_lookup(term()) -> list().
+global_lookup(Key) ->
+  classy_table:lookup(?globals, #custom_g{k = Key}).
+
+-doc """
+Delete a global property.
+""".
+-spec global_delete(term()) -> ok.
+global_delete(Key) ->
+  classy_table:delete(?globals, #custom_g{k = Key}).
 
 %%================================================================================
 %% Internal functions
