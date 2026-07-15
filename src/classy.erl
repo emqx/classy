@@ -135,7 +135,7 @@ while to @code{on_leave} this value is merely informational.
 
 Classy itself uses the following intents:
 @itemize
-@item @code{join}:
+@item @code{@{join, #@{node => node(), cluster => cluster_id(), ...@}@}}:
 Site is leaving the cluster to immediately join a different one.
 
 @item @code{kicked}:
@@ -146,7 +146,10 @@ Site is kicked by the autoclean logic.
 
 @end itemize
 """.
--type kick_intent() :: term().
+-type kick_intent() :: {join, #{node := node(), cluster := cluster_id(), join_intent := join_intent()}}
+                     | kicked
+                     | autoclean
+                     | term().
 
 -doc """
 @xref{Run level}
