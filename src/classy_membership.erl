@@ -719,6 +719,7 @@ merge(LTime, Op, S) ->
       true
   end.
 
+%% Find updated sites and send actual state of the CRDT for these sites to `classy_node' server:
 notify(S = #s{cluster = Cluster, site = Local, clock = C, events_since = EventsSince}) ->
   %% Find out what changed:
   UpdatedEntries = memtab_since(EventsSince + 1, S),
