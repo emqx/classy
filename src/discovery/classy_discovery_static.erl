@@ -19,17 +19,17 @@
 -behaviour(classy_discovery_strategy).
 
 -export([ discover/1
-        , hook/0
+        , install_dispatch_hook/0
+        , dispatch/1
         ]).
 
-hook() ->
-  classy_discovery_strategy:hook(
-    fun({static, _}) ->
-        {ok, ?MODULE};
-       (_) ->
-        undefined
-    end,
-    0).
+install_dispatch_hook() ->
+  classy_discovery_strategy:hook(fun ?MODULE:dispatch/1, 0).
+
+dispatch({static, _}) ->
+  {ok, ?MODULE};
+dispatch(_) ->
+  undefined.
 
 discover(Options) ->
   {ok, maps:get(seeds, Options, [])}.

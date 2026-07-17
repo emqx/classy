@@ -21,12 +21,13 @@
 
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
--export([ hook/0
+-export([ install_dispatch_hook/0
         , discover/1
         , lock/1
         , unlock/1
         , register/1
         , unregister/1
+        , dispatch/1
         ]).
 
 -export([start_link/1]).
@@ -66,14 +67,13 @@
 
 -define(LOG(Level, Format, Args), logger:Level("Classy(etcd): " ++ Format, Args)).
 
-hook() ->
-  classy_discovery_strategy:hook(
-    fun({etcd, _}) ->
-        {ok, ?MODULE};
-       (_) ->
-        undefined
-    end,
-    0).
+install_dispatch_hook() ->
+  classy_discovery_strategy:hook(fun ?MODULE:dispatch/1, 0).
+
+dispatch({etcd, _}) ->
+  {ok, ?MODULE};
+dispatch(_) ->
+  undefined.
 
 start_link(Options) ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, Options, []).

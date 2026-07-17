@@ -80,10 +80,10 @@ init() ->
   classy:on_peer_node_change(fun classy_builtin_hooks:log_peer_node_change/3, ?max_hook_prio),
   classy:pre_autoclean(fun classy_builtin_hooks:log_autoclean/1, ?max_hook_prio),
   %% Discovery strategies:
-  classy_discovery_static:hook(),
-  classy_discovery_dns:hook(),
-  classy_discovery_k8s:hook(),
-  classy_discovery_etcd:hook(),
+  classy_discovery_static:install_dispatch_hook(),
+  classy_discovery_dns:install_dispatch_hook(),
+  classy_discovery_k8s:install_dispatch_hook(),
+  classy_discovery_etcd:install_dispatch_hook(),
   %% User initialization:
   case application:get_env(classy, setup_hooks) of
     {ok, {Mod, Func, Args}} ->
