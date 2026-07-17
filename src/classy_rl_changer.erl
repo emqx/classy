@@ -25,6 +25,9 @@
 %% Type declarations
 %%================================================================================
 
+-define(ctr_c, 1).
+-define(ctr_s, 2).
+
 -define(SERVER, ?MODULE).
 
 -define(valid_level(LEVEL), ((LEVEL) =:= ?stopped orelse (LEVEL) =:= ?single orelse (LEVEL) =:= ?cluster orelse (LEVEL) =:= ?quorum)).
@@ -79,8 +82,8 @@ at_lower_level(RunLevel, Fun) ->
 get(K) ->
   Cntr = persistent_term:get(?pterm),
   Idx = case K of
-          set -> 1;
-          current -> 2
+          set     -> ?ctr_s;
+          current -> ?ctr_c
         end,
   to_atom(atomics:get(Cntr, Idx)).
 
@@ -214,11 +217,11 @@ terminate_loop(#s{running = #running{next = Next, pid = Pid}} = S0) ->
   end.
 
 -spec maybe_transition(#s{}) -> #s{}.
-maybe_transition(#s{running = #running{}} = S0) ->
-  update_counter(S0),
-  S0;
+maybe_transition(#s{running = #running{}} = S) ->
+  update_counter(?ctr_s, S#s.set),
+  S;
 maybe_transition(#s{actions = AA0, set = Set, current = From, running = undefined} = S0) ->
-  update_counter(S0),
+  update_counter(?ctr_s, Set),
   To = lists:foldl(
          fun(#call{at = At}, Acc) -> min(At, Acc) end,
          Set,
@@ -247,6 +250,7 @@ maybe_transition(#s{actions = AA0, set = Set, current = From, running = undefine
 run_hooks(From, Next, Actions) ->
   FromA = to_atom(From),
   NextA = to_atom(Next),
+  update_counter(?ctr_c, Next),
   Worker = spawn_link(
              fun() ->
                  From =/= Next andalso
@@ -270,6 +274,5 @@ run_hooks(From, Next, Actions) ->
           , pid = Worker
           }.
 
-update_counter(#s{counter = Ctr, set = Set, current = Current}) ->
-  atomics:put(Ctr, 1, Set),
-  atomics:put(Ctr, 2, Current).
+update_counter(Idx, Val) ->
+  atomics:put(persistent_term:get(?pterm), Idx, Val).

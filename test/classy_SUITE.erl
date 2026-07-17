@@ -303,16 +303,16 @@ t_060_at_lower_level(_) ->
        %% Prepare the system:
        _N1 = create_start_site(S1, #{}),
        ct:sleep(1000),
+       ?assertEqual(quorum, ?ON(S1, classy:run_level())),
        ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
-       ?assertMatch(
-          ok,
-          ?ON(S1,
-              classy:at_lower_level(
-                single,
-                fun() ->
-                    hello
-                end))),
-       ct:sleep(1000)
+       ok = ?ON(S1,
+                classy:at_lower_level(
+                  single,
+                  fun() ->
+                      ?defer_assert(?assertEqual(single, classy:run_level()))
+                  end)),
+       ct:sleep(1000),
+       ?assertEqual(quorum, ?ON(S1, classy:run_level()))
      end,
      [ {"run level transitions",
         fun(Trace) ->
@@ -2029,9 +2029,21 @@ setup_hooks(Site) ->
     fun() ->
         classy_node:maybe_init_the_site(Site),
         classy:on_metadata_change(fun ?MODULE:on_metadata_change/3, 0),
-        classy:on_node_classify(fun ?MODULE:on_node_classify/1, 0)
+        classy:on_node_classify(fun ?MODULE:on_node_classify/1, 0),
+        classy:run_level(fun ?MODULE:on_run_level/2, 0)
     end,
     0).
+
+on_run_level(Prev, Next) ->
+  ?defer_assert(?assertEqual(Next, classy:run_level())),
+  ?defer_assert(case {Prev, Next} of
+                  {stopped, single} -> ok;
+                  {single, cluster} -> ok;
+                  {cluster, quorum} -> ok;
+                  {quorum, cluster} -> ok;
+                  {cluster, single} -> ok;
+                  {single, stopped} -> ok
+                end).
 
 make_vote(HowToPreVote, HowToVote, Ref, NCommitSteps) ->
   #{ prepare  => {?MODULE, vote_prepare, [HowToPreVote, HowToVote, Ref]}
