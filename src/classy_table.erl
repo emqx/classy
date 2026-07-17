@@ -440,13 +440,20 @@ update_counter(Tab, Key, Incr) ->
   gen_server:call(
     ?via(Tab),
     #call_update_counter{k = Key, incr = Incr},
-    ?call_timeout).
+    ?call_timeout);
+update_counter(_Tab, _Key, Incr) ->
+  {error, {badarg, Incr}}.
 
 -doc """
 Delete all data in the table.
 This is a durable operation.
 
 @code{on_update} callback sees effects of this operation as series of regular deletes.
+
+WARNING: this operation races with all pending @code{write}, @code{delete} or @code{update_counter} operations.
+When these operations are issued simultaneously with @code{clear},
+the behavior is undefined.
+In perticular, they can return success when in fact nothing was committed.
 """.
 -spec clear(tab()) -> ok.
 clear(Tab) ->
