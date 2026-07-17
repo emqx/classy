@@ -92,7 +92,7 @@
 -define(globals, classy_node).
 %%    Number of restarts since creation of the site
 -define(n_restarts, n_restarts).
--define(default_n_restarts, 1).
+-define(default_n_restarts, 0).
 
 -define(pt_node_sets, classy_pt_node_sets).
 -define(pt_site_sets, classy_pt_site_sets).

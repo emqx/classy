@@ -20,7 +20,8 @@
 
 %% Cluster strategy callbacks.
 -export([ discover/1
-        , hook/0
+        , install_dispatch_hook/0
+        , dispatch/1
         ]).
 
 -export_type([opts/0]).
@@ -40,14 +41,13 @@
          , suffix       => string()
          }.
 
-hook() ->
-  classy_discovery_strategy:hook(
-    fun({k8s, _}) ->
-        {ok, ?MODULE};
-       (_) ->
-        undefined
-    end,
-    0).
+install_dispatch_hook() ->
+  classy_discovery_strategy:hook(fun ?MODULE:dispatch/1, 0).
+
+dispatch({k8s, _}) ->
+  {ok, ?MODULE};
+dispatch(_) ->
+  undefined.
 
 %%--------------------------------------------------------------------
 %% classy_discovery_strategy callbacks

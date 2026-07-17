@@ -256,6 +256,13 @@ info(_Hops, Nodes) ->
 
 -doc """
 Return the total number of times the site has been restarted.
+A fresh node starts with this value = 0.
+
+This value increases when the Erlang VM itself restarts,
+or classy application goes from @code{stopped} to @code{single} run level.
+
+NOTE: This counter doesn't get reset when node joins or leaves the cluster,
+it increases instead.
 """.
 -spec n_restarts() -> non_neg_integer() | undefined.
 n_restarts() ->

@@ -89,6 +89,7 @@ They must not contain any sort of heavy or long-running tasks.
         , force_compaction/1
         , lookup/2
         , select/2
+        , update_counter/3
           %% For debugging:
         , dump_wal/1
         , dump_wal/2
@@ -194,6 +195,7 @@ All classy tables contain key-value data wrapped in @code{#classy_kv} record.
 -record(call_ensure_open, {tab :: tab()}).
 -record(call_atomically, {ops :: [?w(_, _) | ?d(_)]}).
 -record(call_write, {k, v, wal = true :: boolean()}).
+-record(call_update_counter, {k, incr :: integer()}).
 -record(call_delete, {k, wal = true :: boolean()}).
 -record(call_flush, {}).
 -record(call_force_compaction, {}).
@@ -294,7 +296,7 @@ writes or deletes coming from a single process are always interleaved with a dat
 If some process needs to reliably update a large number of records at once,
 it's better to use @ref{classy_table:atomically/2}.
 """.
--spec write(tab(), _Key, _Val) -> ok.
+-spec write(tab(), _Key, _Val) -> ok | {error, _}.
 write(Tab, Key, Val) ->
   gen_server:call(
     ?via(Tab),
@@ -318,7 +320,7 @@ Delete a record from the table.
 From durability perspective,
 it has the same properties as @ref{classy_table:write/3}.
 """.
--spec delete(tab(), _Key) -> ok.
+-spec delete(tab(), _Key) -> ok | {error, _}.
 delete(Tab, Key) ->
   gen_server:call(
     ?via(Tab),
@@ -428,10 +430,29 @@ select(Tab, MS) ->
   end.
 
 -doc """
+Update a counter identified by a key atomically.
+
+If key doesn't exist, then 0 is assumed as the default.
+Returns an error if value of the key is not an integer.
+""".
+-spec update_counter(tab(), _Key, integer()) -> {ok, integer()} | {error, _}.
+update_counter(Tab, Key, Incr) when is_integer(Incr) ->
+  gen_server:call(
+    ?via(Tab),
+    #call_update_counter{k = Key, incr = Incr},
+    ?call_timeout);
+update_counter(_Tab, _Key, Incr) ->
+  {error, {badarg, Incr}}.
+
+-doc """
 Delete all data in the table.
 This is a durable operation.
 
 @code{on_update} callback sees effects of this operation as series of regular deletes.
+
+WARNING: this operation races with all pending @code{write}, @code{delete} or @code{update_counter} operations.
+When these operations are issued simultaneously with @code{clear},
+the behavior is undefined.
 """.
 -spec clear(tab()) -> ok.
 clear(Tab) ->
@@ -485,7 +506,7 @@ start_link(Tab, Options) ->
         , log_size = 0 :: non_neg_integer()
         , badness_threshold :: pos_integer()
         , buffer = queue:new() :: queue:queue(?w(_, _) | ?d(_))
-        , pending_replies = [] :: [gen_server:from()]
+        , pending_replies = [] :: [{gen_server:from(), term()}]
         , auto_flush_timer :: classy_lib:wakeup_timer()
         , on_update :: on_update_callback() | undefined
         }).
@@ -531,6 +552,8 @@ handle_call(#call_atomically{ops = Ops}, From, S) ->
   handle_atomic(From, Ops, S);
 handle_call(#call_write{} = C, From, S) ->
   handle_write(From, C, S);
+handle_call(#call_update_counter{} = C, From, S) ->
+  handle_update_counter(From, C, S);
 handle_call(#call_delete{} = C, From, S) ->
   handle_delete(From, C, S);
 handle_call(#call_flush{}, From, S) ->
@@ -751,17 +774,34 @@ log_name(#s{name = Name, dir = Dir}, Suffix) ->
   filename:join(Dir, FN).
 
 handle_atomic(From, Ops, S) ->
-  {noreply, add_to_buffer(From, Ops, S)}.
+  {noreply, add_to_buffer(From, ok, Ops, S)}.
 
 handle_write(From, #call_write{k = K, v = V, wal = true}, S) ->
-  {noreply, add_to_buffer(From, [?w(K, V)], S)};
+  {noreply, add_to_buffer(From, ok, [?w(K, V)], S)};
 handle_write(_From, #call_write{k = K, v = V, wal = false}, S) ->
   {reply, ok, log_effects(dirty, ?w(K, V), S)}.
 
 handle_delete(From, #call_delete{k = K, wal = true}, S) ->
-  {noreply, add_to_buffer(From, [?d(K)], S)};
+  {noreply, add_to_buffer(From, ok, [?d(K)], S)};
 handle_delete(_From, #call_delete{k = K, wal = false}, S) ->
   {reply, ok, log_effects(dirty, ?d(K), S)}.
+
+handle_update_counter(From, #call_update_counter{k = K, incr = Incr}, S = #s{name = Tab}) ->
+  maybe
+    {ok, PrevVal} ?= case ets:lookup(Tab, K) of
+                       [#classy_kv{v = Val}] when is_integer(Val) ->
+                         {ok, Val};
+                       [] ->
+                         {ok, 0};
+                       _ ->
+                         {error, {invalid_value, K}}
+                     end,
+    NextVal = PrevVal + Incr,
+    {noreply, add_to_buffer(From, {ok, NextVal}, [?w(K, NextVal)], S)}
+  else
+    Error ->
+      {reply, Error, S}
+  end.
 
 -spec log_effects(normal | dirty | replay, op(), s()) -> s().
 log_effects(_Context, ?flush_begin(_), S) ->
@@ -938,9 +978,10 @@ dump_ets(Log, N, {Batch, Cont}) ->
     N + length(Recs),
     ets:match(Cont)).
 
--spec add_to_buffer(gen_server:from(), [?w(_, _) | ?d(_)], s()) -> s().
+-spec add_to_buffer(gen_server:from(), _Reply, [?w(_, _) | ?d(_)], s()) -> s().
 add_to_buffer(
   From,
+  Reply,
   Ops,
   #s{ buffer = Buf0
     , pending_replies = PendingReplies
@@ -957,18 +998,23 @@ add_to_buffer(
       {Buf0, S0},
       Ops),
   S#s{ buffer = Buf
-     , pending_replies = [From | PendingReplies]
+     , pending_replies = [{From, Reply} | PendingReplies]
      , auto_flush_timer = classy_lib:wakeup_after(?to_auto_flush, 0, Timer)
      }.
 
-send_pending_replies(Reply, S = #s{pending_replies = Pending}) ->
-  [gen_server:reply(From, Reply) || From <- Pending],
+send_pending_replies(FlushResult, S = #s{pending_replies = Pending}) ->
+  case FlushResult of
+    ok ->
+      [gen_server:reply(From, Reply) || {From, Reply} <- Pending];
+    _ ->
+      [gen_server:reply(From, FlushResult) || {From, _} <- Pending]
+  end,
   S#s{pending_replies = []}.
 
 handle_clear(S0 = #s{log = Log, log_size = LogSize}) ->
   ok = do_write_log(Log, [?clear]),
   S = log_effects(normal, ?clear, S0#s{log_size = LogSize + 1}),
-  send_pending_replies(ok, S).
+  send_pending_replies({error, cleared}, S).
 
 handle_drop(From, S = #s{ets = Ets, log = Log}) ->
   exec_on_update_clear(S),

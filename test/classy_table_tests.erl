@@ -79,6 +79,51 @@ smoke_write_delete_test() ->
         end}
      ]).
 
+smoke_update_counter_test() ->
+  Clean = setup(?FUNCTION_NAME),
+  T = ?FUNCTION_NAME,
+  ?check_trace(
+     try
+       ?assertEqual(ok, classy_table:open(T, opts())),
+       ?assertEqual({ok, 1}, classy_table:update_counter(T, foo, 1)),
+       ?assertEqual([1], classy_table:lookup(T, foo)),
+       ?assertEqual({ok, 3}, classy_table:update_counter(T, foo, 2)),
+       ?assertEqual([3], classy_table:lookup(T, foo)),
+       ?assertEqual({ok, 3}, classy_table:update_counter(T, foo, 0)),
+       ?assertEqual([3], classy_table:lookup(T, foo)),
+       ?assertEqual({ok, -1}, classy_table:update_counter(T, foo, -4)),
+       ?assertEqual([-1], classy_table:lookup(T, foo)),
+       ?assertEqual(ok, classy_table:stop(T, infinity)),
+       ?assertEqual(ok, classy_table:open(T, opts())),
+       ?assertEqual([-1], classy_table:lookup(T, foo)),
+       ?assertEqual(
+          {ok, [ {v, 1}
+               , {w, foo, 1}
+               , {w, foo, 3}
+               , {w, foo, 3}
+               , {w, foo, -1}
+               ]},
+          classy_table:dump_wal(T))
+     after
+       cleanup(Clean)
+     end,
+     [ fun classy_SUITE:no_unexpected_events/1
+     , {"events",
+        fun(Trace) ->
+            ?assertMatch(
+               [ #{tab := T, op := open}
+               , #{tab := T, op := {w, foo, 1}}
+               , #{tab := T, op := {w, foo, 3}}
+               , #{tab := T, op := {w, foo, 3}}
+               , #{tab := T, op := {w, foo, -1}}
+               , #{tab := T, op := close}
+               , #{tab := T, op := open}
+               | _
+               ],
+               ?of_kind([classy_table_update], Trace))
+        end}
+     ]).
+
 %% This test verifies that dirty writes don't overwrite normal writes during flush
 smoke_write_vs_dirty_test() ->
   Clean = setup(?FUNCTION_NAME),
