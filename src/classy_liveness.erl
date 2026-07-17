@@ -228,24 +228,7 @@ set_my_liveness_info(Running) ->
 
 -spec increase_n_restarts() -> non_neg_integer().
 increase_n_restarts() ->
-  %% TODO: run this in a critical section:
-  do_increase_n_restarts().
-
-do_increase_n_restarts() ->
-  N = case classy_table:lookup(?globals, ?n_restarts) of
-        [N0] when is_integer(N0) ->
-          N0 + 1;
-        [] ->
-          ?default_n_restarts;
-        Other ->
-          ?tp(warning, ?classy_bad_data,
-              #{ table => ?globals
-               , key   => ?n_restarts
-               , val   => Other
-               }),
-          ?default_n_restarts
-      end,
-  classy_table:write(?globals, ?n_restarts, N),
+  {ok, N} = classy_table:update_counter(?globals, ?n_restarts, 1),
   N.
 
 kick_down_sites(_S) ->
