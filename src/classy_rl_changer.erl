@@ -7,17 +7,19 @@
 -behavior(gen_server).
 
 %% API:
--export([to_int/1, to_atom/1, at_lower_level/2]).
+-export([to_int/1, to_atom/1, at_lower_level/2, get/1]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([start_link/0, set/1, set_sync/2]).
+-export([start_link/0, set/1, set_sync/2, enrich_site_info/1]).
 
 -export_type([run_level_int/0]).
 
 -include("classy_internal.hrl").
+
+-compile({no_auto_import, [get/1]}).
 
 %%================================================================================
 %% Type declarations
@@ -26,7 +28,6 @@
 -define(SERVER, ?MODULE).
 
 -define(valid_level(LEVEL), ((LEVEL) =:= ?stopped orelse (LEVEL) =:= ?single orelse (LEVEL) =:= ?cluster orelse (LEVEL) =:= ?quorum)).
--define(valid_level_int(LEVEL), ((LEVEL) >=0 andalso (LEVEL) =<3)).
 
 -type run_level_int() :: 0..3.
 
@@ -46,6 +47,8 @@
         { next :: run_level_int()
         , pid :: pid()
         }).
+
+-define(pterm, classy_run_level_ctr).
 
 %%================================================================================
 %% API functions
@@ -70,6 +73,26 @@ at_lower_level(RunLevel, Fun) ->
     ?SERVER,
     #call_at_run_level{level = RunLevel, function = Fun},
     infinity).
+
+-doc false.
+-spec get(current | set) -> classy:run_level().
+get(K) ->
+  Cntr = persistent_term:get(?pterm),
+  Idx = case K of
+          set -> 1;
+          current -> 2
+        end,
+  to_atom(atomics:get(Cntr, Idx)).
+
+-doc false.
+-spec enrich_site_info(classy:site_metadata()) -> classy:site_metadata().
+enrich_site_info(Info) ->
+  try
+    RL = get(current),
+    Info#{rl => RL}
+  catch
+    _:_ -> Info#{rl => stopped}
+  end.
 
 %%================================================================================
 %% Internal exports
@@ -109,14 +132,18 @@ set_sync(RunLevel, Timeout) ->
         , current = 0 :: run_level_int()
         , running :: #running{} | undefined
         , actions = [] :: [#call{}]
+        , counter :: atomics:atomics_ref()
         }).
 
 init(_) ->
   process_flag(trap_exit, true),
-  {ok, #s{}}.
+  Ctr = atomics:new(2, []),
+  persistent_term:put(?pterm, Ctr),
+  {ok, #s{counter = Ctr}}.
 
 handle_call(#call_set{level = Level}, _From, S0) ->
   if ?valid_level(Level) ->
+
       S = maybe_transition(S0#s{set = to_int(Level)}),
       {reply, ok, S};
      true ->
@@ -168,7 +195,8 @@ terminate(Reason, S) ->
         #{ server => ?MODULE
          , reason => Reason
          }),
-  terminate_loop(maybe_transition(S#s{set = 0, actions = []})).
+  terminate_loop(maybe_transition(S#s{set = 0, actions = []})),
+  persistent_term:erase(?pterm).
 
 %%================================================================================
 %% Internal functions
@@ -187,8 +215,10 @@ terminate_loop(#s{running = #running{next = Next, pid = Pid}} = S0) ->
 
 -spec maybe_transition(#s{}) -> #s{}.
 maybe_transition(#s{running = #running{}} = S0) ->
+  update_counter(S0),
   S0;
 maybe_transition(#s{actions = AA0, set = Set, current = From, running = undefined} = S0) ->
+  update_counter(S0),
   To = lists:foldl(
          fun(#call{at = At}, Acc) -> min(At, Acc) end,
          Set,
@@ -239,3 +269,7 @@ run_hooks(From, Next, Actions) ->
   #running{ next = Next
           , pid = Worker
           }.
+
+update_counter(#s{counter = Ctr, set = Set, current = Current}) ->
+  atomics:put(Ctr, 1, Set),
+  atomics:put(Ctr, 2, Current).

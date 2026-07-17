@@ -16,6 +16,7 @@ This MFA can contain calls to various @code{classy:on_...} functions.
 -export([ info/0
         , info/1
         , info/2
+        , get_meta/1
         , n_restarts/0
         , n_restarts/1
         , node_to_site/0
@@ -59,6 +60,7 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , pre_autocluster/2
         , run_level/2
         , enrich_site_info/2
+        , on_metadata_change/2
         ]).
 
 -export_type([ cluster_id/0
@@ -69,6 +71,7 @@ This MFA can contain calls to various @code{classy:on_...} functions.
 
              , peer_info/0
              , info/0
+             , site_metadata/0
              , cluster_info/0
 
              , run_level/0
@@ -113,6 +116,8 @@ Unique random persistent identifier of the site.
          , peers       := #{site() => peer_info()}
          , atom()      => _
          }.
+
+-type site_metadata() :: map().
 
 -type cluster_info() ::
         #{ infos     := #{node() => info()}
@@ -257,6 +262,17 @@ info(_Hops, Nodes) ->
   #{ infos     => Infos
    , bad_nodes => BadNodes
    }.
+
+-doc """
+Get cached site metadata for a remote site.
+
+NOTE: This function works even if the site is down.
+
+@xref{classy_site_metadata:set/2}, @ref{classy_site_metadata:delete/1}, @ref{classy_site_metadata:lookup/1}.
+""".
+-spec get_meta(classy:site()) -> {ok, info()} | undefined.
+get_meta(Site) ->
+  classy_node:get_meta(Site).
 
 -doc """
 Return the total number of times the site has been restarted.
@@ -677,7 +693,7 @@ based on @ref{t:classy:info/0}.
 @xref{classy:enrich_site_info/2}, @xref{classy:node_sets/0}.
 """.
 -spec on_node_classify(
-        fun((map()) -> [node_set()]),
+        fun((site_metadata()) -> [node_set()]),
         classy_hook:prio()
        ) -> classy_hook:hook().
 on_node_classify(Hook, Prio) ->
@@ -814,6 +830,16 @@ Register a hook that can add entries to the map returned by @ref{classy:info/0}.
        ) -> classy_hook:hook().
 enrich_site_info(Hook, Prio) ->
   classy_hook:insert(?on_enrich_site_info, Hook, Prio).
+
+-doc """
+Register a hook that is called when metadata of a site (local or remote) changes.
+""".
+-spec on_metadata_change(
+        fun((cluster_id(), site(), site_metadata()) -> _),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
+on_metadata_change(Hook, Prio) ->
+  classy_hook:insert(?on_metadata_change, Hook, Prio).
 
 %%================================================================================
 %% Internal exports

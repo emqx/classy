@@ -6,6 +6,7 @@
 %% API:
 -export([ gen_random_site_id/0
         , maybe_reinitialize_after_leave/3
+        , enrich_site_info/1
         , log_create_site/1
         , log_create_cluster/2
         , log_pre_join/4
@@ -47,6 +48,9 @@ maybe_reinitialize_after_leave(OldCluster, Local, Intent) ->
       %% Re-initialize the local cluster upon getting kicked:
       classy_node:maybe_init_the_site(Local)
   end.
+
+enrich_site_info(Info) ->
+  Info#{vsn => ?classy_proto_vsn}.
 
 log_create_site(Site) ->
   ?tp(info, classy_create_new_site,

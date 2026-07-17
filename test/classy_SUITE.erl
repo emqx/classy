@@ -990,7 +990,7 @@ t_300_rpc(_) ->
                 5_000))),
        ok
      end,
-     []).
+     [fun no_unexpected_events/1]).
 
 %% This testcase verifies behavior of RPC when a node gets stopped amidst a multicall:
 t_310_rpc_to_failing_node(_) ->
@@ -1020,7 +1020,7 @@ t_310_rpc_to_failing_node(_) ->
                 30_000))),
        ok
      end,
-     []).
+     [fun no_unexpected_events/1]).
 
 %% This testcase verifies various scenarios related to 2PC that lead
 %% to abort and rollback.
@@ -1608,6 +1608,136 @@ t_413_fold_votes(_) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase validates CRUD operations with the site metadata.
+t_500_metadata_crud(_) ->
+  S1 = ~"s1",
+  S2 = ~"s2",
+  Sites = [S1, S2],
+  ?check_trace(
+     #{timetrap => 15_000},
+     begin
+       %% Setup:
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+       %% 1. Update values on S1:
+       {ok, SRef1} = snabbkaffe:subscribe(
+                       ?match_event(#{?snk_kind := test_update_meta, site := S1, bar := _}),
+                       2,
+                       infinity),
+       ?ON(S1, classy_site_metadata:set(foo, bar)),
+       ?ON(S1, classy_site_metadata:set(bar, baz)),
+       ?assertEqual(
+          #{foo => bar, bar => baz},
+          ?ON(S1, classy_site_metadata:get_all())),
+       ?assertEqual(
+          [bar],
+          ?ON(S1, classy_site_metadata:lookup(foo))),
+       %% Both nodes should run the hook:
+       {ok, Events1} = snabbkaffe:receive_events(SRef1),
+       ?assertMatch(
+          [[_], [_]],
+          [?of_node(N1, Events1), ?of_node(N2, Events1)]),
+       %% Now metadata should be cached on both sites:
+       check_metadata({ok, #{foo => bar, bar => baz}}, S1, Sites),
+       %% Metadata of unknown site should be undefined:
+       ?assertEqual(
+          undefined,
+          ?ON(S1, classy:get_meta(~"bad"))),
+       %% 2. Try to delete a value:
+       {ok, SRef2} = snabbkaffe:subscribe(
+                       ?match_event(#{?snk_kind := test_update_meta, site := S1, bar := _}),
+                       2,
+                       infinity),
+       ?ON(S1, classy_site_metadata:delete(foo)),
+       {ok, Events2} = snabbkaffe:receive_events(SRef2),
+       ?assertMatch(
+          [[_], [_]],
+          [?of_node(N1, Events2), ?of_node(N2, Events2)]),
+       %% Now metadata should be cached on both sites:
+       check_metadata({ok, #{bar => baz}}, S1, Sites),
+       %% 3. Restart S1. Metadata should be preserved:
+       stop_site(S1),
+       ?block_until(#{?snk_kind := classy_peer_disconnected, site := S1}),
+       ct:sleep(10),
+       check_metadata({ok, #{bar => baz}}, S1, [S2]),
+       ?wait_async_action(
+          restart_site(S1),
+          #{?snk_kind := classy_peer_connected, site := S1}),
+       ct:sleep(10),
+       check_metadata({ok, #{bar => baz}}, S1, Sites),
+       %% 4. S1 leaves. Its metadata should be reset.
+       ?assertMatch(
+          ok,
+          ?ON(S1, classy:kick_site(S1, leave))),
+       ct:sleep(10),
+       ?assertEqual(
+          #{},
+          ?ON(S1, classy_site_metadata:get_all()))
+     end,
+     [fun no_unexpected_events/1]).
+
+%% This testcase verifies that classy properly updates site and node sets when site metadata changes.
+t_510_metadata_classify(_) ->
+  S1 = ~"s1",
+  S2 = ~"s2",
+  Sites = [S1, S2],
+  ?check_trace(
+     #{timetrap => 15_000},
+     begin
+       %% Setup:
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster, S2),
+
+       %% 1. Update metadata, wait for propagation:
+       ?ON(S1, classy_site_metadata:set(foo, bar)),
+       ?ON(S1, classy_site_metadata:set(bar, baz)),
+
+       ?block_until(#{?snk_kind := test_update_meta, site := S1, ?snk_meta := #{node := N2}}),
+       ct:sleep(10),
+       %% 2. Verify site sets:
+       ?assertEqual(
+          [[S1], [S1]],
+          [?ON(I, classy:sites(foo)) || I <- Sites]),
+       ?assertEqual(
+          [[S1], [S1]],
+          [?ON(I, classy:sites(bar)) || I <- Sites]),
+       %% Verify node sets:
+       ?assertEqual(
+          [[N1], [N1]],
+          [?ON(I, classy:nodes(foo)) || I <- Sites]),
+       ?assertEqual(
+          [[N1], [N1]],
+          [?ON(I, classy:nodes(bar)) || I <- Sites]),
+       %% 3. Shut down S1, it should remain in the sets:
+       ?wait_async_action(
+          stop_site(S1),
+          #{?snk_kind := classy_peer_disconnected, site := S1}),
+       ct:sleep(10),
+       ?assertEqual([S1], ?ON(S2, classy:sites(foo))),
+       ?assertEqual([S1], ?ON(S2, classy:sites(bar))),
+       %% 4. Kick S1, it should disappear from the sets
+       ?assertMatch(
+          ok,
+          ?ON(S2, classy:kick_site(S1, leave))),
+       wait_site_kicked([S2], Cluster, S1),
+       ct:sleep(10),
+       ?assertEqual([], ?ON(S2, classy:sites(foo))),
+       ?assertEqual([], ?ON(S2, classy:sites(bar)))
+     end,
+     [fun no_unexpected_events/1]).
+
+check_metadata(Expected, Target, Sites) ->
+  ?assertEqual(
+     [Expected || _ <- Sites],
+     [?ON(I, classy:get_meta(Target)) || I <- Sites],
+     Sites).
+
 %% This function fails if `Site' reports any site that must be stopped
 %% according to the spec as running.
 no_stopped_nodes_reported_as_running(Site, #{sites := Sites}) ->
@@ -1897,7 +2027,9 @@ initialization_hooks(RuntimeData, Trace) ->
 setup_hooks(Site) ->
   classy:on_node_init(
     fun() ->
-        classy_node:maybe_init_the_site(Site)
+        classy_node:maybe_init_the_site(Site),
+        classy:on_metadata_change(fun ?MODULE:on_metadata_change/3, 0),
+        classy:on_node_classify(fun ?MODULE:on_node_classify/1, 0)
     end,
     0).
 
@@ -1942,6 +2074,12 @@ post_vote(Result, Id, Ref) ->
 
 vote_on_fail(FailInfo, Ref) ->
   ?tp(classy_test_vote_on_fail, FailInfo#{test_ref => Ref}).
+
+on_metadata_change(Cluster, Site, Meta) ->
+  ?tp(notice, test_update_meta, Meta#{cluster => Cluster, site => Site}).
+
+on_node_classify(Meta) ->
+  maps:keys(Meta).
 
 verify_no_votes(Nodes) ->
   %% TODO: using retry due to sporadic votes spawned by

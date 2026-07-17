@@ -43,6 +43,7 @@
 -define(on_peer_restart, on_peer_restart).
 -define(on_peer_node_change, on_peer_node_change).
 -define(on_node_classify, on_node_classify).
+-define(on_metadata_change, on_metadata_change).
 
 %% Run levels:
 -define(stopped, stopped).
