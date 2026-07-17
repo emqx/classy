@@ -296,7 +296,7 @@ writes or deletes coming from a single process are always interleaved with a dat
 If some process needs to reliably update a large number of records at once,
 it's better to use @ref{classy_table:atomically/2}.
 """.
--spec write(tab(), _Key, _Val) -> ok.
+-spec write(tab(), _Key, _Val) -> ok | {error, _}.
 write(Tab, Key, Val) ->
   gen_server:call(
     ?via(Tab),
@@ -320,7 +320,7 @@ Delete a record from the table.
 From durability perspective,
 it has the same properties as @ref{classy_table:write/3}.
 """.
--spec delete(tab(), _Key) -> ok.
+-spec delete(tab(), _Key) -> ok | {error, _}.
 delete(Tab, Key) ->
   gen_server:call(
     ?via(Tab),
@@ -436,7 +436,7 @@ If key doesn't exist, then 0 is assumed as the default.
 Returns an error if value of the key is not an integer.
 """.
 -spec update_counter(tab(), _Key, integer()) -> {ok, integer()} | {error, _}.
-update_counter(Tab, Key, Incr) ->
+update_counter(Tab, Key, Incr) when is_integer(Incr) ->
   gen_server:call(
     ?via(Tab),
     #call_update_counter{k = Key, incr = Incr},
@@ -453,7 +453,6 @@ This is a durable operation.
 WARNING: this operation races with all pending @code{write}, @code{delete} or @code{update_counter} operations.
 When these operations are issued simultaneously with @code{clear},
 the behavior is undefined.
-In perticular, they can return success when in fact nothing was committed.
 """.
 -spec clear(tab()) -> ok.
 clear(Tab) ->
@@ -1015,7 +1014,7 @@ send_pending_replies(FlushResult, S = #s{pending_replies = Pending}) ->
 handle_clear(S0 = #s{log = Log, log_size = LogSize}) ->
   ok = do_write_log(Log, [?clear]),
   S = log_effects(normal, ?clear, S0#s{log_size = LogSize + 1}),
-  send_pending_replies(ok, S).
+  send_pending_replies({error, cleared}, S).
 
 handle_drop(From, S = #s{ets = Ets, log = Log}) ->
   exec_on_update_clear(S),
