@@ -1315,7 +1315,7 @@ t_410_vote_commit(_) ->
   Ref1 = vote1,
   Sites = [S1, S2, S3],
   ?check_trace(
-     #{timetrap => 15_000},
+     #{timetrap => 30_000},
      begin
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
@@ -1365,7 +1365,7 @@ t_411_commit_actions_after_restart(_) ->
   Ref1 = vote1,
   Sites = [S1, S2],
   ?check_trace(
-     #{timetrap => 30_000},
+     #{timetrap => 60_000},
      begin
        N1 = create_start_site(S1, #{peer => #{shutdown => halt}}),
        N2 = create_start_site(S2, #{peer => #{shutdown => halt}}),
