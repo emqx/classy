@@ -34,6 +34,10 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , node_sets/0
         , prep_stop/0
         , prep_stop/1
+
+        , site_prop_set/2
+        , site_prop_lookup/1
+        , site_prop_delete/1
         ]).
 
 -export([ on_node_init/2
@@ -333,6 +337,36 @@ This is helpful if changing the run level involves stopping or starting OTP appl
 prep_stop(Reason) ->
   classy_node:prep_stop(Reason),
   classy_sup:prep_stop().
+
+-doc """
+Persistentley set a site property.
+
+These properties survive all cluster changes,
+they don't get cleaned automatically.
+
+WARNING: The purpose of node globals is to aid with node migration activities,
+such as migrating to classy application or between major releases.
+
+Do NOT use this feature for arbitrary application data,
+use separate @code{classy_table}s instead.
+""".
+-spec site_prop_set(_Key, _Val) -> ok | {error, _}.
+site_prop_set(K, V) ->
+  classy_node:global_set(K, V).
+
+-doc """
+Lookup a site property.
+""".
+-spec site_prop_lookup(_Key) -> list().
+site_prop_lookup(Key) ->
+  classy_node:global_lookup(Key).
+
+-doc """
+Delete a site property.
+""".
+-spec site_prop_delete(_Key) -> ok | {error, _}.
+site_prop_delete(Key) ->
+  classy_node:global_delete(Key).
 
 %%--------------------------------------------------------------------------------
 %% Cluster management

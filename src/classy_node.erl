@@ -370,36 +370,21 @@ notify_mem_deltas(Cluster, Deltas) ->
 prep_stop(Reason) ->
   classy_hook:foreach(?on_prep_stop, [Reason]).
 
--doc """
-Set a global persistent node property.
-
-These properties survive all cluster changes,
-they don't get cleaned automatically.
-
-WARNING: The purpose of node globals is to aid with node migration activities,
-such as migrating to classy application or between major releases.
-
-Do NOT use this feature for arbitrary application data,
-use separate @code{classy_table}s instead.
-""".
--spec global_set(term(), term()) -> ok.
+-doc false.
+-spec global_set(term(), term()) -> ok | {error, _}.
 global_set(Key, Val) ->
   classy_table:write(
     ?globals,
     #custom_g{k = Key},
     Val).
 
--doc """
-Lookup a global property.
-""".
+-doc false.
 -spec global_lookup(term()) -> list().
 global_lookup(Key) ->
   classy_table:lookup(?globals, #custom_g{k = Key}).
 
--doc """
-Delete a global property.
-""".
--spec global_delete(term()) -> ok.
+-doc false.
+-spec global_delete(term()) -> ok | {error, _}.
 global_delete(Key) ->
   classy_table:delete(?globals, #custom_g{k = Key}).
 

@@ -787,7 +787,7 @@ t_092_link_detect(_) ->
      ]).
 
 %% This testcase verifies `classy_node:global_(set|lookup|delete)' APIs
-t_093_globals(_) ->
+t_093_site_props(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   ?check_trace(
@@ -801,28 +801,28 @@ t_093_globals(_) ->
        %% First, all globals are empty:
        ?assertMatch([], ?ON(S1, classy_node:global_lookup(foo))),
        %% Set a global:
-       ?assertMatch(ok, ?ON(S1, classy_node:global_set(foo, foo))),
-       ?assertMatch(ok, ?ON(S2, classy_node:global_set(bar, bar))),
-       ?assertMatch([foo], ?ON(S1, classy_node:global_lookup(foo))),
-       ?assertMatch([bar], ?ON(S2, classy_node:global_lookup(bar))),
+       ?assertMatch(ok, ?ON(S1, classy:site_prop_set(foo, foo))),
+       ?assertMatch(ok, ?ON(S2, classy:site_prop_set(bar, bar))),
+       ?assertMatch([foo], ?ON(S1, classy:site_prop_lookup(foo))),
+       ?assertMatch([bar], ?ON(S2, classy:site_prop_lookup(bar))),
        %% Restart node, the value should remain:
        [stop_site(I) || I <- [S1, S2]],
        [restart_site(I) || I <- [S1, S2]],
-       ?assertMatch([foo], ?ON(S1, classy_node:global_lookup(foo))),
-       ?assertMatch([bar], ?ON(S2, classy_node:global_lookup(bar))),
+       ?assertMatch([foo], ?ON(S1, classy:site_prop_lookup(foo))),
+       ?assertMatch([bar], ?ON(S2, classy:site_prop_lookup(bar))),
        %% Join the nodes:
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
        wait_site_joined([S1, S2], Cluster1, S2),
        %% Both should retain their globals:
-       ?assertMatch([foo], ?ON(S1, classy_node:global_lookup(foo))),
-       ?assertMatch([bar], ?ON(S2, classy_node:global_lookup(bar))),
+       ?assertMatch([foo], ?ON(S1, classy:site_prop_lookup(foo))),
+       ?assertMatch([bar], ?ON(S2, classy:site_prop_lookup(bar))),
        %% Test deletion.
-       ?assertMatch(ok, ?ON(S1, classy_node:global_delete(foo))),
-       ?assertMatch([], ?ON(S1, classy_node:global_lookup(foo))),
+       ?assertMatch(ok, ?ON(S1, classy:site_prop_delete(foo))),
+       ?assertMatch([], ?ON(S1, classy:site_prop_lookup(foo))),
        %% Restart site, deletion should be preserved:
        stop_site(S1),
        restart_site(S1),
-       ?assertMatch([], ?ON(S1, classy_node:global_lookup(foo)))
+       ?assertMatch([], ?ON(S1, classy:site_prop_lookup(foo)))
      end,
      [ fun no_unexpected_events/1
      ]).
