@@ -16,6 +16,7 @@ This MFA can contain calls to various @code{classy:on_...} functions.
 -export([ info/0
         , info/1
         , info/2
+        , get_meta/1
         , n_restarts/0
         , n_restarts/1
         , node_to_site/0
@@ -34,6 +35,10 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , node_sets/0
         , prep_stop/0
         , prep_stop/1
+
+        , site_prop_set/2
+        , site_prop_lookup/1
+        , site_prop_delete/1
         ]).
 
 -export([ on_node_init/2
@@ -55,6 +60,7 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , pre_autocluster/2
         , run_level/2
         , enrich_site_info/2
+        , on_metadata_change/2
         ]).
 
 -export_type([ cluster_id/0
@@ -65,6 +71,7 @@ This MFA can contain calls to various @code{classy:on_...} functions.
 
              , peer_info/0
              , info/0
+             , site_metadata/0
              , cluster_info/0
 
              , run_level/0
@@ -109,6 +116,8 @@ Unique random persistent identifier of the site.
          , peers       := #{site() => peer_info()}
          , atom()      => _
          }.
+
+-type site_metadata() :: map().
 
 -type cluster_info() ::
         #{ infos     := #{node() => info()}
@@ -255,6 +264,17 @@ info(_Hops, Nodes) ->
    }.
 
 -doc """
+Get cached site metadata for a remote site.
+
+NOTE: This function works even if the site is down.
+
+@xref{classy_site_metadata:set/2}, @ref{classy_site_metadata:delete/1}, @ref{classy_site_metadata:lookup/1}.
+""".
+-spec get_meta(classy:site()) -> {ok, info()} | undefined.
+get_meta(Site) ->
+  classy_node:get_meta(Site).
+
+-doc """
 Return the total number of times the site has been restarted.
 A fresh node starts with this value = 0.
 
@@ -333,6 +353,36 @@ This is helpful if changing the run level involves stopping or starting OTP appl
 prep_stop(Reason) ->
   classy_node:prep_stop(Reason),
   classy_sup:prep_stop().
+
+-doc """
+Persistentley set a site property.
+
+These properties survive all cluster changes,
+they don't get cleaned automatically.
+
+WARNING: The purpose of node globals is to aid with node migration activities,
+such as migrating to classy application or between major releases.
+
+Do NOT use this feature for arbitrary application data,
+use separate @code{classy_table}s instead.
+""".
+-spec site_prop_set(_Key, _Val) -> ok | {error, _}.
+site_prop_set(K, V) ->
+  classy_node:global_set(K, V).
+
+-doc """
+Lookup a site property.
+""".
+-spec site_prop_lookup(_Key) -> list().
+site_prop_lookup(Key) ->
+  classy_node:global_lookup(Key).
+
+-doc """
+Delete a site property.
+""".
+-spec site_prop_delete(_Key) -> ok | {error, _}.
+site_prop_delete(Key) ->
+  classy_node:global_delete(Key).
 
 %%--------------------------------------------------------------------------------
 %% Cluster management
@@ -643,7 +693,7 @@ based on @ref{t:classy:info/0}.
 @xref{classy:enrich_site_info/2}, @xref{classy:node_sets/0}.
 """.
 -spec on_node_classify(
-        fun((map()) -> [node_set()]),
+        fun((site_metadata()) -> [node_set()]),
         classy_hook:prio()
        ) -> classy_hook:hook().
 on_node_classify(Hook, Prio) ->
@@ -780,6 +830,16 @@ Register a hook that can add entries to the map returned by @ref{classy:info/0}.
        ) -> classy_hook:hook().
 enrich_site_info(Hook, Prio) ->
   classy_hook:insert(?on_enrich_site_info, Hook, Prio).
+
+-doc """
+Register a hook that is called when metadata of a site (local or remote) changes.
+""".
+-spec on_metadata_change(
+        fun((cluster_id(), site(), site_metadata()) -> _),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
+on_metadata_change(Hook, Prio) ->
+  classy_hook:insert(?on_metadata_change, Hook, Prio).
 
 %%================================================================================
 %% Internal exports

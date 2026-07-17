@@ -21,10 +21,12 @@ Management of the local site and node.
         , node_of_site/2
         , node_to_site/0
         , n_restarts/1
+        , get_meta/1
         , prep_stop/1
         , global_set/2
         , global_lookup/1
         , global_delete/1
+        , update_meta/0
         ]).
 
 %% behavior callbacks:
@@ -61,6 +63,7 @@ Management of the local site and node.
         { cluster :: classy:cluster_id()
         , data :: #{classy:site() => classy_membership:update()}
         }).
+-record(call_update_meta, {}).
 
 %% Type of records used to store arbitrary data in the ?globals table.
 -record(custom_g, {k}).
@@ -225,6 +228,16 @@ n_restarts(Site) ->
       undefined
   end.
 
+-doc false.
+-spec get_meta(classy:site()) -> {ok, map()} | undefined.
+get_meta(Site) ->
+  case classy_table:lookup(?site_info, Site) of
+    [#site_info{meta = Meta}] ->
+      {ok, Meta};
+    [] ->
+      undefined
+  end.
+
 %%================================================================================
 %% behavior callbacks
 %%================================================================================
@@ -370,38 +383,28 @@ notify_mem_deltas(Cluster, Deltas) ->
 prep_stop(Reason) ->
   classy_hook:foreach(?on_prep_stop, [Reason]).
 
--doc """
-Set a global persistent node property.
-
-These properties survive all cluster changes,
-they don't get cleaned automatically.
-
-WARNING: The purpose of node globals is to aid with node migration activities,
-such as migrating to classy application or between major releases.
-
-Do NOT use this feature for arbitrary application data,
-use separate @code{classy_table}s instead.
-""".
--spec global_set(term(), term()) -> ok.
+-doc false.
+-spec global_set(term(), term()) -> ok | {error, _}.
 global_set(Key, Val) ->
   classy_table:write(
     ?globals,
     #custom_g{k = Key},
     Val).
 
--doc """
-Lookup a global property.
-""".
+-doc false.
 -spec global_lookup(term()) -> list().
 global_lookup(Key) ->
   classy_table:lookup(?globals, #custom_g{k = Key}).
 
--doc """
-Delete a global property.
-""".
--spec global_delete(term()) -> ok.
+-doc false.
+-spec global_delete(term()) -> ok | {error, _}.
 global_delete(Key) ->
   classy_table:delete(?globals, #custom_g{k = Key}).
+
+-doc false.
+-spec update_meta() -> ok.
+update_meta() ->
+  gen_server:call(?SERVER, #call_update_meta{}, infinity).
 
 %%================================================================================
 %% Internal functions
@@ -585,7 +588,7 @@ ensure_the_id(Key, OnCreateHook, HookArgs, Default) ->
   end.
 
 -spec adjust_run_level(#s{}) -> #s{}.
-adjust_run_level(S = #s{cluster = Cluster, site = Site}) ->
+adjust_run_level(S) ->
   %% NOTE: must be called after `classify':
   NKnown = length(intersection(classy_lib:to_cluster_sets())),
   NConnected = length(intersection(classy_lib:quorum_sets())),
@@ -598,9 +601,6 @@ adjust_run_level(S = #s{cluster = Cluster, site = Site}) ->
                false -> ?single
              end,
   set_run_level(RunLevel),
-  %% Propagate info to peers:
-  Info = classy_hook:fold(?on_enrich_site_info, [], #{rl => RunLevel, vsn => ?classy_proto_vsn}),
-  classy_membership:set_info(Cluster, Site, Info),
   S.
 
 %% Start membership processes for all known former clusters, in order
@@ -719,14 +719,18 @@ import_deltas(Updated, S0 = #s{cluster = Cluster, site = Local}) ->
 %% 2. Diff the current information with the past
 %% 3. Run the hooks if the site's status changes
 %% 4. Schedule writing of the updated data to the DB
-update_site_info(Peer, New0 = #site_info{isup = IsUp, nrestarts = NR}, #s{cluster = Cluster, site = Local}) ->
+update_site_info(
+  Peer,
+  #site_info{isup = IsUp, nrestarts = NR, meta = Meta} = New0,
+  #s{cluster = Cluster, site = Local}
+) ->
   Node = maps:get(Peer, classy_membership:node_of_site(Cluster, Local), undefined),
   IsConn = lists:member(Node, [node() | nodes()]),
   New1 = New0#site_info{isconn = IsConn, node = Node},
   %% Get the previous data or use the defaults:
   Old = classy_table:lookup(?site_info, Peer),
   case Old of
-    [#site_info{isup = IsUp0, nrestarts = NR0, node = Node0, isconn = IsConn0, conn_change_time = CCT0}] ->
+    [#site_info{isup = IsUp0, nrestarts = NR0, node = Node0, isconn = IsConn0, conn_change_time = CCT0, meta = Meta0}] ->
       ok;
     [] ->
       IsUp0 = false,
@@ -736,7 +740,8 @@ update_site_info(Peer, New0 = #site_info{isup = IsUp, nrestarts = NR}, #s{cluste
       %% restarted:
       NR0 = NR,
       %% Do not report changed host as well:
-      Node0 = Node
+      Node0 = Node,
+      Meta0 = #{}
   end,
   %% Should we update connection status change time?
   CCT = if IsConn0 =/= IsConn; not is_integer(CCT0) ->
@@ -747,7 +752,7 @@ update_site_info(Peer, New0 = #site_info{isup = IsUp, nrestarts = NR}, #s{cluste
   New = New1#site_info{conn_change_time = CCT},
   %% Schedule saving of the data, if changed:
   case [New] of
-    Old -> [];
+    Old -> ok;
     _   -> classy_table:dirty_write(?site_info, Peer, New)
   end,
   %% Note: hooks are executed after the data is staged to RAM, but
@@ -766,17 +771,22 @@ update_site_info(Peer, New0 = #site_info{isup = IsUp, nrestarts = NR}, #s{cluste
   if Node =/= Node0 ->
       classy_hook:foreach(?on_peer_node_change, [Peer, Node0, Node]);
      true ->
-        []
+      ok
   end,
   if Peer =/= Local, NR > NR0, IsUp ->
       classy_hook:foreach(?on_peer_restart, [Peer, NR]);
      true ->
-      []
+      ok
   end,
   if Peer =/= Local, IsConn0 =/= IsConn ->
       classy_hook:foreach(?on_peer_connection_status_change, [Peer, Node, IsConn]);
      true ->
-      []
+      ok
+  end,
+  if Meta0 =/= Meta ->
+      classy_hook:foreach(?on_metadata_change, [Cluster, Peer, Meta]);
+     true ->
+      ok
   end.
 
 -spec classify() -> ok.
