@@ -583,7 +583,7 @@ ensure_the_id(Key, OnCreateHook, HookArgs, Default) ->
         undefined ->
           NRandBytes = application:get_env(classy, rand_id_bytes, 16),
           true = is_integer(NRandBytes) andalso NRandBytes > 0, %% assert
-          Val = binary:encode_hex(crypto:strong_rand_bytes(NRandBytes), uppercase);
+          Val = base64:encode(crypto:strong_rand_bytes(NRandBytes), #{padding => false, mode => urlsafe});
         Val when is_binary(Val) ->
           ok
       end,

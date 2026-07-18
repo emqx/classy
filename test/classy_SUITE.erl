@@ -188,8 +188,8 @@ t_031_leave_by_self(_) ->
      begin
        %% Prepare the system:
        N1 = create_start_site(S1, #{}),
-       N2 = create_start_site(S2, #{}),
-       N3 = create_start_site(S3, #{}),
+       _N2 = create_start_site(S2, #{}),
+       _N3 = create_start_site(S3, #{}),
        #{ site := S1
         , cluster := Cluster1
         } = ?ON(S1, classy_node:hello()),
