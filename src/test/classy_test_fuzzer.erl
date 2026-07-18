@@ -51,6 +51,7 @@
 -endif.
 
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
+-include("classy_internal.hrl").
 
 -dialyzer({nowarn_function,
            [ cmds/2
@@ -184,7 +185,10 @@ kick_site(Origin, Target, Intent, S) ->
           end,
           ?rpc_timeout)
     end,
-    ?match_event(#{?snk_kind := classy_member_leave, remote := Target}),
+    fun(#{?snk_kind := classy_member_leave, remote := T})    -> T =:= Target;
+       (#{?snk_kind := ?classy_kicked_remotely, local := T}) -> T =:= Target;
+       (_)                                                   -> false
+    end,
     S).
 
 stop_site(Site) ->
@@ -577,7 +581,7 @@ exec_and_wait_sync(Sites0, Action, Filter, S) ->
     fun(Event) ->
         case Filter(Event) of
           true ->
-            #{?snk_meta := #{local := Local}} = Event,
+            #{local := Local} = Event,
             lists:member(Local, Sites);
           false ->
             false

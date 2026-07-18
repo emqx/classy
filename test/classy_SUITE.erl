@@ -177,6 +177,47 @@ t_030_kick(_) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies that when the node leaves the cluster by itself, it doesn't go through `kicked_remotely' routine:
+t_031_leave_by_self(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
+  ?check_trace(
+     #{timetrap => 20_000},
+     begin
+       %% Prepare the system:
+       N1 = create_start_site(S1, #{}),
+       _N2 = create_start_site(S2, #{}),
+       _N3 = create_start_site(S3, #{}),
+       #{ site := S1
+        , cluster := Cluster1
+        } = ?ON(S1, classy_node:hello()),
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       ?assertMatch(ok, ?ON(S3, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster1, S2),
+       wait_site_joined(Sites, Cluster1, S3),
+       ?tp(notice, test_all_joined, #{}),
+       ?assertEqual(
+          [Sites || _ <- Sites],
+          [?ON(I, classy:sites(all)) || I <- Sites]),
+       %% Now all sites leave by themselves:
+       ?assertMatch(ok, ?ON(S1, classy:kick_site(S1, leave))),
+       ?assertMatch(ok, ?ON(S2, classy:kick_site(S2, leave))),
+       ?assertMatch(ok, ?ON(S3, classy:kick_site(S3, leave))),
+       ?tp(notice, test_all_kicked, #{}),
+       ?retry(1000, 10,
+              ?assertEqual(
+                 [[I] || I <- Sites],
+                 [?ON(I, classy:sites()) || I <- Sites]))
+     end,
+     [ fun no_unexpected_events/1
+     , {'no_kicked_remotely',
+        fun(Trace) ->
+            ?assertMatch([], ?of_kind(?classy_kicked_remotely, Trace))
+        end}
+     ]).
+
 %% Verify that node can be kicked from the cluster while down:
 t_040_kick_in_absentia(_) ->
   S1 = <<"s1">>,
@@ -303,16 +344,16 @@ t_060_at_lower_level(_) ->
        %% Prepare the system:
        _N1 = create_start_site(S1, #{}),
        ct:sleep(1000),
+       ?assertEqual(quorum, ?ON(S1, classy:run_level())),
        ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
-       ?assertMatch(
-          ok,
-          ?ON(S1,
-              classy:at_lower_level(
-                single,
-                fun() ->
-                    hello
-                end))),
-       ct:sleep(1000)
+       ok = ?ON(S1,
+                classy:at_lower_level(
+                  single,
+                  fun() ->
+                      ?defer_assert(?assertEqual(single, classy:run_level()))
+                  end)),
+       ct:sleep(1000),
+       ?assertEqual(quorum, ?ON(S1, classy:run_level()))
      end,
      [ {"run level transitions",
         fun(Trace) ->
@@ -1616,6 +1657,8 @@ t_500_metadata_crud(_) ->
   ?check_trace(
      #{timetrap => 15_000},
      begin
+       %% 0. Check that run_level returns `stopped' when classy is stopped (it's not running on the ct node):
+       ?assertEqual(stopped, classy:run_level()),
        %% Setup:
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
@@ -1661,21 +1704,19 @@ t_500_metadata_crud(_) ->
        %% 3. Restart S1. Metadata should be preserved:
        stop_site(S1),
        ?block_until(#{?snk_kind := classy_peer_disconnected, site := S1}),
-       ct:sleep(10),
        check_metadata({ok, #{bar => baz}}, S1, [S2]),
        ?wait_async_action(
           restart_site(S1),
           #{?snk_kind := classy_peer_connected, site := S1}),
-       ct:sleep(10),
        check_metadata({ok, #{bar => baz}}, S1, Sites),
        %% 4. S1 leaves. Its metadata should be reset.
        ?assertMatch(
           ok,
           ?ON(S1, classy:kick_site(S1, leave))),
-       ct:sleep(10),
-       ?assertEqual(
-          #{},
-          ?ON(S1, classy_site_metadata:get_all()))
+       ?retry(100, 10,
+              ?assertEqual(
+                 #{},
+                 ?ON(S1, classy_site_metadata:get_all())))
      end,
      [fun no_unexpected_events/1]).
 
@@ -1699,7 +1740,7 @@ t_510_metadata_classify(_) ->
        ?ON(S1, classy_site_metadata:set(bar, baz)),
 
        ?block_until(#{?snk_kind := test_update_meta, site := S1, ?snk_meta := #{node := N2}}),
-       ct:sleep(10),
+       ct:sleep(100),
        %% 2. Verify site sets:
        ?assertEqual(
           [[S1], [S1]],
@@ -1726,17 +1767,20 @@ t_510_metadata_classify(_) ->
           ok,
           ?ON(S2, classy:kick_site(S1, leave))),
        wait_site_kicked([S2], Cluster, S1),
-       ct:sleep(10),
-       ?assertEqual([], ?ON(S2, classy:sites(foo))),
-       ?assertEqual([], ?ON(S2, classy:sites(bar)))
+       ?retry(100, 10,
+              begin
+                ?assertEqual([], ?ON(S2, classy:sites(foo))),
+                ?assertEqual([], ?ON(S2, classy:sites(bar)))
+              end)
      end,
      [fun no_unexpected_events/1]).
 
 check_metadata(Expected, Target, Sites) ->
-  ?assertEqual(
-     [Expected || _ <- Sites],
-     [?ON(I, classy:get_meta(Target)) || I <- Sites],
-     Sites).
+  ?retry(100, 10,
+         ?assertEqual(
+            [Expected || _ <- Sites],
+            [?ON(I, classy:get_meta(Target)) || I <- Sites],
+            Sites)).
 
 %% This function fails if `Site' reports any site that must be stopped
 %% according to the spec as running.
@@ -2029,9 +2073,21 @@ setup_hooks(Site) ->
     fun() ->
         classy_node:maybe_init_the_site(Site),
         classy:on_metadata_change(fun ?MODULE:on_metadata_change/3, 0),
-        classy:on_node_classify(fun ?MODULE:on_node_classify/1, 0)
+        classy:on_node_classify(fun ?MODULE:on_node_classify/1, 0),
+        classy:run_level(fun ?MODULE:on_run_level/2, 0)
     end,
     0).
+
+on_run_level(Prev, Next) ->
+  ?defer_assert(?assertEqual(Next, classy:run_level())),
+  ?defer_assert(case {Prev, Next} of
+                  {stopped, single} -> ok;
+                  {single, cluster} -> ok;
+                  {cluster, quorum} -> ok;
+                  {quorum, cluster} -> ok;
+                  {cluster, single} -> ok;
+                  {single, stopped} -> ok
+                end).
 
 make_vote(HowToPreVote, HowToVote, Ref, NCommitSteps) ->
   #{ prepare  => {?MODULE, vote_prepare, [HowToPreVote, HowToVote, Ref]}

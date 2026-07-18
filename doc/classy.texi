@@ -299,6 +299,15 @@ The document was typeset with
 
       Maximum run time for any hook.
 
+    @defen{rand_id_bytes, @code{pos_integer()}, 16}
+
+      Number of bytes used in random identifiers,
+      such as site IDs and cluster IDs.
+
+      WARNING: this value should be sufficiently large to account for the birthday problem.
+      Note that new cluster IDs are created every time a node leaves a cluster,
+      so the number of unique random IDs is not limited to the number of sites.
+
   @section Peer
 
     @defen{sync_timeout, @code{non_neg_integer()}, 1000}

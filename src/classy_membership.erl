@@ -77,6 +77,7 @@ Business code should not use it directly.
 
 -type update() ::
         #{ mem      := false
+         , origin   := classy:site() | undefined %% Who kicked the site
          } |
         #{ mem      := true
          , host     => node()
@@ -747,27 +748,35 @@ notify(S = #s{cluster = Cluster, site = Local, clock = C, events_since = EventsS
 -spec peer_to_update(classy:cluster_id(), classy:site(), classy:site()) -> update().
 peer_to_update(Cluster, Local, Site) ->
   Get = fun(Key) ->
-            [Val || #pv_last{op = #op_set{val = Val}} <- classy_table:lookup(
-                                                           ?ptab,
-                                                           #pk_last{c = Cluster, l = Local, k = Key})]
+            [{Origin, Val} ||
+              #pv_last{op = #op_set{origin = Origin, val = Val}}
+                <- classy_table:lookup(
+                     ?ptab,
+                     #pk_last{c = Cluster, l = Local, k = Key})]
         end,
   case Get(#mem{s = Site}) of
-    [true] ->
+    [{_MemOrigin, true}] ->
       U0 = #{mem => true},
       U1 = case Get(#host{s = Site}) of
-             [Host] -> U0#{host => Host};
-             []     -> U0
+             [{_, Host}] -> U0#{host => Host};
+             []          -> U0
            end,
       U = case Get(#info{s = Site}) of
-            [Meta] -> U1#{meta => Meta};
-            []     -> U1
+            [{_, Meta}] -> U1#{meta => Meta};
+            []          -> U1
           end,
       case Get(#live{s = Site}) of
-        [Live] -> U#{liveness => from_liveness(Live)};
-        []     -> U
+        [{_, Live}] -> U#{liveness => from_liveness(Live)};
+        []          -> U
       end;
-    _ ->
-      #{mem => false}
+    [{MemOrigin, false}] ->
+      #{ mem    => false
+       , origin => MemOrigin
+       };
+    [] ->
+      #{ mem    => false
+       , origin => undefined
+       }
   end.
 
 -spec handle_cleanup(pos_integer(), #s{}) -> ok.

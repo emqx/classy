@@ -30,6 +30,7 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , quorum/1
         , fault_tolerance/1
         , at_lower_level/2
+        , run_level/0
         , the_site/0
         , the_cluster/0
         , node_sets/0
@@ -513,6 +514,15 @@ but before the function is executed.
 -spec at_lower_level(run_level(), fun(() -> any())) -> ok | {error, _}.
 at_lower_level(RunLevel, Fun) ->
   classy_rl_changer:at_lower_level(RunLevel, Fun).
+
+-doc """
+Get current run level.
+
+NOTE: the value is updated before @link{classy:run_level/2} hooks run.
+""".
+-spec run_level() -> run_level().
+run_level() ->
+  classy_rl_changer:get(current).
 
 -doc """
 Get ID of the local site.
