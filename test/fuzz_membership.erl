@@ -102,7 +102,7 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
       || I <- ExpectedSites,
          {ok, Node} <- [classy_SUITE:fuzz_node_name(I)],
          classy_test_fuzzer:is_running(I, S)],
-     classy_test_fuzzer:call(Site, classy, nodes, [running]),
+     classy_test_fuzzer:call(Site, classy, nodes, [connected]),
      #{ on            => Site
       , msg           => "View of running nodes"
       , '~diagnostic' => classy_test_fuzzer:diagnostic(S)

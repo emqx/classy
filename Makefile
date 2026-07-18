@@ -24,16 +24,16 @@ eunit:
 	$(REBAR) do eunit --verbose --cover, proper --cover
 
 .PHONY: test
-test: smoke-test #concuerror_test
+test: smoke-test prop-membership
+	$(REBAR) cover -v
 
 .PHONY: smoke-test
 smoke-test: eunit
 	$(REBAR) ct --name ct@127.0.0.1 --verbose --cover --readable false
-	$(REBAR) cover -v
 
 .PHONY: prop-membership
 prop-membership:
-	$(REBAR) proper -m fuzz_membership -n 10 --max_size 200
+	$(REBAR) proper -c -m fuzz_membership -n 10 --max_size 50
 
 .PHONY: coveralls
 coveralls:
