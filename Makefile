@@ -2,6 +2,9 @@ BUILD_DIR := $(CURDIR)/_build
 
 REBAR := rebar3
 
+FUZZ_N ?= 10
+FUZZ_SIZE ?= 50
+
 compile:
 	$(REBAR) do compile, dialyzer, xref
 
@@ -33,7 +36,7 @@ smoke-test: eunit
 
 .PHONY: prop-membership
 prop-membership:
-	$(REBAR) proper -c -m fuzz_membership -n 10 --max_size 50 --noshrink
+	$(REBAR) proper -c -m fuzz_membership -n $(FUZZ_N) --max_size $(FUZZ_SIZE) --noshrink
 
 .PHONY: coveralls
 coveralls:
