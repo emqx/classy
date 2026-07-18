@@ -199,11 +199,16 @@ peer_info() ->
 -doc false.
 -spec node_of_site(classy:site(), boolean()) -> {ok, node()} | undefined.
 node_of_site(Site, OnlyConnected) ->
-  case classy_table:lookup(?site_info, Site) of
-    [#site_info{isconn = IsConnected, node = Node}] when IsConnected; not OnlyConnected ->
-      {ok, Node};
+  case the_site() of
+    {ok, Site} ->
+      {ok, node()};
     _ ->
-      undefined
+      case classy_table:lookup(?site_info, Site) of
+        [#site_info{isconn = IsConnected, node = Node}] when IsConnected; not OnlyConnected ->
+          {ok, Node};
+        _ ->
+          undefined
+      end
   end.
 
 -doc false.
