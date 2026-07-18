@@ -278,16 +278,14 @@ handle_call(#call_join{} = Call, _From, S0) ->
     Err ->
       {reply, Err, S0}
   end;
-handle_call(#call_kick{site = Target, intent = Intent}, _From, S) ->
-  Ret =
-    maybe
-      {ok, Cluster} ?= the_cluster(),
-      {ok, Local} ?= the_site(),
-      handle_kick(Cluster, Local, Target, Intent)
-    else
-      _ -> {error, local_not_in_cluster}
-    end,
-  {reply, Ret, S};
+handle_call(#call_kick{site = Target, intent = Intent}, _From, S0) ->
+  maybe
+    {ok, S} ?= handle_kick(Target, Intent, S0),
+    {reply, ok, S}
+  else
+    {error, _} = Err ->
+      {reply, Err, S0}
+  end;
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => call
@@ -440,15 +438,21 @@ handle_membership_change_event(
 update_runtime(S) ->
   adjust_run_level(update_sites_status(S)).
 
-handle_kick(Cluster, Local, Target, Intent) ->
-  case classy_hook:all(?on_pre_kick, [Cluster, Target, Intent]) of
-    ok ->
-      classy_hook:foreach(?on_kick_decided, [Cluster, Target, Intent]),
-      Ret = classy_membership:set_member(Cluster, Local, Target, false),
-      classy_membership:flush(Cluster, Local),
-      Ret;
-    Err ->
-      Err
+handle_kick(Target, Intent, S = #s{site = Local}) when is_binary(Local) ->
+  maybe
+    {ok, Cluster} ?= the_cluster(),
+    ok ?= classy_hook:all(?on_pre_kick, [Cluster, Target, Intent]),
+    classy_hook:foreach(?on_kick_decided, [Cluster, Target, Intent]),
+    ok ?= classy_membership:set_member(Cluster, Local, Target, false),
+    classy_membership:flush(Cluster, Local),
+    if Target =:= Local ->
+        on_leave(S, Intent);
+       true ->
+        {ok, S}
+    end
+  else
+    undefined        -> {error, local_not_in_cluster};
+    {error, _} = Err -> Err
   end.
 
 handle_join(S, Call) ->
@@ -499,9 +503,8 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
     {ok, OldCluster} when OldCluster =/= Cluster ->
       %% Site is currently in a different cluster. Leave it first:
       LeaveIntent = {join, #{node => Node, cluster => Cluster, join_intent => JoinIntent}},
-      case handle_kick(OldCluster, Local, Local, LeaveIntent) of
-        ok ->
-          {ok, S} = on_leave(S0, LeaveIntent),
+      case handle_kick(Local, LeaveIntent, S0) of
+        {ok, S} ->
           do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S);
         Err ->
           Err
@@ -654,13 +657,14 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
       MyNR = ?default_n_restarts
   end,
   case Deltas of
-    #{Local := #{mem := false}} ->
+    #{Local := #{mem := false, origin := Origin}} ->
       %% We got kicked remotely. In this case we don't bother
       %% importing the data and running the hooks, and go straight to
       %% `on_leave':
-      ?tp(warning, classy_kicked_remotely,
+      ?tp(warning, ?classy_kicked_remotely,
           #{ cluster => Cluster
            , local   => Local
+           , remote  => Origin
            }),
       case on_leave(S0, kicked) of
         {ok, S}          -> {ok, S};

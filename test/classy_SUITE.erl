@@ -177,6 +177,47 @@ t_030_kick(_) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies that when the node leaves the cluster by itself, it doesn't go through `kicked_remotely' routine:
+t_031_leave_by_self(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  S3 = <<"s3">>,
+  Sites = [S1, S2, S3],
+  ?check_trace(
+     #{timetrap => 20_000},
+     begin
+       %% Prepare the system:
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       N3 = create_start_site(S3, #{}),
+       #{ site := S1
+        , cluster := Cluster1
+        } = ?ON(S1, classy_node:hello()),
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       ?assertMatch(ok, ?ON(S3, classy:join_node(N1, join))),
+       wait_site_joined(Sites, Cluster1, S2),
+       wait_site_joined(Sites, Cluster1, S3),
+       ?tp(notice, test_all_joined, #{}),
+       ?assertEqual(
+          [Sites || _ <- Sites],
+          [?ON(I, classy:sites(all)) || I <- Sites]),
+       %% Now all sites leave by themselves:
+       ?assertMatch(ok, ?ON(S1, classy:kick_site(S1, leave))),
+       ?assertMatch(ok, ?ON(S2, classy:kick_site(S2, leave))),
+       ?assertMatch(ok, ?ON(S3, classy:kick_site(S3, leave))),
+       ?tp(notice, test_all_kicked, #{}),
+       ?retry(1000, 10,
+              ?assertEqual(
+                 [[I] || I <- Sites],
+                 [?ON(I, classy:sites()) || I <- Sites]))
+     end,
+     [ fun no_unexpected_events/1
+     , {'no_kicked_remotely',
+        fun(Trace) ->
+            ?assertMatch([], ?of_kind(?classy_kicked_remotely, Trace))
+        end}
+     ]).
+
 %% Verify that node can be kicked from the cluster while down:
 t_040_kick_in_absentia(_) ->
   S1 = <<"s1">>,
