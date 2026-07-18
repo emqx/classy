@@ -1661,21 +1661,19 @@ t_500_metadata_crud(_) ->
        %% 3. Restart S1. Metadata should be preserved:
        stop_site(S1),
        ?block_until(#{?snk_kind := classy_peer_disconnected, site := S1}),
-       ct:sleep(10),
        check_metadata({ok, #{bar => baz}}, S1, [S2]),
        ?wait_async_action(
           restart_site(S1),
           #{?snk_kind := classy_peer_connected, site := S1}),
-       ct:sleep(10),
        check_metadata({ok, #{bar => baz}}, S1, Sites),
        %% 4. S1 leaves. Its metadata should be reset.
        ?assertMatch(
           ok,
           ?ON(S1, classy:kick_site(S1, leave))),
-       ct:sleep(10),
-       ?assertEqual(
-          #{},
-          ?ON(S1, classy_site_metadata:get_all()))
+       ?retry(100, 10,
+              ?assertEqual(
+                 #{},
+                 ?ON(S1, classy_site_metadata:get_all())))
      end,
      [fun no_unexpected_events/1]).
 
@@ -1699,7 +1697,7 @@ t_510_metadata_classify(_) ->
        ?ON(S1, classy_site_metadata:set(bar, baz)),
 
        ?block_until(#{?snk_kind := test_update_meta, site := S1, ?snk_meta := #{node := N2}}),
-       ct:sleep(10),
+       ct:sleep(100),
        %% 2. Verify site sets:
        ?assertEqual(
           [[S1], [S1]],
@@ -1726,17 +1724,20 @@ t_510_metadata_classify(_) ->
           ok,
           ?ON(S2, classy:kick_site(S1, leave))),
        wait_site_kicked([S2], Cluster, S1),
-       ct:sleep(10),
-       ?assertEqual([], ?ON(S2, classy:sites(foo))),
-       ?assertEqual([], ?ON(S2, classy:sites(bar)))
+       ?retry(100, 10,
+              begin
+                ?assertEqual([], ?ON(S2, classy:sites(foo))),
+                ?assertEqual([], ?ON(S2, classy:sites(bar)))
+              end)
      end,
      [fun no_unexpected_events/1]).
 
 check_metadata(Expected, Target, Sites) ->
-  ?assertEqual(
-     [Expected || _ <- Sites],
-     [?ON(I, classy:get_meta(Target)) || I <- Sites],
-     Sites).
+  ?retry(100, 10,
+         ?assertEqual(
+            [Expected || _ <- Sites],
+            [?ON(I, classy:get_meta(Target)) || I <- Sites],
+            Sites)).
 
 %% This function fails if `Site' reports any site that must be stopped
 %% according to the spec as running.
