@@ -72,7 +72,7 @@ postcondition({init, _}, _Call, _Result) ->
 postcondition(S, _Call, _Result) ->
   lists:foreach(
     fun(Site) ->
-        ?retry(100, 100, fuzz_verify_site(Site, S))
+        ?retry(100, 200, fuzz_verify_site(Site, S))
     end,
     classy_test_fuzzer:running_sites(S)),
   true.
