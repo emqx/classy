@@ -1616,6 +1616,8 @@ t_500_metadata_crud(_) ->
   ?check_trace(
      #{timetrap => 15_000},
      begin
+       %% 0. Check that run_level returns `stopped' when classy is stopped (it's not running on the ct node):
+       ?assertEqual(stopped, classy:run_level()),
        %% Setup:
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),

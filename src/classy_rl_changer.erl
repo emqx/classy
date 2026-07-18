@@ -80,22 +80,21 @@ at_lower_level(RunLevel, Fun) ->
 -doc false.
 -spec get(current | set) -> classy:run_level().
 get(K) ->
-  Cntr = persistent_term:get(?pterm),
-  Idx = case K of
-          set     -> ?ctr_s;
-          current -> ?ctr_c
-        end,
-  to_atom(atomics:get(Cntr, Idx)).
+  try
+    Cntr = persistent_term:get(?pterm),
+    Idx = case K of
+            set     -> ?ctr_s;
+            current -> ?ctr_c
+          end,
+    to_atom(atomics:get(Cntr, Idx))
+  catch _:_ ->
+      ?stopped
+  end.
 
 -doc false.
 -spec enrich_site_info(classy:site_metadata()) -> classy:site_metadata().
 enrich_site_info(Info) ->
-  try
-    RL = get(current),
-    Info#{rl => RL}
-  catch
-    _:_ -> Info#{rl => stopped}
-  end.
+  Info#{rl => get(current)}.
 
 %%================================================================================
 %% Internal exports

@@ -304,7 +304,7 @@ The document was typeset with
       Number of bytes used in random identifiers,
       such as site IDs and cluster IDs.
 
-      WARNING: this value should be sufficiently large to account for birthday problem.
+      WARNING: this value should be sufficiently large to account for the birthday problem.
       Note that new cluster IDs are created every time a node leaves a cluster,
       so the number of unique random IDs is not limited to the number of sites.
 
