@@ -58,10 +58,13 @@ run_cmds(Cmds) ->
          familiar_cluster:set_fail(Cluster),
          false
      after
-       familiar:stop_cluster(Cluster, true)
+       ok = familiar:stop_cluster(Cluster, true)
      end,
-     [ fun classy_SUITE:no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun classy_SUITE:events_on_all_sites/1
+     , fun(Result, _Trace) ->
+           ?assert(Result)
+       end
      ]).
 
 postcondition({init, _}, _Call, _Result) ->
@@ -69,7 +72,7 @@ postcondition({init, _}, _Call, _Result) ->
 postcondition(S, _Call, _Result) ->
   lists:foreach(
     fun(Site) ->
-        ?retry(1000, 10, fuzz_verify_site(Site, S))
+        ?retry(100, 100, fuzz_verify_site(Site, S))
     end,
     classy_test_fuzzer:running_sites(S)),
   true.
@@ -81,7 +84,7 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
   ExpectedSites = classy_test_fuzzer:sites_of_cluster(Cluster, S),
   ?assertSameSet(
      ExpectedSites,
-     classy_test_fuzzer:call(Site, classy, sites, []),
+     classy_test_fuzzer:call(Site, classy, sites, [all]),
      #{ on            => Site
       , msg           => "View of the cluster"
       , '~diagnostic' => classy_test_fuzzer:diagnostic(S)

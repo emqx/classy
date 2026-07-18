@@ -17,6 +17,14 @@
 -include("src/classy_internal.hrl").
 -include("classy_test_macros.hrl").
 
+-import(classy_ct,
+        [ create_start_site/2
+        , create_start_site/3
+        , stop_site/1
+        , restart_site/1
+        , get_cluster/0
+        ]).
+
 %%================================================================================
 %% Tests
 %%================================================================================
@@ -54,7 +62,7 @@ t_010_cluster(_) ->
        ?assertMatch(ok, familiar:stop_site(S1)),
        ?assertMatch(ok, familiar:stop_site(S1))
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
 
@@ -173,7 +181,7 @@ t_030_kick(_) ->
         , clusters => [Cluster1]
         }
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
 
@@ -211,7 +219,53 @@ t_031_leave_by_self(_) ->
                  [[I] || I <- Sites],
                  [?ON(I, classy:sites()) || I <- Sites]))
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
+     , {'no_kicked_remotely',
+        fun(Trace) ->
+            ?assertMatch([], ?of_kind(?classy_kicked_remotely, Trace))
+        end}
+     ]).
+
+%% This testcase verifies behavior when a node leaves a cluster and then re-joins it.
+t_032_rejoin(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  Sites = [S1, S2],
+  ?check_trace(
+     #{timetrap => 20_000},
+     begin
+       %% Prepare the system:
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       #{ site := S1
+        , cluster := Cluster1
+        } = ?ON(S1, classy_node:hello()),
+       %% 1. Join for the first time:
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       verify_cluster_connected(Sites),
+       %% S2 leaves:
+       ?assertMatch(ok, ?ON(S2, classy:kick_site(S2, leave))),
+       ?retry(1000, 10,
+              ?assertEqual(
+                 [[I] || I <- Sites],
+                 [?ON(I, classy:sites()) || I <- Sites])),
+       %% S2 re-joins:
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       %% All peer information should be restored:
+       verify_cluster_connected(Sites),
+       %% 2. Do the same to S1:
+       ?assertMatch(ok, ?ON(S1, classy:kick_site(S1, leave))),
+       %% Cluster splits up:
+       ?retry(1000, 10,
+              ?assertEqual(
+                 [[I] || I <- Sites],
+                 [?ON(I, classy:sites()) || I <- Sites])),
+       %% S1 re-joins:
+       ?assertMatch(ok, ?ON(S1, classy:join_node(N2, join))),
+       %% All peer information should be restored:
+       verify_cluster_connected(Sites)
+     end,
+     [ fun classy_ct:no_unexpected_events/1
      , {'no_kicked_remotely',
         fun(Trace) ->
             ?assertMatch([], ?of_kind(?classy_kicked_remotely, Trace))
@@ -280,7 +334,7 @@ t_040_kick_in_absentia(_) ->
                           , ?snk_meta := #{node := N}
                           } <- Trace, N =:= N1])
         end}
-     , fun no_unexpected_events/1
+     , fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
 
@@ -331,7 +385,7 @@ t_050_pre_checks(_) ->
           ok,
           ?ON(S2, classy:kick_node(N1, force)))
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
 
@@ -364,7 +418,7 @@ t_060_at_lower_level(_) ->
                ],
                ?projection(to, ?of_kind(classy_change_run_level, Trace)))
         end}
-     , fun no_unexpected_events/1
+     , fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
 
@@ -506,7 +560,7 @@ t_070_cleanup(_) ->
        ?assertSameSet([S1, S2], ?ON(S1, classy:sites())),
        ?assertSameSet([S1, S2], ?ON(S2, classy:sites()))
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
 
@@ -564,7 +618,7 @@ t_071_membership_forget(_) ->
           maps:is_key(S3, PeersOfS1),
           S1Info)
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
 
@@ -605,7 +659,7 @@ t_080_desync(_) ->
               ?ON(I, classy:sites())))
         || I <- Sites]
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
 
@@ -674,7 +728,7 @@ t_090_info(_) ->
         || I <- [S1, S2]],
        ok
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
 
@@ -737,7 +791,7 @@ t_091_node_of_site(_) ->
           {ok, #{N1 => S1, N2 => S2}},
           ?ON(S1, classy:node_to_site()))
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
 
@@ -823,7 +877,7 @@ t_092_link_detect(_) ->
           classy_partition:bidi_link(CInfo3, 'missing1@badhost', 'missing2@badhost'),
           CInfo3)
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
 
@@ -865,7 +919,7 @@ t_093_site_props(_) ->
        restart_site(S1),
        ?assertMatch([], ?ON(S1, classy:site_prop_lookup(foo)))
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      ]).
 
 %% This testcase verifies basic functionality of autocluster.
@@ -904,7 +958,7 @@ t_100_autocluster(_) ->
                  || I <- [S1, S2]]
               end)
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
 
@@ -943,7 +997,7 @@ t_200_n_restarts(_) ->
         end
         || Nr <- lists:seq(2, 5)]
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
 
@@ -1031,7 +1085,7 @@ t_300_rpc(_) ->
                 5_000))),
        ok
      end,
-     [fun no_unexpected_events/1]).
+     [fun classy_ct:no_unexpected_events/1]).
 
 %% This testcase verifies behavior of RPC when a node gets stopped amidst a multicall:
 t_310_rpc_to_failing_node(_) ->
@@ -1061,7 +1115,7 @@ t_310_rpc_to_failing_node(_) ->
                 30_000))),
        ok
      end,
-     [fun no_unexpected_events/1]).
+     [fun classy_ct:no_unexpected_events/1]).
 
 %% This testcase verifies various scenarios related to 2PC that lead
 %% to abort and rollback.
@@ -1116,7 +1170,7 @@ t_400_vote_smoke_abort(_) ->
        verify_no_votes(Nodes),
        Nodes
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      , {"rollback events",
         fun([_N1, N2, N3], Trace) ->
@@ -1174,7 +1228,7 @@ t_401_vote_timeout(_) ->
        verify_no_votes(Nodes),
        Nodes
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      , {"rollback events",
         fun([_N1, N2, N3], Trace) ->
@@ -1233,7 +1287,7 @@ t_403_vote_coord_restart(_) ->
        verify_no_votes(Nodes),
        Nodes
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      , {"rollback events",
         fun([_N1, N2, N3], Trace) ->
@@ -1323,7 +1377,7 @@ t_404_vote_part_restart(_) ->
        verify_no_votes(Nodes),
        Nodes
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      , {"rollback events",
         fun([_N1, N2, N3], Trace) ->
@@ -1379,7 +1433,7 @@ t_410_vote_commit(_) ->
        verify_no_votes(Nodes),
        Nodes
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      , {"commit events",
         fun([_N1, N2, N3], Trace) ->
@@ -1432,17 +1486,18 @@ t_411_commit_actions_after_restart(_) ->
        [ok = restart_site(S) || S <- Sites],
        ?assert(classy_vote:test_wait_conclude(ID)),
        verify_no_votes(Nodes),
+       ct:sleep(1000),
        {ID, Nodes}
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      , {"commit events",
         fun({_ID, [_N1, N2]}, Trace) ->
             ?assertMatch(
                [ #{?snk_kind := test_go}
                , #{ ?snk_kind := classy_test_vote_commit
-                  , step := 1
-                  , ref := Ref1
+                  , step      := 1
+                  , ref       := Ref1
                   , ?snk_meta := #{node := N2}
                   }
                ],
@@ -1520,7 +1575,7 @@ t_412_commit_action_crash(_) ->
        verify_no_votes(Nodes),
        {Nodes, ID}
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      , {"coordinator history",
         fun({[N1, _N2], _ID}, Trace) ->
@@ -1645,7 +1700,7 @@ t_413_fold_votes(_) ->
           ?ON(S1, lists:sort(classy_vote:ls_votes()))),
        ok
      end,
-     [ fun no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      ]).
 
@@ -1718,7 +1773,7 @@ t_500_metadata_crud(_) ->
                  #{},
                  ?ON(S1, classy_site_metadata:get_all())))
      end,
-     [fun no_unexpected_events/1]).
+     [fun classy_ct:no_unexpected_events/1]).
 
 %% This testcase verifies that classy properly updates site and node sets when site metadata changes.
 t_510_metadata_classify(_) ->
@@ -1773,7 +1828,7 @@ t_510_metadata_classify(_) ->
                 ?assertEqual([], ?ON(S2, classy:sites(bar)))
               end)
      end,
-     [fun no_unexpected_events/1]).
+     [fun classy_ct:no_unexpected_events/1]).
 
 check_metadata(Expected, Target, Sites) ->
   ?retry(100, 10,
@@ -1810,21 +1865,6 @@ no_stopped_nodes_reported_as_running(Site, #{sites := Sites}) ->
 %%================================================================================
 %% Trace specs
 %%================================================================================
-
-no_unexpected_events(Trace) ->
-  ?assertMatch(
-     [],
-     ?of_kind(
-        [ ?classy_unknown_event
-        , ?classy_abnormal_exit
-        , ?classy_table_anomaly
-        , ?classy_hook_failure
-        , classy_discovery_failure
-        , classy_table_on_update_callback_failure
-        , ?classy_bad_data
-        , ?classy_run_level_change_error
-        ],
-        Trace)).
 
 events_on_all_sites(Trace) ->
   Sites = ?projection(local, ?of_kind(classy_create_new_site, Trace)),
@@ -1944,53 +1984,10 @@ next_state(_S, _Ret, Call) ->
   error({unknown_call, Call}).
 
 init_per_testcase(TC, Cfg) ->
-  Fixtures = [ {familiar_snabbkaffe, #{}}
-             ],
-  ok = familiar:start_link_cluster(
-         #{ id => TC
-          , fixtures => familiar:default_fixtures() ++ Fixtures
-          , peer => #{args => ["-kernel", "prevent_overlapping_partitions", "false"]}
-          }),
+  logger:notice(asciiart:visible($%, "Starting ~p", [TC])),
+  ok = classy_ct:create_cluster(TC),
   put(classy_SUITE_cluster, {ok, TC}),
   Cfg.
-
-get_cluster() ->
-  {ok, Cluster} = get(classy_SUITE_cluster),
-  Cluster.
-
-create_start_site(Site, CustomConf) ->
-  create_start_site(get_cluster(), Site, CustomConf).
-
-create_start_site(Cluster, Site, CustomConf) ->
-  Fixture = {familiar_app,
-             #{ app => classy
-              , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site]}
-                        , cleanup_check_interval => 100
-                        , vote_retry_interval => 100
-                        , rpc_timeout => 100
-                        , discovery_interval => 100
-                        }
-              }},
-  Fixtures = maps:get(fixtures, CustomConf, []),
-  Conf = CustomConf#{fixtures => [Fixture | Fixtures], start => true},
-  case familiar:create_site(Cluster, Site, Conf) of
-    {ok, _Site, Node} ->
-      Node;
-    Err ->
-      error({failed_to_create_test_site, #{ cluster => Cluster
-                                          , site => Site
-                                          , conf => CustomConf
-                                          , reason => Err
-                                          }})
-  end.
-
-stop_site(Site) ->
-  familiar:stop_site(get_cluster(), Site).
-
-restart_site(Site) ->
-  ?assertMatch(
-     {ok, _},
-     familiar:start_site({get_cluster(), Site})).
 
 end_per_testcase(TC, Cfg) ->
   Success = case proplists:get_value(tc_status, Cfg) of
@@ -1998,7 +1995,8 @@ end_per_testcase(TC, Cfg) ->
               _  -> false
             end,
   _ = familiar:stop_cluster(TC, Success),
-  snabbkaffe:stop().
+  snabbkaffe:stop(),
+  logger:notice(asciiart:visible($%, "Complete ~p (success=~p)", [TC, Success])).
 
 all() ->
   all(?MODULE).
@@ -2011,14 +2009,26 @@ wait_site_joined(WaitOnSites, Cluster, Site) ->
     fun(Local) ->
         ?block_until(
            #{ ?snk_kind := classy_member_join
-            , cluster := Cluster
-            , local := Local
-            , remote := Site
+            , cluster   := Cluster
+            , local     := Local
+            , remote    := Site
             })
     end,
     WaitOnSites),
   %% Account for possible race condition since the hook emitting the event is the first:
   ct:sleep(10).
+
+verify_cluster_connected(Sites) ->
+  ?retry(1000, 10,
+         ?assertEqual(
+            #{I => #{ s_all => Sites
+                    , s_conn => Sites
+                    }
+              || I <- Sites},
+            #{I => #{ s_all => ?ON(I, classy:sites(all))
+                    , s_conn => ?ON(I, classy:sites(connected))
+                    }
+              || I <- Sites})).
 
 sync_kick(ExecOn, Target, Intent, WaitOn) ->
   Pred = fun(#{?snk_kind := classy_member_leave, remote := Target, local := Local}) ->
@@ -2068,27 +2078,6 @@ initialization_hooks(RuntimeData, Trace) ->
      Clusters,
      ?projection(cluster, ?of_kind(classy_create_new_cluster, Trace))).
 
-setup_hooks(Site) ->
-  classy:on_node_init(
-    fun() ->
-        classy_node:maybe_init_the_site(Site),
-        classy:on_metadata_change(fun ?MODULE:on_metadata_change/3, 0),
-        classy:on_node_classify(fun ?MODULE:on_node_classify/1, 0),
-        classy:run_level(fun ?MODULE:on_run_level/2, 0)
-    end,
-    0).
-
-on_run_level(Prev, Next) ->
-  ?defer_assert(?assertEqual(Next, classy:run_level())),
-  ?defer_assert(case {Prev, Next} of
-                  {stopped, single} -> ok;
-                  {single, cluster} -> ok;
-                  {cluster, quorum} -> ok;
-                  {quorum, cluster} -> ok;
-                  {cluster, single} -> ok;
-                  {single, stopped} -> ok
-                end).
-
 make_vote(HowToPreVote, HowToVote, Ref, NCommitSteps) ->
   #{ prepare  => {?MODULE, vote_prepare, [HowToPreVote, HowToVote, Ref]}
    , commit   => [{?MODULE, vote_commit, [Step, Ref]} ||
@@ -2130,12 +2119,6 @@ post_vote(Result, Id, Ref) ->
 
 vote_on_fail(FailInfo, Ref) ->
   ?tp(classy_test_vote_on_fail, FailInfo#{test_ref => Ref}).
-
-on_metadata_change(Cluster, Site, Meta) ->
-  ?tp(notice, test_update_meta, Meta#{cluster => Cluster, site => Site}).
-
-on_node_classify(Meta) ->
-  maps:keys(Meta).
 
 verify_no_votes(Nodes) ->
   %% TODO: using retry due to sporadic votes spawned by

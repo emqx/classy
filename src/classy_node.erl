@@ -531,6 +531,7 @@ on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
 -spec join_cluster(classy:cluster_id(), node(), classy:site(), classy:site(), classy:join_intent(), #s{}) -> {ok, #s{}}.
 join_cluster(Cluster, JoinToNode, Local, Remote, Intent, S = #s{}) ->
   {ok, _} = classy_sup:ensure_membership(Cluster, Local),
+  ok = classy_membership:wipe(Cluster, Local, false),
   classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode, Intent]),
   classy_table:dirty_write(?globals, ?the_cluster, Cluster),
   classy_table:dirty_write(?globals, ?parent_site, Remote),
