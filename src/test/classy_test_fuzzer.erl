@@ -33,7 +33,6 @@
 
 %% internal exports:
 -export([ init_cluster/1
-        , setup_hooks/1
         , join_node/4
         , kick_site/4
         , start_site/2
@@ -112,7 +111,7 @@ init_cluster(#{sites := Sites, quorum := Quorum, n_sites := NSites}) ->
         Fixtures = maps:get(fixtures, Conf0, []),
         ClassyFixture = {familiar_app,
                          #{ app => classy
-                          , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site]}
+                          , env => #{ setup_hooks => {classy_ct, setup_hooks, [Site]}
                                     , quorum => Quorum
                                     , n_sites => NSites
                                     , sync_timeout => 1000
@@ -124,13 +123,6 @@ init_cluster(#{sites := Sites, quorum := Quorum, n_sites := NSites}) ->
            familiar:create_site(familiar_cluster(), Site, Conf))
     end,
     Sites).
-
-setup_hooks(Site) ->
-  classy:on_node_init(
-    fun() ->
-        classy_node:maybe_init_the_site(Site)
-    end,
-    0).
 
 join_node(Origin, Target, Intent, S) ->
   TargetNode = familiar:which_node({familiar_cluster(), Target}),

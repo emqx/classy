@@ -40,7 +40,7 @@ smoke_open_test() ->
        ?ignore(classy_table:drop(T)),
        cleanup(Clean)
      end,
-     fun classy_SUITE:no_unexpected_events/1).
+     fun classy_ct:no_unexpected_events/1).
 
 %% This test verifies effects of write and delete operations.
 smoke_write_delete_test() ->
@@ -65,7 +65,7 @@ smoke_write_delete_test() ->
      after
        cleanup(Clean)
      end,
-     [ fun classy_SUITE:no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , {"events",
         fun(Trace) ->
             ?assertMatch(
@@ -107,7 +107,7 @@ smoke_update_counter_test() ->
      after
        cleanup(Clean)
      end,
-     [ fun classy_SUITE:no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , {"events",
         fun(Trace) ->
             ?assertMatch(
@@ -164,7 +164,7 @@ smoke_write_vs_dirty_test() ->
      after
        cleanup(Clean)
      end,
-     [ fun classy_SUITE:no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      ]).
 
 %% This test verifies effects of dirty write and delete operations.
@@ -184,7 +184,7 @@ smoke_dirty_write_delete_test() ->
        ?ignore(classy_table:drop(T)),
        cleanup(Clean)
      end,
-     [ fun classy_SUITE:no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , {"events",
         fun(Trace) ->
             ?assertMatch(
@@ -240,7 +240,7 @@ atomically_test() ->
      after
        cleanup(Clean)
      end,
-     [ fun classy_SUITE:no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , {"events",
         fun(Trace) ->
             ?assertMatch(
@@ -282,7 +282,7 @@ smoke_restore_test() ->
        ?ignore(classy_table:drop(T)),
        cleanup(Clean)
      end,
-     fun classy_SUITE:no_unexpected_events/1).
+     fun classy_ct:no_unexpected_events/1).
 
 %% This test verifies snapshot restoration.
 smoke_snapshot_test() ->
@@ -303,7 +303,7 @@ smoke_snapshot_test() ->
        ?ignore(classy_table:drop(T)),
        cleanup(Clean)
      end,
-     fun classy_SUITE:no_unexpected_events/1).
+     fun classy_ct:no_unexpected_events/1).
 
 %% This test verifies table clear operation
 clear_test() ->
@@ -333,7 +333,7 @@ clear_test() ->
        ?ignore(classy_table:drop(T)),
        cleanup(Clean)
      end,
-     [ fun classy_SUITE:no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , {"events",
         fun(Trace) ->
             ?assertMatch(
@@ -390,7 +390,7 @@ reopen_effects_test() ->
        ?ignore(classy_table:drop(T)),
        cleanup(Clean)
      end,
-     [ fun classy_SUITE:no_unexpected_events/1
+     [ fun classy_ct:no_unexpected_events/1
      , {"events",
         fun(Trace) ->
             {_, After} = ?split_trace_at(#{?snk_kind := test_reopen}, Trace),

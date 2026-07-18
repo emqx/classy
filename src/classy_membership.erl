@@ -27,6 +27,7 @@ Business code should not use it directly.
         , to_liveness/3
         , from_liveness/1
         , dump/0
+        , wipe/3
         ]).
 
 %% behavior callbacks:
@@ -127,6 +128,7 @@ Business code should not use it directly.
 -record(call_cleanup, {forget_after :: pos_integer()}).
 -record(call_flush, {}).
 -record(call_get_data, {since :: clock(), acked :: clock()}).
+-record(call_wipe, {stop :: boolean()}).
 
 -record(s,
         { %% Cluster ID:
@@ -453,11 +455,32 @@ get_data(Cluster, Local, Since, Acked) ->
     gen_server:call(
       ?via(Cluster, Local),
       #call_get_data{since = Since, acked = Acked},
-      5_000)
+      ?call_timeout)
   catch
     exit:{noproc, _} ->
       {error, not_in_cluster}
   end.
+
+-doc """
+Remove all existing data related to the given cluster.
+
+The process should be running,
+it is used as a guard against race conditions.
+
+If the third parameter (@code{Stop}) is set to @code{true},
+then the process immediately terminates after executing the command.
+All data related to the cluster is gone.
+
+Otherwise the process keeps running, but it continues from a fresh state.
+Logically, it is equivalent to @code{wipe(..., true)} followed by @code{ensure_started(...)}
+(re-initialization is done in-place).
+""".
+-spec wipe(classy:cluster_id(), classy:site(), boolean()) -> ok.
+wipe(Cluster, Local, Stop) when is_boolean(Stop) ->
+  gen_server:call(
+    ?via(Cluster, Local),
+    #call_wipe{stop = Stop},
+    ?call_timeout).
 
 %%================================================================================
 %% behavior callbacks
@@ -513,6 +536,8 @@ handle_call(#call_flush{}, _From, S0) ->
 handle_call(#cast_sync{} = Req, _From, S0) ->
   S = handle_sync_in(Req, S0),
   {reply, ok, S};
+handle_call(#call_wipe{stop = Stop}, From, S0) ->
+  handle_wipe(S0, Stop, From);
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => call
@@ -668,6 +693,37 @@ handle_sync_in(Req, S0) ->
       %% Always set remoted acked counter to heal the gap:
       set_acked_out(From, AckedOut, S0),
       need_sync(S0)
+  end.
+
+-spec handle_wipe(#s{}, boolean(), gen_server:from()) -> {noreply, #s{}} | {stop, shutdown, #s{}}.
+handle_wipe(#s{cluster = Cluster, site = Local, sync_timer = Timer} = S0, Stop, From) ->
+  S1 = S0#s{sync_timer = classy_lib:cancel_wakeup(Timer)},
+  Ops = ets:foldl(
+          fun(#classy_kv{k = K}, Acc) ->
+              case K of
+                #pk_last{c = Cluster, l = Local} ->
+                  [{d, K} | Acc];
+                #pk_acked_out{c = Cluster, l = Local} ->
+                  [{d, K} | Acc];
+                #pk_acked_in{c = Cluster, l = Local} ->
+                  [{d, K} | Acc];
+                #pk_clock{c = Cluster, s = Local} ->
+                  [{d, K} | Acc];
+                _ ->
+                  Acc
+              end
+          end,
+          [],
+          ?ptab),
+  {ok, _} = classy_table:atomically(?ptab, Ops),
+  case Stop of
+    false ->
+      {ok, S} = init(#{cluster => Cluster, site => Local}),
+      gen_server:reply(From, ok),
+      {noreply, S};
+    true ->
+      gen_server:reply(From, ok),
+      {stop, shutdown, S1}
   end.
 
 -spec handle_sync_out(#s{}) -> #s{}.
