@@ -33,7 +33,7 @@ smoke-test: eunit
 
 .PHONY: prop-membership
 prop-membership:
-	$(REBAR) proper -c -m fuzz_membership -n 10 --max_size 50
+	$(REBAR) proper -c -m fuzz_membership -n 10 --max_size 50 --noshrink
 
 .PHONY: coveralls
 coveralls:
