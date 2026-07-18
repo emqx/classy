@@ -187,29 +187,25 @@ stop_site(Site) ->
   familiar:stop_site(familiar_cluster(), Site).
 
 start_site(Site, S) ->
-  %% Note: since in non-singleton clusters we don't stop all sites,
-  %% we can wait for a sync-in event to make sure the re-started site is synced:
-  NEvents = case sites_of_cluster(cluster_of(Site, S), S) of
-              [_] -> 2;
-              _   -> 3
-            end,
-  {ok, Sub} = snabbkaffe:subscribe(
-                fun(#{ ?snk_kind := classy_change_run_level
-                     , to := single
-                     , ?snk_meta := #{local := X}
-                     }) ->
-                    X =:= Site;
-                   (#{ ?snk_kind := K
-                     , ?snk_meta := #{local := X}
-                     }) when X =:= Site ->
-                    K =:= classy_membership_sync_out orelse K =:= classy_membership_sync_in;
-                   (_) ->
-                    false
-                end,
-                NEvents,
-                ?sync_timeout),
+  %% Wait for the site to synchronize with the running peers:
+  WaitSyncFrom = [I || I <- sites_of_cluster(cluster_of(Site, S), S),
+                       I =/= Site,
+                       is_running(I, S)],
+  Subs = [begin
+            {ok, Sub} = snabbkaffe:subscribe(Filter, 1, ?sync_timeout),
+            Sub
+          end || Filter <- [ ?match_event(#{ ?snk_kind := classy_change_run_level
+                                           , to        := single
+                                           , local     := Site
+                                           })
+                           | [?match_event(#{ ?snk_kind := classy_membership_sync_in
+                                            , from      := I
+                                            , ?snk_meta := #{local := Site}
+                                            }) || I <- WaitSyncFrom]
+                           ]],
   Ret = familiar:start_site({familiar_cluster(), Site}),
-  {Ret, snabbkaffe:receive_events(Sub)}.
+  [?assertMatch({ok, _}, snabbkaffe:receive_events(I)) || I <- Subs],
+  Ret.
 
 %%================================================================================
 %% Utility functions
@@ -510,7 +506,7 @@ postcondition(PrevState, Call, Result) ->
           });
     {call, ?MODULE, start_site, Args} ->
       ?assertMatch(
-         {{ok, _Node}, {ok, _Event}},
+         {ok, _Node},
          Result,
          #{ msg => "Start failed"
           , args => Args
