@@ -1496,8 +1496,8 @@ t_411_commit_actions_after_restart(_) ->
             ?assertMatch(
                [ #{?snk_kind := test_go}
                , #{ ?snk_kind := classy_test_vote_commit
-                  , step := 1
-                  , ref := Ref1
+                  , step      := 1
+                  , ref       := Ref1
                   , ?snk_meta := #{node := N2}
                   }
                ],
@@ -1984,6 +1984,7 @@ next_state(_S, _Ret, Call) ->
   error({unknown_call, Call}).
 
 init_per_testcase(TC, Cfg) ->
+  logger:notice(asciiart:visible($%, "Starting ~p", [TC])),
   ok = classy_ct:create_cluster(TC),
   put(classy_SUITE_cluster, {ok, TC}),
   Cfg.
@@ -1994,7 +1995,8 @@ end_per_testcase(TC, Cfg) ->
               _  -> false
             end,
   _ = familiar:stop_cluster(TC, Success),
-  snabbkaffe:stop().
+  snabbkaffe:stop(),
+  logger:notice(asciiart:visible($%, "Complete ~p (success=~p)", [TC, Success])).
 
 all() ->
   all(?MODULE).
@@ -2007,9 +2009,9 @@ wait_site_joined(WaitOnSites, Cluster, Site) ->
     fun(Local) ->
         ?block_until(
            #{ ?snk_kind := classy_member_join
-            , cluster := Cluster
-            , local := Local
-            , remote := Site
+            , cluster   := Cluster
+            , local     := Local
+            , remote    := Site
             })
     end,
     WaitOnSites),
