@@ -36,7 +36,7 @@
         , join_node/4
         , kick_site/4
         , start_site/2
-        , stop_site/1
+        , stop_site/2
         , familiar_cluster/0
         ]).
 
@@ -183,14 +183,24 @@ kick_site(Origin, Target, Intent, S) ->
     end,
     S).
 
-stop_site(Site) ->
+stop_site(Site, S) ->
+  %% Wait for the site to sync with the peers, to make sure it doesn't
+  %% hold any unique data:
+  WaitSyncTo = running_peers(Site, S),
+  Subs = [begin
+            {ok, Sub} = snabbkaffe:subscribe(Filter, 1, ?sync_timeout),
+            Sub
+          end || Filter <- [?match_event(#{ ?snk_kind := classy_membership_sync_in
+                                          , from      := Site
+                                          , ?snk_meta := #{local := I}
+                                          }) || I <- WaitSyncTo]],
+  [?assertMatch({ok, _}, snabbkaffe:receive_events(I)) || I <- Subs],
+  %% Then stop it:
   familiar:stop_site(familiar_cluster(), Site).
 
 start_site(Site, S) ->
   %% Wait for the site to synchronize with the running peers:
-  WaitSyncFrom = [I || I <- sites_of_cluster(cluster_of(Site, S), S),
-                       I =/= Site,
-                       is_running(I, S)],
+  WaitSyncFrom = running_peers(Site, S),
   Subs = [begin
             {ok, Sub} = snabbkaffe:subscribe(Filter, 1, ?sync_timeout),
             Sub
@@ -210,6 +220,11 @@ start_site(Site, S) ->
 %%================================================================================
 %% Utility functions
 %%================================================================================
+
+running_peers(Site, S) ->
+  [I || I <- sites_of_cluster(cluster_of(Site, S), S),
+        I =/= Site,
+        is_running(I, S)].
 
 %% @doc Wrap every command in `trace_and_run' call:
 wrap_commands(Cmds) ->
@@ -361,7 +376,7 @@ running_site_command_(Site, S = #{sites := Sites}) ->
   frequency(
     [ {7, {call, ?MODULE, kick_site, [Site, oneof(OtherMembers), kick, S]}} || length(OtherMembers) > 0] ++
     [ {10, {call, ?MODULE, join_node, [Site, oneof(OtherRunning), join, S]}} || length(OtherRunning) > 0] ++
-    [ {5, {call, ?MODULE, stop_site, [Site]}}
+    [ {5, {call, ?MODULE, stop_site, [Site, S]}}
     | optcall(S, running_site_command, [Site, S], [])
     ]).
 
@@ -424,7 +439,7 @@ next_state(S, _Ret, {call, ?MODULE, start_site, [Site | _]}) ->
     Site,
     fun(SiteS) -> SiteS#{running := true} end,
     S);
-next_state(S, _Ret, {call, ?MODULE, stop_site, [Site]}) ->
+next_state(S, _Ret, {call, ?MODULE, stop_site, [Site | _]}) ->
   update_site(
     Site,
     fun(SiteS) -> SiteS#{running := false} end,
@@ -463,7 +478,7 @@ precondition(S, {call, ?MODULE, join_node, [Local, Target|_]}) ->
   is_running(Local, S) andalso
   is_running(Target, S) andalso
   Local =/= Target;
-precondition(S, {call, ?MODULE, stop_site, [Site]}) ->
+precondition(S, {call, ?MODULE, stop_site, [Site | _]}) ->
   %% For simplicity, we avoid stopping all sites in clusters that have >1 sites.
   %% Stopping all sites at once leads to loss of synchronization and split views,
   %% since the site that recieved the last command may become unable to propagate data.

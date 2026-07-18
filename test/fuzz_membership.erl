@@ -84,7 +84,7 @@ fuzz_verify_site(Site, S = #{sites := Sites}) ->
   ExpectedSites = classy_test_fuzzer:sites_of_cluster(Cluster, S),
   ?assertSameSet(
      ExpectedSites,
-     classy_test_fuzzer:call(Site, classy, sites, []),
+     classy_test_fuzzer:call(Site, classy, sites, [all]),
      #{ on            => Site
       , msg           => "View of the cluster"
       , '~diagnostic' => classy_test_fuzzer:diagnostic(S)
