@@ -1833,7 +1833,7 @@ t_510_metadata_classify(_) ->
        ?ON(S1, classy_site_metadata:set(bar, baz)),
 
        ?block_until(#{?snk_kind := test_update_meta, site := S1, ?snk_meta := #{node := N2}}),
-       ct:sleep(100),
+       ct:sleep(1000),
        %% 2. Verify site sets:
        ?assertEqual(
           [[S1], [S1]],
