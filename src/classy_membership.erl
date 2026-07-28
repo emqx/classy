@@ -665,11 +665,12 @@ handle_sync_in(Req, S0) ->
             , data = Data
             } = Req,
   ?tp(classy_membership_sync_in,
-      #{ from => From
-       , since => Since
-       , clock => Cf
-       , acked => AckedOut
-       , data => Data
+      #{ from           => From
+       , active_cluster => S0#s.cluster =:= classy_node:maybe_cluster()
+       , since          => Since
+       , clock          => Cf
+       , acked          => AckedOut
+       , data           => Data
        }),
   AckedIn = get_acked_in(From, S0),
   case AckedIn >= Since of

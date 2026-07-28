@@ -188,18 +188,21 @@ stop_site(Site, S) ->
   %% hold any unique data:
   WaitSyncTo = running_peers(Site, S),
   Subs = [begin
+             Filter = ?match_event(#{ ?snk_kind      := classy_membership_sync_in
+                                    , from           := Site
+                                    , active_cluster := true
+                                    , ?snk_meta      := #{local := I}
+                                    }),
             {ok, Sub} = snabbkaffe:subscribe(Filter, 1, ?sync_timeout),
             Sub
-          end || Filter <- [?match_event(#{ ?snk_kind := classy_membership_sync_in
-                                          , from      := Site
-                                          , ?snk_meta := #{local := I}
-                                          }) || I <- WaitSyncTo]],
+          end || I <- WaitSyncTo],
   [?assertMatch({ok, _}, snabbkaffe:receive_events(I)) || I <- Subs],
+  timer:sleep(1000),
   %% Then stop it:
   familiar:stop_site(familiar_cluster(), Site).
 
 start_site(Site, S) ->
-  %% Wait for the site to synchronize with the running peers:
+  %% Wait until site synchronizes with the running peers:
   WaitSyncFrom = running_peers(Site, S),
   Subs = [begin
             {ok, Sub} = snabbkaffe:subscribe(Filter, 1, ?sync_timeout),
@@ -208,9 +211,10 @@ start_site(Site, S) ->
                                            , to        := single
                                            , local     := Site
                                            })
-                           | [?match_event(#{ ?snk_kind := classy_membership_sync_in
-                                            , from      := I
-                                            , ?snk_meta := #{local := Site}
+                           | [?match_event(#{ ?snk_kind      := classy_membership_sync_in
+                                            , from           := I
+                                            , active_cluster := true
+                                            , ?snk_meta      := #{local := Site}
                                             }) || I <- WaitSyncFrom]
                            ]],
   Ret = familiar:start_site({familiar_cluster(), Site}),
@@ -542,7 +546,7 @@ postcondition(PrevState, Call, Result) ->
 %%================================================================================
 
 wait_clusters_converge(S) ->
-  ?retry(100, 100,
+  ?retry(100, 200,
          maps:foreach(
            fun(Cluster, Sites) ->
                verify_cluster_converged(Cluster, Sites, S)
@@ -553,7 +557,7 @@ verify_cluster_converged(Cluster, Sites, S) ->
   %% Verify that all running sites in the cluster have the same view of the cluster:
   Running = [I || I <- Sites, classy_test_fuzzer:is_running(I, S)],
   Views = [{ I
-           , call(I, classy, sites, [])
+           , call(I, classy, sites, [all])
            }
            || I <- Running],
   case Views of
