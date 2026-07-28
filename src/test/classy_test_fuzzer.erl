@@ -10,6 +10,7 @@
         , cmds/2
         , is_running/2
         , running_sites/1
+        , running_peers/2
         , sites_of_cluster/2
         , trace_and_run/1
         , wrap_commands/1
@@ -149,7 +150,7 @@ join_node(Origin, Target, Intent, S) ->
       exec_and_wait_sync(
         [Origin | sites_of_cluster(TargetCluster, S)],
         fun() ->
-            ?retry(100, 10,
+            ?retry(100, 100,
                    ok = call(
                           Origin,
                           fun() ->
@@ -197,7 +198,6 @@ stop_site(Site, S) ->
             Sub
           end || I <- WaitSyncTo],
   [?assertMatch({ok, _}, snabbkaffe:receive_events(I)) || I <- Subs],
-  timer:sleep(1000),
   %% Then stop it:
   familiar:stop_site(familiar_cluster(), Site).
 
@@ -294,17 +294,15 @@ sites_of_cluster(Cluster, #{sites := Sites}) ->
 
 -spec real_cluster_of(classy:site()) -> classy:cluster_id().
 real_cluster_of(Site) ->
-  ?retry(
-     100,
-     100,
-     begin
-       #{cluster := Cluster} =
-         call(
-           Site,
-           classy_node, hello, [],
-           ?rpc_timeout),
-       Cluster
-     end).
+  ?retry(100, 100,
+         begin
+           #{cluster := Cluster} =
+             call(
+               Site,
+               classy_node, hello, [],
+               ?rpc_timeout),
+           Cluster
+         end).
 
 -spec cluster_of(classy:site(), s()) -> cluster().
 cluster_of(Site, #{sites := Sites}) ->

@@ -10,5 +10,6 @@
 
 -define(assertSameSet(EXP, GOT), ?assertEqual(lists:sort(EXP), lists:sort(GOT))).
 -define(assertSameSet(EXP, GOT, COMMENT), ?assertEqual(lists:sort(EXP), lists:sort(GOT), COMMENT)).
+-define(assertSuperSet(EXP, GOT, COMMENT), ?assertMatch([], (EXP -- GOT), COMMENT)).
 
 -endif.
