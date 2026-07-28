@@ -81,10 +81,14 @@ log_post_join(Cluster, Local, JoinToNode, Intent) ->
 
 log_membership_change(Cluster, Local, Remote, Member) ->
   Kind = case Member of
-           true -> classy_member_join;
+           true  -> classy_member_join;
            false -> classy_member_leave
          end,
-  ?tp(info, Kind,
+  Severity = case Remote of
+               Local -> debug;
+               _     -> info
+             end,
+  ?tp(Severity, Kind,
       #{ cluster => Cluster
        , local => Local
        , remote => Remote
