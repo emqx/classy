@@ -518,6 +518,41 @@ t_061_run_level_timeouts(_) ->
      [ fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies order of run level change hooks.
+t_062_run_level_hook_order(_) ->
+  S1 = <<"s1">>,
+  ?check_trace(
+     #{timetrap => ?timetrap},
+     begin
+       %% Setup:
+       _N1 = create_start_site(S1, #{}),
+       ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
+       ?ON(S1,
+           begin
+             classy:run_level(
+               fun(From, To) ->
+                   ?tp(test_rl, #{f => From, t => To, p => 1})
+               end,
+               1),
+             classy:run_level(
+               fun(From, To) ->
+                   ?tp(test_rl, #{f => From, t => To, p => 0})
+               end,
+               0)
+           end),
+       ?ON(S1, classy:at_lower_level(cluster, fun() -> ok end)),
+       ct:sleep(1000)
+     end,
+     fun(Trace) ->
+         ?assertMatch(
+            [ #{p := 0, f := quorum, t := cluster}
+            , #{p := 1, f := quorum, t := cluster}
+            , #{p := 1, f := cluster, t := quorum}
+            , #{p := 0, f := cluster, t := quorum}
+            ],
+            ?of_kind(test_rl, Trace))
+     end).
+
 %% This testcase verifies site autoclean functionality
 t_070_cleanup(_) ->
   S1 = <<"s1">>,
