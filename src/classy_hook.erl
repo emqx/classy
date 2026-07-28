@@ -12,6 +12,7 @@ Module responsible for managing the hooks.
         , insert/3
         , unhook/1
         , foreach/2
+        , foreach_rev/2
         , map/2
         , fold/3
         , all/2
@@ -123,6 +124,18 @@ foreach(Hookpoint, Args) ->
         safe_apply(Hookpoint, Hook, Args)
     end,
     hooks(Hookpoint)).
+
+-doc """
+Similar to @code{foreach/2},
+but hooks run in reverse priority order.
+""".
+-spec foreach_rev(hookpoint(), list()) -> ok.
+foreach_rev(Hookpoint, Args) ->
+  lists:foreach(
+    fun(Hook) ->
+        safe_apply(Hookpoint, Hook, Args)
+    end,
+    lists:reverse(hooks(Hookpoint))).
 
 -doc """
 Fold over all functions registered in @code{Hookpoint}.

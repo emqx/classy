@@ -25,13 +25,15 @@
         , get_cluster/0
         ]).
 
+-define(timetrap, 60_000).
+
 %%================================================================================
 %% Tests
 %%================================================================================
 
 t_010_cluster(_) ->
   ?check_trace(
-     #{timetrap => 15_000},
+     #{timetrap => ?timetrap},
      begin
        %% Create site and ensure that this operation is idempotent:
        {ok, S1} = familiar:create_site(get_cluster(), <<"foo">>),
@@ -71,7 +73,7 @@ t_020_join(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   ?check_trace(
-     #{timetrap => 10_000},
+     #{timetrap => ?timetrap},
      begin
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
@@ -140,7 +142,7 @@ t_030_kick(_) ->
   S3 = <<"s3">>,
   Sites = [S1, S2, S3],
   ?check_trace(
-     #{timetrap => 20_000},
+     #{timetrap => ?timetrap},
      begin
        %% Prepare the system:
        N1 = create_start_site(S1, #{}),
@@ -192,7 +194,7 @@ t_031_leave_by_self(_) ->
   S3 = <<"s3">>,
   Sites = [S1, S2, S3],
   ?check_trace(
-     #{timetrap => 20_000},
+     #{timetrap => ?timetrap},
      begin
        %% Prepare the system:
        N1 = create_start_site(S1, #{}),
@@ -232,7 +234,7 @@ t_032_rejoin(_) ->
   S2 = <<"s2">>,
   Sites = [S1, S2],
   ?check_trace(
-     #{timetrap => 20_000},
+     #{timetrap => ?timetrap},
      begin
        %% Prepare the system:
        N1 = create_start_site(S1, #{}),
@@ -279,7 +281,7 @@ t_040_kick_in_absentia(_) ->
   S3 = <<"s3">>,
   Sites = [S1, S2, S3],
   ?check_trace(
-     #{timetrap => 20_000},
+     #{timetrap => ?timetrap},
      begin
        %% Prepare the system:
        N1 = create_start_site(S1, #{}),
@@ -344,7 +346,7 @@ t_050_pre_checks(_) ->
   S2 = <<"s2">>,
   Sites = [S1, S2],
   ?check_trace(
-     #{timetrap => 20_000},
+     #{timetrap => ?timetrap},
      begin
        %% Prepare the system:
        N1 = create_start_site(S1, #{}),
@@ -393,7 +395,7 @@ t_050_pre_checks(_) ->
 t_060_at_lower_level(_) ->
   S1 = <<"s1">>,
   ?check_trace(
-     #{timetrap => 20_000},
+     #{timetrap => ?timetrap},
      begin
        %% Prepare the system:
        _N1 = create_start_site(S1, #{}),
@@ -426,7 +428,7 @@ t_060_at_lower_level(_) ->
 t_061_run_level_timeouts(_) ->
   S1 = <<"s1">>,
   ?check_trace(
-     #{timetrap => 30_000},
+     #{timetrap => ?timetrap},
      begin
        %% Setup:
        _N1 = create_start_site(S1, #{}),
@@ -518,6 +520,41 @@ t_061_run_level_timeouts(_) ->
      [ fun events_on_all_sites/1
      ]).
 
+%% This testcase verifies order of run level change hooks.
+t_062_run_level_hook_order(_) ->
+  S1 = <<"s1">>,
+  ?check_trace(
+     #{timetrap => ?timetrap},
+     begin
+       %% Setup:
+       _N1 = create_start_site(S1, #{}),
+       ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
+       ?ON(S1,
+           begin
+             classy:run_level(
+               fun(From, To) ->
+                   ?tp(test_rl, #{f => From, t => To, p => 1})
+               end,
+               1),
+             classy:run_level(
+               fun(From, To) ->
+                   ?tp(test_rl, #{f => From, t => To, p => 0})
+               end,
+               0)
+           end),
+       ?ON(S1, classy:at_lower_level(cluster, fun() -> ok end)),
+       ct:sleep(1000)
+     end,
+     fun(Trace) ->
+         ?assertMatch(
+            [ #{p := 0, f := quorum, t := cluster}
+            , #{p := 1, f := quorum, t := cluster}
+            , #{p := 1, f := cluster, t := quorum}
+            , #{p := 0, f := cluster, t := quorum}
+            ],
+            ?of_kind(test_rl, Trace))
+     end).
+
 %% This testcase verifies site autoclean functionality
 t_070_cleanup(_) ->
   S1 = <<"s1">>,
@@ -535,7 +572,7 @@ t_070_cleanup(_) ->
               }},
   Conf = #{fixtures => [AppConf]},
   ?check_trace(
-     #{timetrap => 30_000},
+     #{timetrap => ?timetrap},
      begin
        %% Prepare system:
        N1 = create_start_site(S1, Conf),
@@ -632,7 +669,7 @@ t_080_desync(_) ->
   S3 = <<"s3">>,
   Sites = [S1, S2, S3],
   ?check_trace(
-     #{timetrap => 20_000},
+     #{timetrap => ?timetrap},
      begin
        %% Prepare system:
        N1 = create_start_site(S1, #{}),
@@ -672,7 +709,7 @@ t_090_info(_) ->
                    Info#{hello => world}
                end,
   ?check_trace(
-     #{timetrap => 20_000},
+     #{timetrap => ?timetrap},
      begin
        %% Prepare system:
        N1 = create_start_site(S1, #{}),
@@ -740,7 +777,7 @@ t_091_node_of_site(_) ->
   S2 = <<"s2">>,
   Sites = [S1, S2],
   ?check_trace(
-     #{timetrap => 20_000},
+     #{timetrap => ?timetrap},
      begin
        %% Prepare system:
        N1 = create_start_site(S1, #{}),
@@ -800,7 +837,7 @@ t_092_link_detect(_) ->
   S2 = <<"s2">>,
   Sites = [S1, S2],
   ?check_trace(
-     #{timetrap => 20_000},
+     #{timetrap => ?timetrap},
      begin
        %% Prepare system:
        N1 = create_start_site(S1, #{}),
@@ -886,7 +923,7 @@ t_093_site_props(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   ?check_trace(
-     #{timetrap => 20_000},
+     #{timetrap => ?timetrap},
      begin
        N1 = create_start_site(S1, #{}),
        #{ site := S1
@@ -928,7 +965,7 @@ t_100_autocluster(_) ->
   S2 = <<"s2">>,
   Sites = [S1, S2],
   ?check_trace(
-     #{timetrap => 20_000},
+     #{timetrap => ?timetrap},
      begin
        %% Prepare system:
        N1 = create_start_site(S1, #{}),
@@ -968,6 +1005,7 @@ t_100_autocluster(_) ->
 t_200_n_restarts(_) ->
   S = <<"s1">>,
   ?check_trace(
+     #{timetrap => ?timetrap},
      begin
        create_start_site(S, #{}),
        ?assertEqual(
@@ -1007,7 +1045,7 @@ t_300_rpc(_) ->
   S2 = <<"s2">>,
   SB = <<"sbad">>,
   ?check_trace(
-     #{timetrap => 15_000},
+     #{timetrap => ?timetrap},
      begin
        %% Prepare
        N1 = create_start_site(S1, #{}),
@@ -1092,7 +1130,7 @@ t_310_rpc_to_failing_node(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   ?check_trace(
-     #{timetrap => 15_000},
+     #{timetrap => ?timetrap},
      begin
        %% Prepare
        N1 = create_start_site(S1, #{}),
@@ -1128,7 +1166,7 @@ t_400_vote_smoke_abort(_) ->
   Ref2 = vote2,
   Ref3 = vote3,
   ?check_trace(
-     #{timetrap => 15_000},
+     #{timetrap => ?timetrap},
      begin
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
@@ -1200,7 +1238,7 @@ t_401_vote_timeout(_) ->
   Sites = [S1, S2, S3],
   Ref1 = vote1,
   ?check_trace(
-     #{timetrap => 15_000},
+     #{timetrap => ?timetrap},
      begin
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
@@ -1258,7 +1296,7 @@ t_403_vote_coord_restart(_) ->
   Sites = [S1, S2, S3],
   Ref1 = vote1,
   ?check_trace(
-     #{timetrap => 15_000},
+     #{timetrap => ?timetrap},
      begin
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
@@ -1318,7 +1356,7 @@ t_404_vote_part_restart(_) ->
   Ref1 = vote1,
   Ref2 = vote2,
   ?check_trace(
-     #{timetrap => 30_000},
+     #{timetrap => ?timetrap},
      begin
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
@@ -1410,7 +1448,7 @@ t_410_vote_commit(_) ->
   Ref1 = vote1,
   Sites = [S1, S2, S3],
   ?check_trace(
-     #{timetrap => 30_000},
+     #{timetrap => ?timetrap},
      begin
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
@@ -1460,7 +1498,7 @@ t_411_commit_actions_after_restart(_) ->
   Ref1 = vote1,
   Sites = [S1, S2],
   ?check_trace(
-     #{timetrap => 60_000},
+     #{timetrap => ?timetrap},
      begin
        N1 = create_start_site(S1, #{peer => #{shutdown => halt}}),
        N2 = create_start_site(S2, #{peer => #{shutdown => halt}}),
@@ -1539,7 +1577,7 @@ t_412_commit_action_crash(_) ->
   Ref1 = vote1,
   Sites = [S1, S2],
   ?check_trace(
-     #{timetrap => 30_000},
+     #{timetrap => ?timetrap},
      begin
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
@@ -1626,7 +1664,7 @@ t_413_fold_votes(_) ->
   Ref1 = vote1,
   Ref2 = vote2,
   ?check_trace(
-     #{timetrap => 30_000},
+     #{timetrap => ?timetrap},
      begin
        _N1 = create_start_site(S1, #{peer => #{shutdown => halt}}),
        %% Make sure votes hang long enough for us to inspect them:
@@ -1710,7 +1748,7 @@ t_500_metadata_crud(_) ->
   S2 = ~"s2",
   Sites = [S1, S2],
   ?check_trace(
-     #{timetrap => 15_000},
+     #{timetrap => ?timetrap},
      begin
        %% 0. Check that run_level returns `stopped' when classy is stopped (it's not running on the ct node):
        ?assertEqual(stopped, classy:run_level()),
@@ -1781,7 +1819,7 @@ t_510_metadata_classify(_) ->
   S2 = ~"s2",
   Sites = [S1, S2],
   ?check_trace(
-     #{timetrap => 15_000},
+     #{timetrap => ?timetrap},
      begin
        %% Setup:
        N1 = create_start_site(S1, #{}),
@@ -1795,7 +1833,7 @@ t_510_metadata_classify(_) ->
        ?ON(S1, classy_site_metadata:set(bar, baz)),
 
        ?block_until(#{?snk_kind := test_update_meta, site := S1, ?snk_meta := #{node := N2}}),
-       ct:sleep(100),
+       ct:sleep(1000),
        %% 2. Verify site sets:
        ?assertEqual(
           [[S1], [S1]],

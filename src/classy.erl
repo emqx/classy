@@ -819,6 +819,9 @@ pre_autocluster(Hook, Prio) ->
 -doc """
 Register a hook that is executed on change of the run level of the local site.
 
+When run level increases, hooks with higher priority run earlier;
+when it decreases, hooks run in the reverse order.
+
 WARNING: if the callback interacts with the OTP application controller
 (e.g. it starts or stops an OTP application),
 then stopping classy application using @code{application:stop(classy)} will lead to a deadlock.

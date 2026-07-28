@@ -252,8 +252,13 @@ run_hooks(From, Next, Actions) ->
   update_counter(?ctr_c, Next),
   Worker = spawn_link(
              fun() ->
-                 From =/= Next andalso
-                   classy_hook:foreach(?on_change_run_level, [FromA, NextA]),
+                 if Next > From ->
+                     classy_hook:foreach(?on_change_run_level, [FromA, NextA]);
+                    From > Next ->
+                     classy_hook:foreach_rev(?on_change_run_level, [FromA, NextA]);
+                    true ->
+                     ok
+                 end,
                  lists:foreach(
                    fun(#call{f = Fun}) ->
                        try

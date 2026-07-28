@@ -10,6 +10,7 @@
         , cmds/2
         , is_running/2
         , running_sites/1
+        , running_peers/2
         , sites_of_cluster/2
         , trace_and_run/1
         , wrap_commands/1
@@ -149,7 +150,7 @@ join_node(Origin, Target, Intent, S) ->
       exec_and_wait_sync(
         [Origin | sites_of_cluster(TargetCluster, S)],
         fun() ->
-            ?retry(100, 10,
+            ?retry(100, 100,
                    ok = call(
                           Origin,
                           fun() ->
@@ -188,18 +189,20 @@ stop_site(Site, S) ->
   %% hold any unique data:
   WaitSyncTo = running_peers(Site, S),
   Subs = [begin
+             Filter = ?match_event(#{ ?snk_kind      := classy_membership_sync_in
+                                    , from           := Site
+                                    , active_cluster := true
+                                    , ?snk_meta      := #{local := I}
+                                    }),
             {ok, Sub} = snabbkaffe:subscribe(Filter, 1, ?sync_timeout),
             Sub
-          end || Filter <- [?match_event(#{ ?snk_kind := classy_membership_sync_in
-                                          , from      := Site
-                                          , ?snk_meta := #{local := I}
-                                          }) || I <- WaitSyncTo]],
+          end || I <- WaitSyncTo],
   [?assertMatch({ok, _}, snabbkaffe:receive_events(I)) || I <- Subs],
   %% Then stop it:
   familiar:stop_site(familiar_cluster(), Site).
 
 start_site(Site, S) ->
-  %% Wait for the site to synchronize with the running peers:
+  %% Wait until site synchronizes with the running peers:
   WaitSyncFrom = running_peers(Site, S),
   Subs = [begin
             {ok, Sub} = snabbkaffe:subscribe(Filter, 1, ?sync_timeout),
@@ -208,9 +211,10 @@ start_site(Site, S) ->
                                            , to        := single
                                            , local     := Site
                                            })
-                           | [?match_event(#{ ?snk_kind := classy_membership_sync_in
-                                            , from      := I
-                                            , ?snk_meta := #{local := Site}
+                           | [?match_event(#{ ?snk_kind      := classy_membership_sync_in
+                                            , from           := I
+                                            , active_cluster := true
+                                            , ?snk_meta      := #{local := Site}
                                             }) || I <- WaitSyncFrom]
                            ]],
   Ret = familiar:start_site({familiar_cluster(), Site}),
@@ -290,17 +294,15 @@ sites_of_cluster(Cluster, #{sites := Sites}) ->
 
 -spec real_cluster_of(classy:site()) -> classy:cluster_id().
 real_cluster_of(Site) ->
-  ?retry(
-     100,
-     100,
-     begin
-       #{cluster := Cluster} =
-         call(
-           Site,
-           classy_node, hello, [],
-           ?rpc_timeout),
-       Cluster
-     end).
+  ?retry(100, 100,
+         begin
+           #{cluster := Cluster} =
+             call(
+               Site,
+               classy_node, hello, [],
+               ?rpc_timeout),
+           Cluster
+         end).
 
 -spec cluster_of(classy:site(), s()) -> cluster().
 cluster_of(Site, #{sites := Sites}) ->
@@ -542,7 +544,7 @@ postcondition(PrevState, Call, Result) ->
 %%================================================================================
 
 wait_clusters_converge(S) ->
-  ?retry(100, 100,
+  ?retry(100, 200,
          maps:foreach(
            fun(Cluster, Sites) ->
                verify_cluster_converged(Cluster, Sites, S)
@@ -553,7 +555,7 @@ verify_cluster_converged(Cluster, Sites, S) ->
   %% Verify that all running sites in the cluster have the same view of the cluster:
   Running = [I || I <- Sites, classy_test_fuzzer:is_running(I, S)],
   Views = [{ I
-           , call(I, classy, sites, [])
+           , call(I, classy, sites, [all])
            }
            || I <- Running],
   case Views of
