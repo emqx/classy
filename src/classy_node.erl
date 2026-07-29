@@ -817,7 +817,10 @@ classify() ->
                     #{SetName := SSet0} -> ok;
                     #{}                 -> SSet0 = []
                   end,
-                  NSet = ordsets:add_element(Node, NSet0),
+                  NSet = case Node of
+                           undefined -> NSet0;
+                           _         -> ordsets:add_element(Node, NSet0)
+                         end,
                   SSet = ordsets:add_element(Site, SSet0),
                   { AccNodes#{SetName => NSet}
                   , AccSites#{SetName => SSet}
