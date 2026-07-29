@@ -261,12 +261,10 @@ log_error(_Format, _Ok) ->
   ok.
 
 is_singleton() ->
-  Sets = application:get_env(classy, discovery_complete_sets, [all]),
   maybe
     {ok, Local} ?= classy:the_site(),
-    Peers = ordsets:del_element(
-              Local,
-              ordsets:intersection([classy:sites(I) || I <- Sets])),
+    Sets = [classy:sites(I) || I <- classy_lib:discovery_complete_sets()],
+    Peers = ordsets:del_element(Local, ordsets:intersection(Sets)),
     case Peers of
       [] -> true;
       _  -> false

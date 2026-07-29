@@ -391,11 +391,11 @@ The document was typeset with
 
       Peer discovery method, @xref{Autocluster}.
 
-    @defen{discovery_complete_sets, @code{[classy:node_set_name()]}, @code{[all]}}
+    @defen{discovery_complete_sets, @code{[classy:node_set_name()]}, @code{[]}}
 
       Consider cluster discovery complete when intersection of the site sets specified by this parameter,
       with the local site subtracted,
-      contains at least one node.
+      contains at least one item.
 
 @node API Reference
 @chapter API Reference
