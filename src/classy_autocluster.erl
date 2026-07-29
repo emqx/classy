@@ -60,8 +60,8 @@ E.g. @code{'foo@@127.0.0.1'} -> @code{'foo'}.
 """.
 -spec app_name() -> string().
 app_name() ->
-  [Name | _] = string:tokens(atom_to_list(node()), "@"),
-  Name.
+  {ok, App, _} = classy_lib:split_node_name(node()),
+  binary_to_list(App).
 
 -doc """
 List candidates according to the selected strategy.
