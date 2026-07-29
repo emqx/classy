@@ -17,6 +17,8 @@ Misc. utility functions.
         , multicast/1
         , multicall/1
         , multicall/2
+
+        , split_node_name/1
         ]).
 
 %% internal exports:
@@ -409,6 +411,16 @@ map_deep_insert([K | Rest], Val, Outer) ->
       Outer#{K := map_deep_insert(Rest, Val, Inner)};
     #{} ->
       Outer#{K => map_deep_insert(Rest, Val, #{})}
+  end.
+
+-spec split_node_name(node()) -> {ok, binary(), binary()} | {error, _}.
+split_node_name(Name) ->
+  maybe
+    true ?= is_atom(Name),
+    [App, Host] ?= binary:split(atom_to_binary(Name), <<"@">>, [global]),
+    {ok, App, Host}
+  else
+      _ -> {error, {bad_node_name, Name}}
   end.
 
 %%================================================================================

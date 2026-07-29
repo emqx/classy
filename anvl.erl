@@ -25,7 +25,6 @@ conf() ->
             ]
         , hex_pm =>
             [ #{id => proper, version => "1.5.0"}
-            , #{id => jsone,  version => "1.9.0"}
             ]
         , local =>
             [ #{kind => otp_application, dir => "_checkouts/*"}

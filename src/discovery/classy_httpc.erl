@@ -108,7 +108,7 @@ parse_response({ok, Status, _RespHeaders, Ref}) when Status =:= 200;
             %%     CC ->
             %%         {error, {unexpected_content_type, CC}}
             %% end;
-            {ok, jsone:decode(Body)};
+            {ok, json:decode(Body)};
         Err ->
             {error, {get_body, Err}}
     end;
