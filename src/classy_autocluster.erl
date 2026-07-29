@@ -85,7 +85,7 @@ candidates() ->
 init(_) ->
   process_flag(trap_exit, true),
   S = #s{},
-  {ok, wakeup_if_single(0, S)}.
+  {ok, wakeup(0, S)}.
 
 -doc false.
 handle_call(Call, From, S) ->
@@ -142,8 +142,8 @@ terminate(Reason, _S) ->
 
 handle_discover(S0) ->
   S = S0#s{t = undefined},
-  discover_and_join(),
-  wakeup_if_single(S).
+  is_singleton() andalso discover_and_join(),
+  wakeup(S).
 
 -spec discover_and_join() -> ok | ignore | {error, _}.
 discover_and_join() ->
@@ -234,18 +234,9 @@ try_join([{Cluster, Node} | Rest]) ->
       try_join(Rest)
   end.
 
--spec wakeup_if_single(#s{}) -> #s{}.
-wakeup_if_single(S) ->
-  wakeup_if_single(discovery_interval(), S).
-
--spec wakeup_if_single(non_neg_integer(), #s{}) -> #s{}.
-wakeup_if_single(Interval, S) ->
-  case is_singleton() of
-    false ->
-      S#s{t = undefined};
-    true ->
-      wakeup(Interval, S)
-  end.
+-spec wakeup(#s{}) -> #s{}.
+wakeup(S) ->
+  wakeup(discovery_interval(), S).
 
 -spec wakeup(non_neg_integer(), #s{}) -> #s{}.
 wakeup(After, S = #s{t = T0}) ->
@@ -270,9 +261,16 @@ log_error(_Format, _Ok) ->
   ok.
 
 is_singleton() ->
-  case classy:sites() of
-    [_, _ | _] ->
-      false;
-    _ ->
-      true
+  Sets = application:get_env(classy, discovery_complete_sets, [all]),
+  maybe
+    {ok, Local} ?= classy:the_site(),
+    Peers = ordsets:del_element(
+              Local,
+              ordsets:intersection([classy:sites(I) || I <- Sets])),
+    case Peers of
+      [] -> true;
+      _  -> false
+    end
+  else
+    _ -> false
   end.
