@@ -296,8 +296,6 @@ handle_call(Call, From, S) ->
   {reply, {error, unknown_call}, S}.
 
 -doc false.
-handle_cast(#cast_mem_deltas{} = Cast, S) ->
-  handle_membership_change_event(Cast, S);
 handle_cast(Cast, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => cast
@@ -307,6 +305,8 @@ handle_cast(Cast, S) ->
   {noreply, S}.
 
 -doc false.
+handle_info(#cast_mem_deltas{} = Cast, S) ->
+  handle_membership_change_event(Cast, S);
 handle_info({NodeUpOrDown, _Node, _}, S) when NodeUpOrDown =:= nodeup; NodeUpOrDown =:= nodedown ->
   {noreply, update_runtime(S)};
 handle_info(Info, S) ->
@@ -376,11 +376,15 @@ on_ptab_update(_, Op) ->
 -doc false.
 -spec notify_mem_deltas(classy:cluster_id(), #{classy:site() => classy_membership:update()}) -> ok.
 notify_mem_deltas(Cluster, Deltas) ->
-  gen_server:cast(
-    ?SERVER,
-    #cast_mem_deltas{ cluster = Cluster
-                    , data    = Deltas
-                    }).
+  case whereis(?SERVER) of
+    undefined ->
+      ok;
+    Pid when is_pid(Pid) ->
+      Pid ! #cast_mem_deltas{ cluster = Cluster
+                            , data    = Deltas
+                            },
+      ok
+  end.
 
 -doc false.
 prep_stop(Reason) ->
@@ -412,6 +416,14 @@ update_meta() ->
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+flush_mem_deltas() ->
+  receive
+    #cast_mem_deltas{} ->
+      flush_mem_deltas()
+  after 0 ->
+      ok
+  end.
 
 handle_membership_change_event(
   #cast_mem_deltas{ cluster = Cluster
@@ -530,8 +542,17 @@ on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
 
 -spec join_cluster(classy:cluster_id(), node(), classy:site(), classy:site(), classy:join_intent(), #s{}) -> {ok, #s{}}.
 join_cluster(Cluster, JoinToNode, Local, Remote, Intent, S = #s{}) ->
-  {ok, _} = classy_sup:ensure_membership(Cluster, Local),
-  ok = classy_membership:wipe(Cluster, Local, false),
+  %% Deal with the situation when re-joining the same cluster. We need
+  %% to restart everything from scratch.
+  %%
+  %% 1. Wipe data for the cluster (it should be running):
+  {ok, OldPid} = classy_sup:ensure_membership(Cluster, Local),
+  ok = classy_membership:wipe(Cluster, Local, true),
+  %% 2. Flush any deltas from the old process that could be stored in the mailbox:
+  flush_mem_deltas(),
+  %% 3. Restart membership from scratch:
+  {ok, NewPid} = classy_sup:ensure_membership(Cluster, Local),
+  true = OldPid =/= NewPid, % assert
   classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode, Intent]),
   classy_table:dirty_write(?globals, ?the_cluster, Cluster),
   classy_table:dirty_write(?globals, ?parent_site, Remote),
