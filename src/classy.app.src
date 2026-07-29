@@ -12,7 +12,6 @@
         %% Discovery:
      , eetcd
      , hackney
-     , jsone
      ]},
     {optional_applications,
      [ %% Test harness:

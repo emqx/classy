@@ -30,23 +30,34 @@
 all() ->
   classy_SUITE:all(?MODULE).
 
+init_per_testcase(_, Config) ->
+  Config.
+
+end_per_testcase(_, _Config) ->
+  meck:unload().
+
 t_discover(_) ->
+  {ok, LocalAppName, _} = classy_lib:split_node_name(node()),
+  Host = <<"192.168.10.10">>,
+
   ok = meck:new(classy_httpc, [non_strict, no_history]),
-  Json = <<"{\"subsets\": [{\"addresses\": [{\"ip\": \"192.168.10.10\"}]}]}">>,
+  Json = <<"{\"subsets\": [{\"addresses\": [{\"ip\": \"", Host/binary, "\"}]}]}">>,
   ok = meck:expect(
          classy_httpc, get,
          fun(_Server, _Path, _Params, _Headers, _Opts) ->
-             {ok, jsone:decode(Json)}
+             {ok, json:decode(Json)}
          end),
+  %% Check the discovered node name when application name is set explicitly:
   ?assertEqual(
-     {ok, ['ekka@192.168.10.10']},
-     classy_discovery_strategy:discover(
-       classy_discovery_k8s,
-       maps:merge(?OPTIONS, #{app_name => "ekka"}))),
-  %% Below test relies on rebar3 ct is run with '--name ct@127.0.0.1'
+     {ok, <<"ekka">>, Host},
+     discover_and_parse(maps:merge(?OPTIONS, #{app_name => "ekka"}))),
+  %% Check the discovered node name when application name is inherited from the local node:
   ?assertEqual(
-     {ok, ['ct@192.168.10.10']},
-     classy_discovery_strategy:discover(
-       classy_discovery_k8s,
-       ?OPTIONS)),
-  ok = meck:unload(classy_httpc).
+     {ok, LocalAppName, Host},
+     discover_and_parse(?OPTIONS)).
+
+discover_and_parse(Options) ->
+  maybe
+    {ok, [Node]} ?= classy_discovery_strategy:discover(classy_discovery_k8s, Options),
+    classy_lib:split_node_name(Node)
+  end.

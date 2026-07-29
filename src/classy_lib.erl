@@ -17,12 +17,15 @@ Misc. utility functions.
         , multicast/1
         , multicall/1
         , multicall/2
+
+        , split_node_name/1
         ]).
 
 %% internal exports:
 -export([ rpc_timeout/0
         , to_cluster_sets/0
         , quorum_sets/0
+        , discovery_complete_sets/0
         , table_dir/0
         , n_sites/0
         , time_s/0
@@ -304,6 +307,11 @@ to_cluster_sets() ->
 quorum_sets() ->
   [connected | application:get_env(classy, quorum_sets, [])].
 
+-doc "Return value of @ref{discovery_complete_sets} (with default)".
+-spec discovery_complete_sets() -> [classy:node_set_name(), ...].
+discovery_complete_sets() ->
+  [all | application:get_env(classy, discovery_complete_sets, [])].
+
 -doc "Return value of @ref{table_dir} (with default)".
 table_dir() ->
   application:get_env(classy, table_dir, ".").
@@ -409,6 +417,16 @@ map_deep_insert([K | Rest], Val, Outer) ->
       Outer#{K := map_deep_insert(Rest, Val, Inner)};
     #{} ->
       Outer#{K => map_deep_insert(Rest, Val, #{})}
+  end.
+
+-spec split_node_name(node()) -> {ok, binary(), binary()} | {error, _}.
+split_node_name(Name) ->
+  maybe
+    true ?= is_atom(Name),
+    [App, Host] ?= binary:split(atom_to_binary(Name), <<"@">>, [global]),
+    {ok, App, Host}
+  else
+      _ -> {error, {bad_node_name, Name}}
   end.
 
 %%================================================================================

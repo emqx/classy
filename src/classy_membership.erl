@@ -477,10 +477,20 @@ Logically, it is equivalent to @code{wipe(..., true)} followed by @code{ensure_s
 """.
 -spec wipe(classy:cluster_id(), classy:site(), boolean()) -> ok.
 wipe(Cluster, Local, Stop) when is_boolean(Stop) ->
-  gen_server:call(
-    ?via(Cluster, Local),
-    #call_wipe{stop = Stop},
-    ?call_timeout).
+  Result = gen_server:call(
+             ?via(Cluster, Local),
+             #call_wipe{stop = Stop},
+             ?call_timeout),
+  case Result of
+    ok ->
+      ok;
+    {wait_terminate, Pid} ->
+      MRef = monitor(process, Pid),
+      receive
+        {'DOWN', MRef, process, Pid, _} ->
+          ok
+      end
+  end.
 
 %%================================================================================
 %% behavior callbacks
@@ -723,7 +733,7 @@ handle_wipe(#s{cluster = Cluster, site = Local, sync_timer = Timer} = S0, Stop, 
       gen_server:reply(From, ok),
       {noreply, S};
     true ->
-      gen_server:reply(From, ok),
+      gen_server:reply(From, {wait_terminate, self()}),
       {stop, shutdown, S1}
   end.
 

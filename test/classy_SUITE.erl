@@ -240,7 +240,6 @@ t_032_rejoin(_) ->
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
        #{ site := S1
-        , cluster := Cluster1
         } = ?ON(S1, classy_node:hello()),
        %% 1. Join for the first time:
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
