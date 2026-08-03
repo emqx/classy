@@ -234,7 +234,7 @@ n_restarts(Site) ->
   end.
 
 -doc false.
--spec get_meta(classy:site()) -> {ok, map()} | undefined.
+-spec get_meta(classy:site()) -> {ok, classy:site_metadata()} | undefined.
 get_meta(Site) ->
   case classy_table:lookup(?site_info, Site) of
     [#site_info{meta = Meta}] ->

@@ -271,7 +271,7 @@ NOTE: This function works even if the site is down.
 
 @xref{classy_site_metadata:set/2}, @ref{classy_site_metadata:delete/1}, @ref{classy_site_metadata:lookup/1}.
 """.
--spec get_meta(classy:site()) -> {ok, info()} | undefined.
+-spec get_meta(classy:site()) -> {ok, site_metadata()} | undefined.
 get_meta(Site) ->
   classy_node:get_meta(Site).
 
