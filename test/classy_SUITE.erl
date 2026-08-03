@@ -944,7 +944,7 @@ t_093_site_props(_) ->
        %% Join the nodes:
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
        wait_site_joined([S1, S2], Cluster1, S2),
-       %% Both should retain their globals:
+       %% Both should retain their site properties:
        ?assertMatch([foo], ?ON(S1, classy:site_prop_lookup(foo))),
        ?assertMatch([bar], ?ON(S2, classy:site_prop_lookup(bar))),
        %% Test deletion.
@@ -1864,6 +1864,182 @@ t_510_metadata_classify(_) ->
                 ?assertEqual([], ?ON(S2, classy:sites(foo))),
                 ?assertEqual([], ?ON(S2, classy:sites(bar)))
               end)
+     end,
+     [fun classy_ct:no_unexpected_events/1]).
+
+t_600_fallback(_) ->
+  S1 = ~"s1",
+  S2 = ~"s2",
+  ?check_trace(
+     #{timetrap => ?timetrap},
+     begin
+       %% Setup: classy application on S1 is stopped to emulate a node
+       %% that is not classy-aware:
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
+       ?ON(S1, classy_site_metadata:set(via_fallback, false)),
+       ?ON(S1,
+           begin
+             ok = application:stop(classy),
+             meck:new(classy_node, [no_history, no_link])
+           end),
+       %% 1. Verify unhappy cases where fallback fails.
+       %%
+       %% 1.1 Hooks are not set up; no fallback
+       ?assertMatch(
+          {error, invalid_target_node},
+          ?ON(S2, classy:join_node(N1, join))),
+       %% 1.2 Fallback peers return different clusters:
+       ?ON(S2,
+           begin
+             classy:fallback_get_site(
+               fun(N) ->
+                   case N of
+                     N1 -> {ok, S1};
+                     N2 -> {ok, S2};
+                     _ -> {ok, atom_to_binary(N)}
+                   end
+               end),
+             classy:fallback_get_meta(
+               fun(Node, Acc) ->
+                   Acc#{added_by_hook => Node}
+               end,
+               0),
+             classy:fallback_get_cluster(
+               fun(_) ->
+                   {ok, rand:bytes(16)}
+               end),
+             classy:fallback_get_peer_nodes(
+               fun(_) ->
+                   {ok, ['badnode@badhost1', 'badnode@badhost2']}
+               end)
+           end),
+       ?assertMatch(
+          {error, {inconsistent_cluster_fallback, _}},
+          ?ON(S2, classy:join_node(N1, join))),
+       %% 2. Fix the fallback, so all nodes report the same cluster,
+       %% and bad nodes don't report site ID:
+       ?ON(S2,
+           begin
+             classy:fallback_get_site(
+               fun(N) ->
+                   case N of
+                     N1 -> {ok, S1};
+                     N2 -> {ok, S2};
+                     _ -> undefined
+                   end
+               end),
+             classy:fallback_get_cluster(
+               fun(_) ->
+                   {ok, Cluster}
+               end)
+           end),
+       ?assertMatch(
+          ok,
+          ?ON(S2, classy:join_node(N1, join))),
+       ct:sleep(100),
+       %% Verify membership data:
+       ?assertMatch(
+          #{{Cluster, S2} :=
+              #{ S1 := #{mem := true, host := N1, info := #{via_fallback := true, added_by_hook := N1}}
+               , S2 := #{mem := true, host := N2}
+               }},
+          ?ON(S2, classy_membership:dump_values())),
+       %% 3. Restart S1:
+       stop_site(S1),
+       restart_site(S1),
+       [?ON(I, classy_site_metadata:set(via_fallback, false)) || I <- [S1, S2]],
+       ct:sleep(1000),
+       [?assertMatch(
+           #{{Cluster, I} :=
+               #{ S1 := #{mem := true, host := N1, info := #{via_fallback := false}}
+                , S2 := #{mem := true, host := N2, info := #{via_fallback := false}}
+                }},
+           ?ON(I, classy_membership:dump_values()))
+        || I <- [S1, S2]]
+     end,
+     [fun classy_ct:no_unexpected_events/1]).
+
+%% This testcase simulates situation when a classy node joins to a
+%% cluster consisting of both classy and non-classy nodes:
+t_610_fallback_mixed(_) ->
+  S1 = ~"s1",
+  S2 = ~"s2",
+  S3 = ~"s3",
+  ?check_trace(
+     #{timetrap => ?timetrap},
+     begin
+       %% Setup: initially, N1 and N2 form a cluster. N3 will later
+       %% join to N1, while N1 doesn't run classy application (imitate
+       %% old node). N2 will be running classy, to emulate partial
+       %% upgrade.
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       N3 = create_start_site(S3, #{}),
+       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
+       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
+       wait_site_joined([S1, S2], Cluster, S2),
+       ?ON(S1, classy_site_metadata:set(via_fallback, false)),
+       ?ON(S2, classy_site_metadata:set(via_fallback, false)),
+
+       ?ON(S1,
+           begin
+             ok = application:stop(classy),
+             meck:new(classy_node, [no_history, no_link])
+           end),
+       %% 1. Verify that initially hello fails:
+       ?assertMatch(
+          {error, invalid_target_node},
+          ?ON(S3, classy:join_node(N1, join))),
+       %% 2. Set up fallback hooks and rejoin:
+       ?ON(S3,
+           begin
+             classy:fallback_get_site(
+               fun(N) ->
+                   case N of
+                     N1 -> {ok, S1};
+                     N2 -> {ok, S2}
+                   end
+               end),
+             classy:fallback_get_cluster(
+               fun(_) ->
+                   {ok, Cluster}
+               end),
+             classy:fallback_get_peer_nodes(
+               fun(N) when N =:= N1 ->
+                   {ok, [N1, N2]}
+               end)
+           end),
+       ?assertMatch(
+          ok,
+          ?ON(S3, classy:join_node(N1, join))),
+       %% 3. Since S3 is up and running, S1 should receive real data
+       %% from it, and states should converge. Temporary data written
+       %% by fallback should disappear.
+       wait_site_joined([S2, S3], Cluster, S3),
+       ct:sleep(1000),
+       Dump = fun(Site) ->
+                  ?ON(Site,
+                      begin
+                        #{{Cluster, Site} := Val} = classy_membership:dump_values(),
+                        Val
+                      end)
+              end,
+       ?assertEqual(Dump(S2), Dump(S3)),
+       %% 4. Restart S1. It should update its information normally,
+       %% and all sites should be in sync:
+       stop_site(S1),
+       ok = restart_site(S1),
+       ct:sleep(1000),
+       ?assertMatch(
+          #{ S1 := #{mem := true, host := N1, info := #{via_fallback := false}, liveness := _}
+           , S2 := #{mem := true, host := N2, info := #{via_fallback := false}, liveness := _}
+           , S3 := #{mem := true, host := N3, liveness := _}
+           },
+          Dump(S1)),
+       ?assertEqual(Dump(S1), Dump(S2)),
+       ?assertEqual(Dump(S2), Dump(S3))
      end,
      [fun classy_ct:no_unexpected_events/1]).
 

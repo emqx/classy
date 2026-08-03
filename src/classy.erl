@@ -62,6 +62,11 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , run_level/2
         , enrich_site_info/2
         , on_metadata_change/2
+
+        , fallback_get_site/1
+        , fallback_get_cluster/1
+        , fallback_get_meta/2
+        , fallback_get_peer_nodes/1
         ]).
 
 -export_type([ cluster_id/0
@@ -271,7 +276,7 @@ NOTE: This function works even if the site is down.
 
 @xref{classy_site_metadata:set/2}, @ref{classy_site_metadata:delete/1}, @ref{classy_site_metadata:lookup/1}.
 """.
--spec get_meta(classy:site()) -> {ok, info()} | undefined.
+-spec get_meta(classy:site()) -> {ok, site_metadata()} | undefined.
 get_meta(Site) ->
   classy_node:get_meta(Site).
 
@@ -853,6 +858,95 @@ Register a hook that is called when metadata of a site (local or remote) changes
        ) -> classy_hook:hook().
 on_metadata_change(Hook, Prio) ->
   classy_hook:insert(?on_metadata_change, Hook, Prio).
+
+-doc """
+Fallback: derive site ID of a remote node that doesn't run classy.
+
+WARNING: Fallback mechanism is meant to support rolling cluster upgrade.
+This functionality is inherently dangerous,
+but it won't activate unless the user registers all fallback hooks.
+
+The following limitations apply:
+
+@enumerate
+@item The hook should return a value that cannot change,
+even after the node is upgraded.
+
+@item At most one fallback hook should be registered for this hookpoint.
+Registering more than one hook is dangerous,
+since transient errors in the hook may lead to inconsistent results between the calls.
+
+@end enumerate
+""".
+-spec fallback_get_site(fun((node()) -> {ok, site()} | undefined)) -> classy_hook:hook().
+fallback_get_site(Hook) ->
+  classy_hook:insert(?fallback_get_site, Hook, 0).
+
+-doc """
+Fallback: derive cluster ID of a remote node that doesn't run classy.
+
+WARNING: Fallback mechanism is meant to support rolling cluster upgrade.
+This functionality is inherently dangerous,
+but it won't activate unless the user registers all fallback hooks.
+
+The following limitations apply:
+
+@enumerate
+@item The hook should return a value that cannot change,
+even after the node is upgraded.
+
+@item All peer nodes of this one should return the same cluster ID.
+
+@item At most one fallback hook should be registered for this hookpoint.
+Registering more than one hook is dangerous,
+since transient errors in the hook may lead to inconsistent results between the calls.
+
+@end enumerate
+""".
+-spec fallback_get_cluster(fun((node()) -> {ok, cluster_id()} | undefined)) -> classy_hook:hook().
+fallback_get_cluster(Hook) ->
+  classy_hook:insert(?fallback_get_cluster, Hook, 0).
+
+-doc """
+Fallback: derive site metadata of a remote node that doesn't run classy.
+
+This hook is optional.
+""".
+-spec fallback_get_meta(
+        fun((node(), site_metadata()) -> site_metadata()),
+        classy_hook:prio()
+       ) -> classy_hook:hook().
+fallback_get_meta(Hook, Prio) ->
+  classy_hook:insert(?fallback_get_meta, Hook, Prio).
+
+-doc """
+Fallback: get list of peer nodes of a given node.
+
+When a classy-aware node joins to another node via the fallback mechanism,
+its peer information is seeded by running
+@ref{classy:fallback_get_site/1}, @ref{classy:fallback_get_cluster/1} and @ref{classy:fallback_get_meta/2}
+hooks for each node returned by this hook,
+called with the node that is the target of @code{join_node} operation.
+
+The following limitations apply:
+
+@enumerate
+@item All nodes must have the same cluster ID,
+or join operation is aborted.
+
+@item This hook runs @emph{once},
+during the join operation.
+
+If more nodes that are not classy-aware join or leave the cluster,
+classy will ignore these changes.
+
+Note that the fallback mechanism is meant for rolling upgrade.
+It implies that all nodes subsequently update to classy-aware code.
+@end enumerate
+""".
+-spec fallback_get_peer_nodes(fun((node()) -> {ok, [node()]} | undefined)) -> classy_hook:hook().
+fallback_get_peer_nodes(Hook) ->
+  classy_hook:insert(?fallback_get_peer_nodes, Hook, 0).
 
 %%================================================================================
 %% Internal exports

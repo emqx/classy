@@ -44,6 +44,10 @@
 -define(on_peer_node_change, on_peer_node_change).
 -define(on_node_classify, on_node_classify).
 -define(on_metadata_change, on_metadata_change).
+-define(fallback_get_site, fallback_get_site).
+-define(fallback_get_cluster, fallback_get_cluster).
+-define(fallback_get_meta, fallback_get_meta).
+-define(fallback_get_peer_nodes, fallback_get_peer_nodes).
 
 %% Run levels:
 -define(stopped, stopped).

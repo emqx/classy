@@ -26,7 +26,6 @@ Management of the local site and node.
         , global_set/2
         , global_lookup/1
         , global_delete/1
-        , update_meta/0
         ]).
 
 %% behavior callbacks:
@@ -63,10 +62,15 @@ Management of the local site and node.
         { cluster :: classy:cluster_id()
         , data :: #{classy:site() => classy_membership:update()}
         }).
--record(call_update_meta, {}).
 
 %% Type of records used to store arbitrary data in the ?globals table.
 -record(custom_g, {k}).
+
+%% Value returned by hello method:
+-type bootstrap_info() :: #{ site     := classy:site()
+                           , cluster  := classy:cluster_id()
+                           , mem_data := classy_membership:sync_data()
+                           }.
 
 %%================================================================================
 %% API functions
@@ -234,7 +238,7 @@ n_restarts(Site) ->
   end.
 
 -doc false.
--spec get_meta(classy:site()) -> {ok, map()} | undefined.
+-spec get_meta(classy:site()) -> {ok, classy:site_metadata()} | undefined.
 get_meta(Site) ->
   case classy_table:lookup(?site_info, Site) of
     [#site_info{meta = Meta}] ->
@@ -341,6 +345,7 @@ terminate(Reason, _S) ->
 %%  RPC target, called by remote node during `join'.
 -doc false.
 %% Returns information about the local site, used for bootstrapping the remote.
+-spec hello() -> bootstrap_info() | {error, _}.
 hello() ->
   maybe
     {ok, Cluster} ?= the_cluster(),
@@ -348,7 +353,6 @@ hello() ->
     {ok, MemData} ?= classy_membership:get_data(Cluster, Site, 0, 0),
     #{ site => Site
      , cluster => Cluster
-     , pid => whereis(?SERVER)
      , mem_data => MemData
      }
   else
@@ -408,14 +412,68 @@ global_lookup(Key) ->
 global_delete(Key) ->
   classy_table:delete(?globals, #custom_g{k = Key}).
 
--doc false.
--spec update_meta() -> ok.
-update_meta() ->
-  gen_server:call(?SERVER, #call_update_meta{}, infinity).
-
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+-spec hello(node()) -> bootstrap_info() | {error, _}.
+hello(Node) ->
+  try erpc:call(Node, ?MODULE, hello, [], classy_lib:rpc_timeout()) of
+    #{site := _, cluster := _, mem_data := _} = Hello ->
+      Hello;
+    Other ->
+      {error, {bad_hello, Node, Other}}
+  catch
+    error:{exception, undef, _} ->
+      %% Node may be old and not classy-aware. Try fallback:
+      hello_fallback(Node);
+    error:Err ->
+      {error, Err};
+    EC:Err:Stack ->
+      {error, {EC, Err, Stack}}
+  end.
+
+-spec hello_fallback(node()) -> bootstrap_info() | {error, _}.
+hello_fallback(Node) ->
+  case the_site() of
+    {ok, Local} ->
+      maybe
+        BootstrapNodeInfo = site_info_fallback(Node),
+        {ok, Node, Site, Cluster, _SiteMeta} ?= BootstrapNodeInfo,
+        {ok, PeerNodes} ?= classy_hook:first_match(?fallback_get_peer_nodes, [Node]),
+        true ?= is_list(PeerNodes) orelse {error, {bad_peer_nodes, PeerNodes}},
+        PeerInfo = [BootstrapNodeInfo | [site_info_fallback(I) || I <- PeerNodes, I =/= Node]],
+        {ok, MemData} ?= classy_membership:mem_data_fallback(Local, Cluster, PeerInfo),
+        #{ site     => Site
+         , cluster  => Cluster
+         , mem_data => MemData
+         }
+      else
+        undefined ->
+          {error, invalid_target_node};
+        {error, _} = Error ->
+          Error
+      end;
+    undefined ->
+      {error, default_site_not_initialized}
+  end.
+
+-spec site_info_fallback(node()) -> {ok, node(), classy:site(), classy:cluster_id(), classy:site_metadata()} | {error, _}.
+site_info_fallback(Node) ->
+  maybe
+    {ok, Site} ?= classy_hook:first_match(?fallback_get_site, [Node]),
+    true ?= is_binary(Site) orelse {error, {bad_fallback_site, Site}},
+    {ok, Cluster} ?= classy_hook:first_match(?fallback_get_cluster, [Node]),
+    true ?= is_binary(Cluster) orelse {error, {bad_fallback_cluster, Cluster}},
+    SiteMeta = classy_hook:fold(?fallback_get_meta, [Node], #{via_fallback => true}),
+    true ?= is_map(SiteMeta) orelse {error, {bad_metadata, SiteMeta}},
+    {ok, Node, Site, Cluster, SiteMeta}
+  else
+    undefined ->
+      {error, invalid_target_node};
+    {error, _} = Error ->
+      Error
+  end.
 
 flush_mem_deltas() ->
   receive
@@ -472,10 +530,9 @@ handle_join(S, Call) ->
             , cluster = ExpectedCluster
             , intent  = Intent
             } = Call,
-  case rpc:call(Node, ?MODULE, hello, [], classy_lib:rpc_timeout()) of
+  case hello(Node) of
     #{ site := Remote
      , cluster := Cluster
-     , pid := _RemotePid
      , mem_data := MemData
      } when Cluster =:= ExpectedCluster;
             ExpectedCluster =:= any ->
@@ -488,9 +545,7 @@ handle_join(S, Call) ->
     #{cluster := Cluster} ->
       {error, {cluster_changed, #{ExpectedCluster => Cluster}}};
     {error, _} = Err ->
-      Err;
-    Err ->
-      {error, {bad_hello, Err}}
+      Err
   end.
 
 -spec do_join_node(
@@ -651,6 +706,7 @@ prep_stop(Reason, Timeout) ->
   prep_stop(Reason),
   classy_rl_changer:set_sync(?stopped, Timeout).
 
+-spec the_cluster() -> {ok, classy:cluster_id()} | undefined.
 the_cluster() ->
   case classy_table:lookup(?globals, ?the_cluster) of
     [V] ->
@@ -659,6 +715,7 @@ the_cluster() ->
       undefined
   end.
 
+-spec the_site() -> {ok, classy:site()} | undefined.
 the_site() ->
   case classy_table:lookup(?globals, ?the_site) of
     [V] ->

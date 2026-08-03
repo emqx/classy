@@ -75,6 +75,7 @@ Instead, they are abandoned until the next node restart.
         , verify_mfa/3
         , retry_interval/0
         , on_fail/2
+        , on_run_level/2
         ]).
 
 -export_type([ id/0
@@ -339,6 +340,14 @@ on_fail(FailInfo, Funs) ->
         _ = classy_lib:safe_apply(M, F, [FailInfo | Args])
     end,
     Funs).
+
+-doc false.
+-spec on_run_level(classy:run_level(), classy:run_level()) -> ok.
+on_run_level(single, cluster) ->
+  classy_vote_coordinator:restore(),
+  classy_vote_participant:restore();
+on_run_level(_, _) ->
+  ok.
 
 %%================================================================================
 %% Internal functions

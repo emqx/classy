@@ -26,6 +26,7 @@ Business code should not use it directly.
         , site_of_node/2
         , to_liveness/3
         , from_liveness/1
+        , dump_values/0
         , dump/0
         , wipe/3
         ]).
@@ -34,7 +35,7 @@ Business code should not use it directly.
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([start_link/2, cast_sync/3, call_sync/3]).
+-export([start_link/2, cast_sync/3, call_sync/3, mem_data_fallback/3]).
 
 -ifdef(TEST).
 -export([reset_acked_out/4]).
@@ -90,7 +91,7 @@ Business code should not use it directly.
 -type magic() :: term().
 
 %% The following command is used to update status of `target' site
--record(op_set, {origin, k, c, m, val, owt, reserved}).
+-record(op_set, {origin, k, c, m = 0, val, owt, reserved}).
 
 -type op() ::
         #op_set{ origin :: classy:site() %% Site that issued the command
@@ -315,6 +316,38 @@ flush(Cluster, Local) ->
     #call_flush{},
     ?call_timeout).
 
+-doc """
+Format values stored in the membership CRDT to a human-readable form for tests and debugging.
+
+Unlike @code{dump/0},
+this function doesn't return internal metadata related to synchronization.
+""".
+dump_values() ->
+  ets:foldl(
+    fun(#classy_kv{k = K, v = V}, Acc) ->
+        case K of
+          #pk_last{c = Cluster, l = Local} ->
+            #pv_last{ op = #op_set{ k = Key
+                                  , val = Val
+                                  }
+                    } = V,
+            Path = case Key of
+                     #mem{s = Target}  -> [Target, mem];
+                     #host{s = Target} -> [Target, host];
+                     #info{s = Target} -> [Target, info];
+                     #live{s = Target} -> [Target, liveness]
+                   end,
+            classy_lib:map_deep_insert(
+              [{Cluster, Local} | Path],
+              Val,
+              Acc);
+          _ ->
+            Acc
+        end
+    end,
+    #{},
+    ?ptab).
+
 -doc "Format full state of the membership CRDT in human-readable form for tests and debugging.".
 -spec dump() -> #{{classy:cluster_id(), classy:site()} => map()}.
 dump() ->
@@ -438,7 +471,9 @@ start_link(Cluster, Local) ->
 cast_sync(Cluster, Site, SyncData) ->
   gen_server:cast(?via(Cluster, Site), SyncData).
 
-%% @doc Send membership data to the process
+-doc """
+Send membership data to the process.
+""".
 -spec call_sync(classy:cluster_id(), classy:site(), sync_data()) -> ok.
 call_sync(Cluster, Site, SyncData) ->
   ?tp(classy_membership_call_sync,
@@ -447,6 +482,27 @@ call_sync(Cluster, Site, SyncData) ->
        , clock => #cast_sync.c
        }),
   gen_server:call(?via(Cluster, Site), SyncData, ?call_timeout).
+
+-doc """
+Imitate cluster response from a remote node.
+
+This function is used in a fallback mechanism that allows classy-aware nodes to join regular nodes.
+This is needed to support rolling upgrades.
+""".
+-spec mem_data_fallback(Local, classy:cluster_id(), FallbackData) -> {ok, sync_data()} | {error, _}
+          when FallbackData :: [{ok, node(), classy:site(), classy:cluster_id(), classy:site_metadata()} | {error, _}],
+               Local :: classy:site().
+mem_data_fallback(Local, Cluster, FallbackData) ->
+  maybe
+    {ok, Data} ?= peer_data_fallback(Local, Cluster, FallbackData, []),
+    {ok, #cast_sync{ cluster = Cluster
+                   , from = Local
+                   , since = 0
+                   , acked = 0
+                   , c = 0
+                   , data = Data
+                   }}
+  end.
 
 -doc "Get membership data".
 -spec get_data(classy:cluster_id(), classy:site(), clock(), clock()) -> {ok, sync_data()} | {error, _}.
@@ -879,6 +935,33 @@ forget_site(Site, #s{cluster = Cluster, site = Local}) when is_binary(Site) ->
   classy_table:dirty_delete(?ptab, #pk_acked_in{c = Cluster, l = Local, r = Site}),
   classy_table:dirty_delete(?ptab, #pk_acked_out{c = Cluster, l = Local, r = Site}),
   ok.
+
+%%--------------------------------------------------------------------------------
+%% Fallback
+%%--------------------------------------------------------------------------------
+
+peer_data_fallback(_Local, _Cluster, [], Acc) ->
+  {ok, Acc};
+peer_data_fallback(Local, Cluster, [{error, _} | Rest], Acc) ->
+  peer_data_fallback(Local, Cluster, Rest, Acc);
+peer_data_fallback(Local, Cluster, [{ok, Node, Remote, Cluster, RemoteMetadata} | Rest], Acc) ->
+  Make = fun(Key, Val) ->
+             #op_set{ origin = Local
+                    , k      = Key
+                    , c      = 0
+                    , m      = -99999 %% Very low magic, so the site can overwrite its own info when it upgrades
+                    , val    = Val
+                    , owt    = 0
+                    }
+         end,
+  Ops = [ Make(#mem{s = Remote}, true)
+        , Make(#host{s = Remote}, Node)
+        , Make(#info{s = Remote}, RemoteMetadata)
+        ],
+  peer_data_fallback(Local, Cluster, Rest, Ops ++ Acc);
+peer_data_fallback(_Local, Cluster, [{ok, Node, Remote, RemoteCluster, _RemoteMetadata} | _], _Acc) ->
+  ErrInfo = #{node => Node, site => Remote, cluster => RemoteCluster, expected_cluster => Cluster},
+  {error, {inconsistent_cluster_fallback, ErrInfo}}.
 
 %%--------------------------------------------------------------------------------
 %% Interface for site state storage
