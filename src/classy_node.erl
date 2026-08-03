@@ -341,6 +341,11 @@ terminate(Reason, _S) ->
 %%  RPC target, called by remote node during `join'.
 -doc false.
 %% Returns information about the local site, used for bootstrapping the remote.
+-spec hello() -> #{ site     := classy:site()
+                  , cluster  := classy:cluster_id()
+                  , mem_data := classy_membership:sync_data()
+                  }
+                | {error, _}.
 hello() ->
   maybe
     {ok, Cluster} ?= the_cluster(),
@@ -348,7 +353,6 @@ hello() ->
     {ok, MemData} ?= classy_membership:get_data(Cluster, Site, 0, 0),
     #{ site => Site
      , cluster => Cluster
-     , pid => whereis(?SERVER)
      , mem_data => MemData
      }
   else
@@ -475,7 +479,6 @@ handle_join(S, Call) ->
   case rpc:call(Node, ?MODULE, hello, [], classy_lib:rpc_timeout()) of
     #{ site := Remote
      , cluster := Cluster
-     , pid := _RemotePid
      , mem_data := MemData
      } when Cluster =:= ExpectedCluster;
             ExpectedCluster =:= any ->
