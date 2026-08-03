@@ -26,7 +26,6 @@ Management of the local site and node.
         , global_set/2
         , global_lookup/1
         , global_delete/1
-        , update_meta/0
         ]).
 
 %% behavior callbacks:
@@ -63,7 +62,6 @@ Management of the local site and node.
         { cluster :: classy:cluster_id()
         , data :: #{classy:site() => classy_membership:update()}
         }).
--record(call_update_meta, {}).
 
 %% Type of records used to store arbitrary data in the ?globals table.
 -record(custom_g, {k}).
@@ -411,11 +409,6 @@ global_lookup(Key) ->
 -spec global_delete(term()) -> ok | {error, _}.
 global_delete(Key) ->
   classy_table:delete(?globals, #custom_g{k = Key}).
-
--doc false.
--spec update_meta() -> ok.
-update_meta() ->
-  gen_server:call(?SERVER, #call_update_meta{}, infinity).
 
 %%================================================================================
 %% Internal functions
