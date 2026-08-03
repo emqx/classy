@@ -96,23 +96,11 @@ start_link_membership_sup() ->
 
 -spec start_link_vote_coordinator_sup() -> supervisor:startlink_ret().
 start_link_vote_coordinator_sup() ->
-  case supervisor:start_link({local, ?VOTE_COORDINATOR_SUP}, ?MODULE, ?VOTE_COORDINATOR_SUP) of
-    {ok, _} = Ok ->
-      classy_vote_coordinator:restore(),
-      Ok;
-    Other ->
-      Other
-  end.
+  supervisor:start_link({local, ?VOTE_COORDINATOR_SUP}, ?MODULE, ?VOTE_COORDINATOR_SUP).
 
 -spec start_link_vote_participant_sup() -> supervisor:startlink_ret().
 start_link_vote_participant_sup() ->
-  case supervisor:start_link({local, ?VOTE_PARTICIPANT_SUP}, ?MODULE, ?VOTE_PARTICIPANT_SUP) of
-    {ok, _} = Ok ->
-      classy_vote_participant:restore(),
-      Ok;
-    Other ->
-      Other
-  end.
+  supervisor:start_link({local, ?VOTE_PARTICIPANT_SUP}, ?MODULE, ?VOTE_PARTICIPANT_SUP).
 
 %%================================================================================
 %% behavior callbacks
@@ -146,10 +134,10 @@ init(#top{}) ->
                  },
   Children = [ sup_spec(#{id => ?TABLE_SUP, start => {?MODULE, start_link_table_sup, []}})
              , sup_spec(#{id => ?MEMBERSHIP_SUP, start => {?MODULE, start_link_membership_sup, []}})
-             , RLChanger
-             , Node
              , sup_spec(#{id => ?VOTE_COORDINATOR_SUP, start => {?MODULE, start_link_vote_coordinator_sup, []}})
              , sup_spec(#{id => ?VOTE_PARTICIPANT_SUP, start => {?MODULE, start_link_vote_participant_sup, []}})
+             , RLChanger
+             , Node
              , Liveness
              , Autocluster
              ],
