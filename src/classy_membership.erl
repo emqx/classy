@@ -775,15 +775,15 @@ handle_wipe(#s{cluster = Cluster, site = Local, sync_timer = Timer} = S0, Stop, 
                   [{d, K} | Acc];
                 #ki{c = Cluster, l = Local} ->
                   [{d, K} | Acc];
-                %% IMPORTANT: logical clocks should never be deleted
+                %% IMPORTANT: logical clocks should never be deleted,
                 %% to uphold the invariant stating that the same site
                 %% cannot emit two events with the same clock. Doing
                 %% so could violate the relative ordering of commands
                 %% issued by the same site before and after it rejoins
-                %% the cluster. There's no work around this either:
-                %% one cannot "re-sync" the clock, as there's no
-                %% guarnatee that the node will re-join to the site
-                %% that has the latest data.
+                %% the cluster. There's no workaround this either: one
+                %% cannot "re-sync" the clock, as there's no guarantee
+                %% that the node will re-join to the site that has the
+                %% latest data.
                 _ ->
                   Acc
               end
