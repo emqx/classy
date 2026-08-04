@@ -480,12 +480,26 @@ prop_every_vote_concludes(Trace) ->
                                        K =:= ?classy_vote_coord_early_abort,
      Trace).
 
+%% Verify that once the participant is permanently established, it
+%% eventually receives the outcome.
+%%
 %% This property should always hold, unless the coordinator is removed
 %% from the cluster and the participants auto-abort.
 prop_every_participant_receives_outcome(Trace) ->
-  ?strict_causality(
-     #{?snk_kind := ?classy_vote_part_established, id := _Id, site := _Site},
-     #{?snk_kind := ?classy_vote_part_recv_outcome, id := _Id, site := _Site},
-     Trace).
+  Res = ?find_pairs(
+           #{?snk_kind := ?classy_vote_part_established, id := _Id, site := _Site},
+           #{?snk_kind := ?classy_vote_part_recv_outcome, id := _Id, site := _Site},
+           Trace),
+  %% Find unmatched causes. NOTE: unmatched effects are tolerated due
+  %% to the possibility of retries.
+  ?assertMatch(
+     [],
+     [I || I <- Res,
+           case I of
+             {pair, _, _}          -> false;
+             {unmatched_effect, _} -> false;
+             _                     -> true
+           end]),
+  length(Res) > 0.
 
 -endif.
