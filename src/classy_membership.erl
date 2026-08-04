@@ -530,6 +530,9 @@ All data related to the cluster is gone.
 Otherwise the process keeps running, but it continues from a fresh state.
 Logically, it is equivalent to @code{wipe(..., true)} followed by @code{ensure_started(...)}
 (re-initialization is done in-place).
+
+NOTE: logical clocks are never deleted.
+Removing them could break some important assumptions about command order.
 """.
 -spec wipe(classy:cluster_id(), classy:site(), boolean()) -> ok.
 wipe(Cluster, Local, Stop) when is_boolean(Stop) ->
@@ -774,8 +777,15 @@ handle_wipe(#s{cluster = Cluster, site = Local, sync_timer = Timer} = S0, Stop, 
                   [{d, K} | Acc];
                 #pk_acked_in{c = Cluster, l = Local} ->
                   [{d, K} | Acc];
-                #pk_clock{c = Cluster, s = Local} ->
-                  [{d, K} | Acc];
+                %% IMPORTANT: logical clocks should never be deleted
+                %% to uphold the invariant stating that the same site
+                %% cannot emit two events with the same clock. Doing
+                %% so could violate the relative ordering of commands
+                %% issued by the same site before and after it rejoins
+                %% the cluster. There's no work around this either:
+                %% one cannot "re-sync" the clock, as there's no
+                %% guarnatee that the node will re-join to the site
+                %% that has the latest data.
                 _ ->
                   Acc
               end
