@@ -765,7 +765,10 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
     #{Local := #{mem := false, origin := Origin}} ->
       %% We got kicked remotely. In this case we don't bother
       %% importing the data and running the hooks, and go straight to
-      %% `on_leave':
+      %% `on_leave'.
+      %%
+      %% NOTE: `Local' should never be equal to the `Origin', if it
+      %% happens it indicates a bug.
       ?tp(warning, ?classy_kicked_remotely,
           #{ cluster => Cluster
            , local   => Local

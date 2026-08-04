@@ -144,27 +144,25 @@ Business code should not use it directly.
         }).
 
 %% Persistent table keys:
-
-%% Lamport clock of the site:
--record(pk_clock,
+%%   Lamport *C*lock of the site:
+-record(kc,
         { c %% Cluster
         , s %% Site (local)
         }).
-
-%% Clock of the last message received from the peer:
--record(pk_acked_in, {c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}).
-%% Clock of the last sync message to the peer:
--record(pk_acked_out, {c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}).
-%% Last set command for the site:
--record(pk_last, {c, l, k}).
--type pk_last() :: #pk_last{c :: classy:cluster_id(), l :: classy:site(), k :: key()}.
+%%   acked *I*n: Clock of the last message received from the peer:
+-record(ki, {c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}).
+%%   acked *O*ut: Clock of the last sync message to the peer:
+-record(ko, {c :: classy:cluster_id(), l :: classy:site(), r :: classy:site()}).
+%%   *L*ast set command for the site:
+-record(kl, {c, l, k}).
+-type pk_last() :: #kl{c :: classy:cluster_id(), l :: classy:site(), k :: key()}.
 
 %% Composite table values:
--record(pv_last,
+-record(vl,
         { op    % Last update operation
         , toi   % Local logical time of importing the op
         }).
--type pv_last() :: #pv_last{op :: op(), toi :: clock()}.
+-type pv_last() :: #vl{op :: op(), toi :: clock()}.
 
 -type liveness() :: non_neg_integer().
 
@@ -178,7 +176,7 @@ known_clusters(Site) ->
   ets:foldl(
     fun(#classy_kv{k = K}, Acc) ->
         case K of
-          #pk_last{c = Cluster, l = Local, k = #mem{s = Remote}} when Local =:= Site ->
+          #kl{c = Cluster, l = Local, k = #mem{s = Remote}} when Local =:= Site ->
             maps:update_with(
               Cluster,
               fun(L) -> [Remote | L] end,
@@ -255,8 +253,8 @@ In both cases the result value can't be trusted.
 """.
 -spec members(classy:cluster_id(), classy:site()) -> [classy:site()].
 members(Cluster, Local) ->
-  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, k = #mem{s = '$1', _ = '_'}, _ = '_'}
-                   , v = #pv_last{op = #op_set{val = true, _ = '_'}, _ = '_'}
+  MS = { #classy_kv{ k = #kl{c = Cluster, l = Local, k = #mem{s = '$1', _ = '_'}, _ = '_'}
+                   , v = #vl{op = #op_set{val = true, _ = '_'}, _ = '_'}
                    , _ = '_'
                    }
        , []
@@ -271,7 +269,7 @@ list_local_sites(running) ->
   gproc:select({local, names}, [MS]);
 list_local_sites(all) ->
   %% Every local site has a logical clock:
-  MS = { #classy_kv{ k = #pk_clock{c = '$1', s = '$2'}
+  MS = { #classy_kv{ k = #kc{c = '$1', s = '$2'}
                    , _ = '_'
                    }
        , []
@@ -326,8 +324,8 @@ dump_values() ->
   ets:foldl(
     fun(#classy_kv{k = K, v = V}, Acc) ->
         case K of
-          #pk_last{c = Cluster, l = Local} ->
-            #pv_last{ op = #op_set{ k = Key
+          #kl{c = Cluster, l = Local} ->
+            #vl{ op = #op_set{ k = Key
                                   , val = Val
                                   }
                     } = V,
@@ -354,8 +352,8 @@ dump() ->
   ets:foldl(
     fun(#classy_kv{k = K, v = V}, Acc) ->
         case K of
-          #pk_last{c = Cluster, l = Local} ->
-            #pv_last{ op = #op_set{ origin = Origin
+          #kl{c = Cluster, l = Local} ->
+            #vl{ op = #op_set{ origin = Origin
                                   , k = Key
                                   , c = Clock
                                   , val = Val
@@ -374,17 +372,17 @@ dump() ->
               [{Cluster, Local} | Path],
               Info,
               Acc);
-          #pk_acked_out{c = Cluster, l = Local, r = Remote} ->
+          #ko{c = Cluster, l = Local, r = Remote} ->
             classy_lib:map_deep_insert(
               [{Cluster, Local}, acked_out, Remote],
               V,
               Acc);
-          #pk_acked_in{c = Cluster, l = Local, r = Remote} ->
+          #ki{c = Cluster, l = Local, r = Remote} ->
             classy_lib:map_deep_insert(
               [{Cluster, Local}, acked_in, Remote],
               V,
               Acc);
-          #pk_clock{c = Cluster, s = Local} ->
+          #kc{c = Cluster, s = Local} ->
             classy_lib:map_deep_insert(
               [{Cluster, Local}, clock],
               V,
@@ -451,7 +449,7 @@ from_liveness(Liveness) when is_integer(Liveness),
 reset_acked_out(Cluster, Local, Remote, Clock) ->
   classy_table:dirty_write(
     ?ptab,
-    #pk_acked_out{c = Cluster, l = Local, r = Remote},
+    #ko{c = Cluster, l = Local, r = Remote},
     Clock).
 
 -endif.
@@ -530,6 +528,9 @@ All data related to the cluster is gone.
 Otherwise the process keeps running, but it continues from a fresh state.
 Logically, it is equivalent to @code{wipe(..., true)} followed by @code{ensure_started(...)}
 (re-initialization is done in-place).
+
+NOTE: logical clocks are never deleted.
+Removing them could break some important assumptions about command order.
 """.
 -spec wipe(classy:cluster_id(), classy:site(), boolean()) -> ok.
 wipe(Cluster, Local, Stop) when is_boolean(Stop) ->
@@ -563,7 +564,7 @@ init(#{cluster := Cluster, site := Site}) when is_binary(Site), is_binary(Cluste
   ok = classy_table:open(
          ?ptab,
          #{ets_options => [{read_concurrency, true}]}),
-  case classy_table:lookup(?ptab, #pk_clock{c = Cluster, s = Site}) of
+  case classy_table:lookup(?ptab, #kc{c = Cluster, s = Site}) of
     [Clock] -> ok;
     [] -> Clock = 0
   end,
@@ -768,14 +769,21 @@ handle_wipe(#s{cluster = Cluster, site = Local, sync_timer = Timer} = S0, Stop, 
   Ops = ets:foldl(
           fun(#classy_kv{k = K}, Acc) ->
               case K of
-                #pk_last{c = Cluster, l = Local} ->
+                #kl{c = Cluster, l = Local} ->
                   [{d, K} | Acc];
-                #pk_acked_out{c = Cluster, l = Local} ->
+                #ko{c = Cluster, l = Local} ->
                   [{d, K} | Acc];
-                #pk_acked_in{c = Cluster, l = Local} ->
+                #ki{c = Cluster, l = Local} ->
                   [{d, K} | Acc];
-                #pk_clock{c = Cluster, s = Local} ->
-                  [{d, K} | Acc];
+                %% IMPORTANT: logical clocks should never be deleted,
+                %% to uphold the invariant stating that the same site
+                %% cannot emit two events with the same clock. Doing
+                %% so could violate the relative ordering of commands
+                %% issued by the same site before and after it rejoins
+                %% the cluster. There's no workaround this either: one
+                %% cannot "re-sync" the clock, as there's no guarantee
+                %% that the node will re-join to the site that has the
+                %% latest data.
                 _ ->
                   Acc
               end
@@ -872,10 +880,10 @@ notify(S = #s{cluster = Cluster, site = Local, clock = C, events_since = EventsS
 peer_to_update(Cluster, Local, Site) ->
   Get = fun(Key) ->
             [{Origin, Val} ||
-              #pv_last{op = #op_set{origin = Origin, val = Val}}
+              #vl{op = #op_set{origin = Origin, val = Val}}
                 <- classy_table:lookup(
                      ?ptab,
-                     #pk_last{c = Cluster, l = Local, k = Key})]
+                     #kl{c = Cluster, l = Local, k = Key})]
         end,
   case Get(#mem{s = Site}) of
     [{_MemOrigin, true}] ->
@@ -928,12 +936,12 @@ sites_for_cleanup(Self, SecsDown, S) ->
   [I || I <- LongGone, max_toi(I, S) =< MinAcked].
 
 forget_site(Site, #s{cluster = Cluster, site = Local}) when is_binary(Site) ->
-  classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, k = #mem{s = Site}}),
-  classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, k = #host{s = Site}}),
-  classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, k = #info{s = Site}}),
-  classy_table:dirty_delete(?ptab, #pk_last{c = Cluster, l = Local, k = #live{s = Site}}),
-  classy_table:dirty_delete(?ptab, #pk_acked_in{c = Cluster, l = Local, r = Site}),
-  classy_table:dirty_delete(?ptab, #pk_acked_out{c = Cluster, l = Local, r = Site}),
+  classy_table:dirty_delete(?ptab, #kl{c = Cluster, l = Local, k = #mem{s = Site}}),
+  classy_table:dirty_delete(?ptab, #kl{c = Cluster, l = Local, k = #host{s = Site}}),
+  classy_table:dirty_delete(?ptab, #kl{c = Cluster, l = Local, k = #info{s = Site}}),
+  classy_table:dirty_delete(?ptab, #kl{c = Cluster, l = Local, k = #live{s = Site}}),
+  classy_table:dirty_delete(?ptab, #ki{c = Cluster, l = Local, r = Site}),
+  classy_table:dirty_delete(?ptab, #ko{c = Cluster, l = Local, r = Site}),
   ok.
 
 %%--------------------------------------------------------------------------------
@@ -972,13 +980,13 @@ set_last(LTime, Op, #s{cluster = Cluster, site = Local}) ->
   #op_set{k = K} = Op,
   classy_table:dirty_write(
     ?ptab,
-    #pk_last{c = Cluster, l = Local, k = K},
-    #pv_last{op = Op, toi = LTime}).
+    #kl{c = Cluster, l = Local, k = K},
+    #vl{op = Op, toi = LTime}).
 
 -spec memtab_lookup(key(), #s{}) -> {ok, op()} | undefined.
 memtab_lookup(K, #s{cluster = Cluster, site = Local}) ->
-  case classy_table:lookup(?ptab, #pk_last{c = Cluster, l = Local, k = K}) of
-    [#pv_last{op = Op}] ->
+  case classy_table:lookup(?ptab, #kl{c = Cluster, l = Local, k = K}) of
+    [#vl{op = Op}] ->
       {ok, Op};
     [] ->
       undefined
@@ -986,8 +994,8 @@ memtab_lookup(K, #s{cluster = Cluster, site = Local}) ->
 
 -spec memtab_since(clock(), #s{}) -> [op()].
 memtab_since(Since, #s{cluster = Cluster, site = Local}) ->
-  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, _ = '_'}
-                   , v = #pv_last{op = '$1', toi = '$2', _ = '_'}
+  MS = { #classy_kv{ k = #kl{c = Cluster, l = Local, _ = '_'}
+                   , v = #vl{op = '$1', toi = '$2', _ = '_'}
                    , _ = '_'
                    }
        , [{'>=', '$2', Since}]
@@ -997,7 +1005,7 @@ memtab_since(Since, #s{cluster = Cluster, site = Local}) ->
 
 -spec peers(#s{}) -> [classy:site()].
 peers(#s{cluster = Cluster, site = Local}) ->
-  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local, k = #mem{s = '$1'}}
+  MS = { #classy_kv{ k = #kl{c = Cluster, l = Local, k = #mem{s = '$1'}}
                    , _ = '_'
                    }
        , []
@@ -1010,8 +1018,8 @@ nodes_of_cluster(#s{cluster = Cluster, site = Local}) ->
   maps:from_list(select_nodes(Cluster, Local, {{'$1', '$2'}})).
 
 select_nodes(Cluster, Local, Action) ->
-  MS = { #classy_kv{ k = #pk_last{c = Cluster, l = Local,  k = #host{s = '$1'}}
-                   , v = #pv_last{op = #op_set{val = '$2', _ = '_'}, _ = '_'}
+  MS = { #classy_kv{ k = #kl{c = Cluster, l = Local,  k = #host{s = '$1'}}
+                   , v = #vl{op = #op_set{val = '$2', _ = '_'}, _ = '_'}
                    , _ = '_'
                    }
        , []
@@ -1045,8 +1053,8 @@ is_long_gone(MinTimeWhenKicked, Site, S) ->
 %% @doc Return maximum `toi' for any property of the site.
 -spec max_toi(classy:site(), #s{}) -> clock() | undefined.
 max_toi(Site, #s{cluster = Cluster, site = Local}) ->
-  MS = [{ #classy_kv{ k = #pk_last{c = Cluster, l = Local, k = Key, _ = '_'}
-                    , v = #pv_last{toi = '$1', _ = '_'}
+  MS = [{ #classy_kv{ k = #kl{c = Cluster, l = Local, k = Key, _ = '_'}
+                    , v = #vl{toi = '$1', _ = '_'}
                     , _ = '_'
                     }
         , []
@@ -1079,7 +1087,7 @@ sync_clock(T1, S0 = #s{clock = T0}) ->
 save_clock(#s{cluster = Cluster, site = Local, clock = Clock}) ->
   classy_table:dirty_write(
     ?ptab,
-    #pk_clock{c = Cluster, s = Local},
+    #kc{c = Cluster, s = Local},
     Clock).
 
 %%--------------------------------------------------------------------------------
@@ -1102,14 +1110,14 @@ need_sync(After, S = #s{sync_timer = T0}) ->
 
 -spec get_acked_in(classy:site(), #s{}) -> clock().
 get_acked_in(Site, #s{cluster = C, site = Local}) ->
-  case classy_table:lookup(?ptab, #pk_acked_in{c = C, l = Local, r = Site}) of
+  case classy_table:lookup(?ptab, #ki{c = C, l = Local, r = Site}) of
     [Clock] -> Clock;
     []      -> 0
   end.
 
 -spec get_acked_out(classy:site(), #s{}) -> clock().
 get_acked_out(Site, #s{cluster = C, site = Local}) ->
-  case classy_table:lookup(?ptab, #pk_acked_out{c = C, l = Local, r = Site}) of
+  case classy_table:lookup(?ptab, #ko{c = C, l = Local, r = Site}) of
     [Clock] -> Clock;
     []      -> 0
   end.
@@ -1118,14 +1126,14 @@ get_acked_out(Site, #s{cluster = C, site = Local}) ->
 set_acked_in(Site, Clock, #s{cluster = Cluster, site = Local}) ->
   classy_table:dirty_write(
     ?ptab,
-    #pk_acked_in{c = Cluster, l = Local, r = Site},
+    #ki{c = Cluster, l = Local, r = Site},
     Clock).
 
 -spec set_acked_out(classy:site(), clock(), #s{}) -> ok.
 set_acked_out(Site, Clock, #s{cluster = Cluster, site = Local}) ->
   classy_table:dirty_write(
     ?ptab,
-    #pk_acked_out{c = Cluster, l = Local, r = Site},
+    #ko{c = Cluster, l = Local, r = Site},
     Clock).
 
 sync_targets(S = #s{site = Local}) ->
