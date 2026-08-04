@@ -219,6 +219,11 @@ start_site(Site, S) ->
                            ]],
   Ret = familiar:start_site({familiar_cluster(), Site}),
   [?assertMatch({ok, _}, snabbkaffe:receive_events(I)) || I <- Subs],
+  %% TODO: currently sites can find out that they'd been kicked out
+  %% remotely after the sync. This sleep accounts for such situations,
+  %% letting sites re-init themselves before further commands are sent
+  %% there.
+  timer:sleep(100),
   Ret.
 
 %%================================================================================
