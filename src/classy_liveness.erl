@@ -26,9 +26,6 @@ liveness won't activate if @link{quorum} config is set to a value > 1.
 
 -behavior(gen_server).
 
-%% API:
--export([n_restarts/0]).
-
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -68,20 +65,6 @@ liveness won't activate if @link{quorum} config is set to a value > 1.
 %%================================================================================
 
 -define(SERVER, ?MODULE).
-
--doc """
-Return number of node restarts since creation of the site.
-
-This value is monotonically increasing.
-""".
--spec n_restarts() -> {ok, non_neg_integer()} | {error, nodedown}.
-n_restarts() ->
-  case classy_table:lookup(?globals, ?n_restarts) of
-    [N] ->
-      {ok, N};
-    _ ->
-      {error, nodedown}
-  end.
 
 %%================================================================================
 %% Internal exports
@@ -123,7 +106,7 @@ on_peer_connection_change(Site, Node, false) ->
 -doc false.
 -spec on_run_level(classy:run_level(), classy:run_level()) -> ok.
 on_run_level(stopped, single) ->
-  increase_n_restarts(),
+  classy_node:increase_n_restarts(),
   set_my_liveness_info(true);
 on_run_level(single, stopped) ->
   set_my_liveness_info(false);
@@ -223,13 +206,8 @@ check_down(Target, _S) ->
 set_my_liveness_info(Running) ->
   Cluster = classy_node:maybe_cluster(),
   Site = classy_node:maybe_site(),
-  {ok, NR} = n_restarts(),
+  {ok, NR} = classy_node:n_restarts(),
   classy_membership:set_liveness(Cluster, Site, Site, NR, true, Running).
-
--spec increase_n_restarts() -> non_neg_integer().
-increase_n_restarts() ->
-  {ok, N} = classy_table:update_counter(?globals, ?n_restarts, 1),
-  N.
 
 kick_down_sites(_S) ->
   maybe

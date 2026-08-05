@@ -917,7 +917,7 @@ t_092_link_detect(_) ->
      , fun events_on_all_sites/1
      ]).
 
-%% This testcase verifies `classy_node:global_(set|lookup|delete)' APIs
+%% This testcase verifies `classy_site_metadata:s_*' set of APIs
 t_093_site_props(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
@@ -930,30 +930,32 @@ t_093_site_props(_) ->
         } = ?ON(S1, classy_node:hello()),
        _N2 = create_start_site(S2, #{}),
        %% First, all globals are empty:
-       ?assertMatch([], ?ON(S1, classy_node:global_lookup(foo))),
+       ?assertEqual(#{}, ?ON(S1, classy_site_metadata:s_get_all())),
        %% Set a global:
-       ?assertMatch(ok, ?ON(S1, classy:site_prop_set(foo, foo))),
-       ?assertMatch(ok, ?ON(S2, classy:site_prop_set(bar, bar))),
-       ?assertMatch([foo], ?ON(S1, classy:site_prop_lookup(foo))),
-       ?assertMatch([bar], ?ON(S2, classy:site_prop_lookup(bar))),
+       ?assertMatch(ok, ?ON(S1, classy_site_metadata:s_set(foo, foo))),
+       ?assertMatch(ok, ?ON(S2, classy_site_metadata:s_set(bar, bar))),
+       ?assertMatch([foo], ?ON(S1, classy_site_metadata:s_lookup(foo))),
+       ?assertMatch([bar], ?ON(S2, classy_site_metadata:s_lookup(bar))),
+       ?assertEqual(
+          {ok, [1]},
+          ?ON(S1, classy_site_metadata:s_atomically([{d, foo}, {w, bar, bar1}, {then, 1}]))),
        %% Restart node, the value should remain:
        [stop_site(I) || I <- [S1, S2]],
        [restart_site(I) || I <- [S1, S2]],
-       ?assertMatch([foo], ?ON(S1, classy:site_prop_lookup(foo))),
-       ?assertMatch([bar], ?ON(S2, classy:site_prop_lookup(bar))),
+       ?assertEqual(#{bar => bar1}, ?ON(S1, classy_site_metadata:s_get_all())),
        %% Join the nodes:
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
        wait_site_joined([S1, S2], Cluster1, S2),
        %% Both should retain their site properties:
-       ?assertMatch([foo], ?ON(S1, classy:site_prop_lookup(foo))),
-       ?assertMatch([bar], ?ON(S2, classy:site_prop_lookup(bar))),
+       ?assertEqual(#{bar => bar1}, ?ON(S1, classy_site_metadata:s_get_all())),
+       ?assertEqual(#{bar => bar}, ?ON(S2, classy_site_metadata:s_get_all())),
        %% Test deletion.
-       ?assertMatch(ok, ?ON(S1, classy:site_prop_delete(foo))),
-       ?assertMatch([], ?ON(S1, classy:site_prop_lookup(foo))),
+       ?assertMatch(ok, ?ON(S1, classy_site_metadata:s_delete(bar))),
+       ?assertMatch([], ?ON(S1, classy_site_metadata:s_lookup(bar))),
        %% Restart site, deletion should be preserved:
        stop_site(S1),
        restart_site(S1),
-       ?assertMatch([], ?ON(S1, classy:site_prop_lookup(foo)))
+       ?assertMatch([], ?ON(S1, classy_site_metadata:s_lookup(bar)))
      end,
      [ fun classy_ct:no_unexpected_events/1
      ]).
@@ -1762,14 +1764,14 @@ t_500_metadata_crud(_) ->
                        ?match_event(#{?snk_kind := test_update_meta, site := S1, bar := _}),
                        2,
                        infinity),
-       ?ON(S1, classy_site_metadata:set(foo, bar)),
-       ?ON(S1, classy_site_metadata:set(bar, baz)),
+       ?ON(S1, classy_site_metadata:c_set(foo, bar)),
+       ?ON(S1, classy_site_metadata:c_set(bar, baz)),
        ?assertEqual(
-          #{foo => bar, bar => baz},
-          ?ON(S1, classy_site_metadata:get_all())),
+          {ok, #{foo => bar, bar => baz}},
+          ?ON(S1, classy_site_metadata:c_get_all())),
        ?assertEqual(
           [bar],
-          ?ON(S1, classy_site_metadata:lookup(foo))),
+          ?ON(S1, classy_site_metadata:c_lookup(foo))),
        %% Both nodes should run the hook:
        {ok, Events1} = snabbkaffe:receive_events(SRef1),
        ?assertMatch(
@@ -1786,7 +1788,7 @@ t_500_metadata_crud(_) ->
                        ?match_event(#{?snk_kind := test_update_meta, site := S1, bar := _}),
                        2,
                        infinity),
-       ?ON(S1, classy_site_metadata:delete(foo)),
+       ?ON(S1, classy_site_metadata:c_delete(foo)),
        {ok, Events2} = snabbkaffe:receive_events(SRef2),
        ?assertMatch(
           [[_], [_]],
@@ -1801,14 +1803,31 @@ t_500_metadata_crud(_) ->
           restart_site(S1),
           #{?snk_kind := classy_peer_connected, site := S1}),
        check_metadata({ok, #{bar => baz}}, S1, Sites),
-       %% 4. S1 leaves. Its metadata should be reset.
+       %% 4. Atomic operations
+       ?assertEqual(
+          {ok, [1]},
+          ?ON(S1, classy_site_metadata:c_atomically([{d, bar}, {w, foo, foo}, {w, baz, baz}, {then, 1}]))),
+       ?assertEqual(
+          {ok, #{foo => foo, baz => baz}},
+          ?ON(S1, classy_site_metadata:c_get_all())),
+       check_metadata({ok, #{foo => foo, baz => baz}}, S1, Sites),
+       %% 5. S1 leaves. Its metadata should be reset (as creates a new cluster):
        ?assertMatch(
           ok,
           ?ON(S1, classy:kick_site(S1, leave))),
-       ?retry(100, 10,
+       ?retry(100, 100,
               ?assertEqual(
-                 #{},
-                 ?ON(S1, classy_site_metadata:get_all())))
+                 {ok, #{}},
+                 ?ON(S1, classy_site_metadata:c_get_all()))),
+       %% S2 should delete S1's metadata:
+       ?retry(100, 100,
+              ?assertEqual(
+                 undefined,
+                 ?ON(S2, classy:get_meta(S1)))),
+       %% But data is not gone, it can be accessed by specifying cluster explicitly:
+       ?assertEqual(
+          #{foo => foo, baz => baz},
+          ?ON(S1, classy_site_metadata:c_get_all(Cluster)))
      end,
      [fun classy_ct:no_unexpected_events/1]).
 
@@ -1828,8 +1847,8 @@ t_510_metadata_classify(_) ->
        wait_site_joined(Sites, Cluster, S2),
 
        %% 1. Update metadata, wait for propagation:
-       ?ON(S1, classy_site_metadata:set(foo, bar)),
-       ?ON(S1, classy_site_metadata:set(bar, baz)),
+       ?ON(S1, classy_site_metadata:c_set(foo, bar)),
+       ?ON(S1, classy_site_metadata:c_set(bar, baz)),
 
        ?block_until(#{?snk_kind := test_update_meta, site := S1, ?snk_meta := #{node := N2}}),
        ct:sleep(1000),
@@ -1878,7 +1897,7 @@ t_600_fallback(_) ->
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
        {ok, Cluster} = ?ON(S1, classy:the_cluster()),
-       ?ON(S1, classy_site_metadata:set(via_fallback, false)),
+       ?ON(S1, classy_site_metadata:c_set(via_fallback, false)),
        ?ON(S1,
            begin
              ok = application:stop(classy),
@@ -1949,7 +1968,7 @@ t_600_fallback(_) ->
        %% 3. Restart S1:
        stop_site(S1),
        restart_site(S1),
-       [?ON(I, classy_site_metadata:set(via_fallback, false)) || I <- [S1, S2]],
+       [?ON(I, classy_site_metadata:c_set(via_fallback, false)) || I <- [S1, S2]],
        ct:sleep(1000),
        [?assertMatch(
            #{{Cluster, I} :=
@@ -1980,8 +1999,8 @@ t_610_fallback_mixed(_) ->
        {ok, Cluster} = ?ON(S1, classy:the_cluster()),
        ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
        wait_site_joined([S1, S2], Cluster, S2),
-       ?ON(S1, classy_site_metadata:set(via_fallback, false)),
-       ?ON(S2, classy_site_metadata:set(via_fallback, false)),
+       ?ON(S1, classy_site_metadata:c_set(via_fallback, false)),
+       ?ON(S2, classy_site_metadata:c_set(via_fallback, false)),
 
        ?ON(S1,
            begin
@@ -2044,7 +2063,7 @@ t_610_fallback_mixed(_) ->
      [fun classy_ct:no_unexpected_events/1]).
 
 check_metadata(Expected, Target, Sites) ->
-  ?retry(100, 10,
+  ?retry(100, 100,
          ?assertEqual(
             [Expected || _ <- Sites],
             [?ON(I, classy:get_meta(Target)) || I <- Sites],

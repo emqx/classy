@@ -24,16 +24,18 @@ Management of the local site and node.
         , n_restarts/1
         , get_meta/1
         , prep_stop/1
-        , global_set/2
-        , global_lookup/1
-        , global_delete/1
+        , n_restarts/0
+        , increase_n_restarts/0
         ]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([hello/0, on_ptab_update/2, notify_mem_deltas/2]).
+-export([ hello/0
+        , on_ptab_update/2
+        , notify_mem_deltas/2
+        ]).
 
 -include_lib("snabbkaffe/include/trace.hrl").
 -include("classy_internal.hrl").
@@ -44,14 +46,19 @@ Management of the local site and node.
 %% Type declarations
 %%================================================================================
 
+%% Persistent terms:
 -define(pt_site, classy_node_the_site).
 -define(pt_cluster, classy_node_the_cluster).
 
 -define(SERVER, ?MODULE).
 
+%% Persistent data table and its keys:
+-define(tab, classy_node).
+
 -define(the_site, the_site).
 -define(the_cluster, the_cluster).
 -define(parent_site, parent_site).
+-define(n_restarts, n_restarts).
 
 -record(call_join,
         { node :: node()
@@ -63,9 +70,6 @@ Management of the local site and node.
         { cluster :: classy:cluster_id()
         , data :: #{classy:site() => classy_membership:update()}
         }).
-
-%% Type of records used to store arbitrary data in the ?globals table.
--record(custom_g, {k}).
 
 %% Value returned by hello method:
 -type bootstrap_info() :: #{ site     := classy:site()
@@ -137,7 +141,7 @@ maybe_init_the_site(MaybeSite, MaybeCluster0) ->
            true  -> [{w, ?parent_site, Site}];
            false -> []
          end,
-  {ok, Effects} = classy_table:atomically(?globals, Ops1 ++ Ops2 ++ Ops3),
+  {ok, Effects} = classy_table:atomically(?tab, Ops1 ++ Ops2 ++ Ops3),
   [Fun() || Fun <- Effects],
   ok.
 
@@ -168,7 +172,7 @@ The return value could be equal to @code{@{ok, the_site()@}} for the site that o
 """.
 -spec parent_site() -> {ok, classy:site()} | undefined.
 parent_site() ->
-  case classy_table:lookup(?globals, ?parent_site) of
+  case classy_table:lookup(?tab, ?parent_site) of
     [V] -> {ok, V};
     []  -> undefined
   end.
@@ -253,6 +257,27 @@ node_to_site() ->
        },
   maps:from_list(classy_table:select(?site_info, [MS])).
 
+
+-doc """
+Return number of node restarts since creation of the site.
+
+This value is monotonically increasing.
+""".
+-spec n_restarts() -> {ok, non_neg_integer()} | {error, nodedown}.
+n_restarts() ->
+  case classy_table:lookup(?tab, ?n_restarts) of
+    [N] ->
+      {ok, N};
+    _ ->
+      {error, nodedown}
+  end.
+
+-doc false.
+-spec increase_n_restarts() -> non_neg_integer().
+increase_n_restarts() ->
+  {ok, N} = classy_table:update_counter(?tab, ?n_restarts, 1),
+  N.
+
 -doc false.
 -spec n_restarts(classy:site()) -> {ok, non_neg_integer()} | undefined.
 n_restarts(Site) ->
@@ -290,8 +315,9 @@ init(_) ->
     #{ node_type => visible
      , nodedown_reason => true
      }),
-  ok = classy_table:open(?globals, #{on_update => fun ?MODULE:on_ptab_update/2}),
+  ok = classy_table:open(?tab, #{on_update => fun ?MODULE:on_ptab_update/2}),
   ok = classy_table:open(?site_info, #{ets_options => [{read_concurrency, true}]}),
+  classy_site_metadata:init(),
   classy_hook:foreach(?on_node_init, []),
   case init_cluster() of
     {ok, _} = Ok ->
@@ -354,15 +380,16 @@ terminate(Reason, _S) ->
         #{ server => ?MODULE
          , reason => Reason
          }),
-  classy_table:flush(?globals),
+  classy_table:flush(?tab),
   classy_table:flush(?site_info),
   prep_stop(shutdown, infinity),
   persistent_term:erase(?pt_node_sets),
   persistent_term:erase(?pt_site_sets),
   persistent_term:erase(?pt_site),
   persistent_term:erase(?pt_cluster),
-  classy_table:stop(?globals, 5_000),
-  classy_table:stop(?site_info, 5_000).
+  classy_table:stop(?tab, 5_000),
+  classy_table:stop(?site_info, 5_000),
+  classy_site_metadata:terminate().
 
 %%================================================================================
 %% Internal exports
@@ -419,24 +446,6 @@ notify_mem_deltas(Cluster, Deltas) ->
 -doc false.
 prep_stop(Reason) ->
   classy_hook:foreach(?on_prep_stop, [Reason]).
-
--doc false.
--spec global_set(term(), term()) -> ok | {error, _}.
-global_set(Key, Val) ->
-  classy_table:write(
-    ?globals,
-    #custom_g{k = Key},
-    Val).
-
--doc false.
--spec global_lookup(term()) -> list().
-global_lookup(Key) ->
-  classy_table:lookup(?globals, #custom_g{k = Key}).
-
--doc false.
--spec global_delete(term()) -> ok | {error, _}.
-global_delete(Key) ->
-  classy_table:delete(?globals, #custom_g{k = Key}).
 
 %%================================================================================
 %% Internal functions
@@ -611,7 +620,7 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
 on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
   prep_stop(leave, infinity),
   %% Sync with the business apps:
-  classy_table:delete(?globals, ?the_cluster),
+  classy_table:delete(?tab, ?the_cluster),
   classy_hook:foreach(?on_leave, [Cluster, Local, Intent]),
   classy_table:clear(?site_info),
   case Intent of
@@ -635,9 +644,9 @@ join_cluster(Cluster, JoinToNode, Local, Remote, Intent, S = #s{}) ->
   {ok, NewPid} = classy_sup:ensure_membership(Cluster, Local),
   true = OldPid =/= NewPid, % assert
   classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode, Intent]),
-  classy_table:dirty_write(?globals, ?the_cluster, Cluster),
-  classy_table:dirty_write(?globals, ?parent_site, Remote),
-  classy_table:flush(?globals),
+  classy_table:dirty_write(?tab, ?the_cluster, Cluster),
+  classy_table:dirty_write(?tab, ?parent_site, Remote),
+  classy_table:flush(?tab),
   {ok, S#s{cluster = Cluster}}.
 
 %% Update node tracking information
@@ -678,7 +687,7 @@ init_cluster() ->
         , [classy_table:atomic_op(fun(() -> _))]
         }.
 ensure_the_id(Key, OnCreateHook, HookArgs, Default) ->
-  case classy_table:lookup(?globals, Key) of
+  case classy_table:lookup(?tab, Key) of
     [Bin] when is_binary(Bin) ->
       {false, Bin, []};
     [] ->
@@ -734,7 +743,7 @@ prep_stop(Reason, Timeout) ->
 
 -spec the_cluster() -> {ok, classy:cluster_id()} | undefined.
 the_cluster() ->
-  case classy_table:lookup(?globals, ?the_cluster) of
+  case classy_table:lookup(?tab, ?the_cluster) of
     [V] ->
       {ok, V};
     [] ->
@@ -743,7 +752,7 @@ the_cluster() ->
 
 -spec the_site() -> {ok, classy:site()} | undefined.
 the_site() ->
-  case classy_table:lookup(?globals, ?the_site) of
+  case classy_table:lookup(?tab, ?the_site) of
     [V] ->
       {ok, V};
     [] ->
@@ -752,7 +761,7 @@ the_site() ->
 
 -spec apply_deltas_with_effects(#{classy:site() => classy_membership:update()}, #s{}) -> {ok, #s{}} | {error, _}.
 apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
-  case classy_liveness:n_restarts() of
+  case classy_node:n_restarts() of
     {ok, MyNR} ->
       ok;
     {error, nodedown} ->
