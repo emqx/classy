@@ -80,8 +80,10 @@ Business code should not use it directly.
 -type update() ::
         #{ mem      := false
          , origin   := classy:site() | undefined %% Who kicked the site
+         , clock    := clock() | undefined
          } |
         #{ mem      := true
+         , clock    := clock() %% Logical time of the membership change
          , host     => node()
          , meta     => map()
          , liveness => {_NRestarts :: non_neg_integer(), _SetBySelf :: boolean(), _IsLive :: boolean()}
@@ -198,7 +200,7 @@ it will create a new entry that will eventually make its way to the entire clust
 This fictitious site will become a member until kicked,
 and even then some records about it may be kept around.
 """.
--spec set_member(classy:cluster_id(), classy:site(), classy:site(), boolean()) -> ok | {error, _}.
+-spec set_member(classy:cluster_id(), classy:site(), classy:site(), boolean()) -> {ok, clock()} | {error, _}.
 set_member(Cluster, Local, Target, IsMember) when is_boolean(IsMember) ->
   try
     gen_server:call(
@@ -214,7 +216,7 @@ Set site information.
 
 This function is called by the site itself.
 """.
--spec set_info(classy:cluster_id(), classy:site(), _Info) -> ok | {error, _}.
+-spec set_info(classy:cluster_id(), classy:site(), _Info) -> {ok, clock()} | {error, _}.
 set_info(Cluster, Local, Info) ->
   try
     gen_server:call(
@@ -232,7 +234,7 @@ Normally, liveness is only updated by the local site.
 The remotes can only update @code{IsUp} boolean on behalf of other nodes,
 but they must always keep @code{NRestarts} as is.
 """.
--spec set_liveness(classy:cluster_id(), classy:site(), classy:site(), non_neg_integer(), boolean(), boolean()) -> ok | {error, _}.
+-spec set_liveness(classy:cluster_id(), classy:site(), classy:site(), non_neg_integer(), boolean(), boolean()) -> {ok, clock()} | {error, _}.
 set_liveness(Cluster, Local, Target, NRestarts, Self, IsUp) ->
   try
     gen_server:call(
@@ -580,17 +582,17 @@ init(#{cluster := Cluster, site := Site}) when is_binary(Site), is_binary(Cluste
                   , v = true
                   },
          S0),
-  S = local_command(
-        #call_set{ k = #host{s = Site}
-                 , v = node()
-                 },
-        S1),
+  {_, S} = local_command(
+             #call_set{ k = #host{s = Site}
+                      , v = node()
+                      },
+             S1),
   {ok, need_sync(0, S)}.
 
 -doc false.
 handle_call(#call_set{} = CMD, _From, S0) ->
-  S = local_command(CMD, S0),
-  {reply, ok, S};
+  {Clock, S} = local_command(CMD, S0),
+  {reply, {ok, Clock}, S};
 handle_call(#call_get_data{since = Since, acked = Acked}, _From, S) ->
   Reply = {ok, get_sync_data(Since, Acked, S)},
   {reply, Reply, S};
@@ -691,10 +693,10 @@ ord(#op_set{k = #live{}, val = Liveness, c = C, origin = O}) ->
 ord(#op_set{c = C, m = M, origin = O}) ->
   {C, M, O}.
 
--spec local_command(#call_set{}, #s{}) -> #s{}.
+-spec local_command(#call_set{}, #s{}) -> {clock(), #s{}}.
 local_command(Cmd, S0) ->
   {C, S} = inc_get_clock(S0),
-  local_command(C, Cmd, S).
+  {C, local_command(C, Cmd, S)}.
 
 -spec local_command(clock(), #call_set{}, #s{}) -> #s{}.
 local_command(C, #call_set{k = K, v = V}, S = #s{site = Local}) ->
@@ -879,34 +881,36 @@ notify(S = #s{cluster = Cluster, site = Local, clock = C, events_since = EventsS
 -spec peer_to_update(classy:cluster_id(), classy:site(), classy:site()) -> update().
 peer_to_update(Cluster, Local, Site) ->
   Get = fun(Key) ->
-            [{Origin, Val} ||
-              #vl{op = #op_set{origin = Origin, val = Val}}
+            [{Origin, Clock, Val} ||
+              #vl{op = #op_set{c = Clock, origin = Origin, val = Val}}
                 <- classy_table:lookup(
                      ?ptab,
                      #kl{c = Cluster, l = Local, k = Key})]
         end,
   case Get(#mem{s = Site}) of
-    [{_MemOrigin, true}] ->
-      U0 = #{mem => true},
+    [{_MemOrigin, Clock, true}] ->
+      U0 = #{mem => true, clock => Clock},
       U1 = case Get(#host{s = Site}) of
-             [{_, Host}] -> U0#{host => Host};
-             []          -> U0
+             [{_, _, Host}] -> U0#{host => Host};
+             []             -> U0
            end,
       U = case Get(#info{s = Site}) of
-            [{_, Meta}] -> U1#{meta => Meta};
-            []          -> U1
+            [{_, _, Meta}] -> U1#{meta => Meta};
+            []             -> U1
           end,
       case Get(#live{s = Site}) of
-        [{_, Live}] -> U#{liveness => from_liveness(Live)};
-        []          -> U
+        [{_, _, Live}] -> U#{liveness => from_liveness(Live)};
+        []             -> U
       end;
-    [{MemOrigin, false}] ->
+    [{MemOrigin, Clock, false}] ->
       #{ mem    => false
        , origin => MemOrigin
+       , clock  => Clock
        };
     [] ->
       #{ mem    => false
        , origin => undefined
+       , clock  => undefined
        }
   end.
 

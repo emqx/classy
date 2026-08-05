@@ -84,7 +84,10 @@ vote_down_prep(_ForReal, _Id, Cluster, Target, NRestarts) ->
 -doc false.
 -spec vote_down_commit(classy_vote:id(), classy:cluster_id(), classy:site(), non_neg_integer()) -> ok.
 vote_down_commit(_Id, Cluster, Target, NRestarts) ->
-  classy_membership:set_liveness(Cluster, classy_node:maybe_site(), Target, NRestarts, false, false).
+  maybe
+    {ok, _} ?= classy_membership:set_liveness(Cluster, classy_node:maybe_site(), Target, NRestarts, false, false),
+    ok
+  end.
 
 -doc false.
 -spec vote_kick_prep(boolean(), classy_vote:id(), classy:cluster_id(), classy:site()) -> boolean().

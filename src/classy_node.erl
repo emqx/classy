@@ -59,6 +59,7 @@ Management of the local site and node.
 -define(the_cluster, the_cluster).
 -define(parent_site, parent_site).
 -define(n_restarts, n_restarts).
+-define(joined_at, joined_at).
 
 -record(call_join,
         { node :: node()
@@ -138,7 +139,7 @@ maybe_init_the_site(MaybeSite, MaybeCluster0) ->
                  end,
   {IsNewCluster, _Cluster, Ops2} = ensure_the_id(?the_cluster, ?on_create_cluster, [Site], MaybeCluster),
   Ops3 = case IsNewCluster of
-           true  -> [{w, ?parent_site, Site}];
+           true  -> [{w, ?parent_site, Site}, {w, ?joined_at, 0}];
            false -> []
          end,
   {ok, Effects} = classy_table:atomically(?tab, Ops1 ++ Ops2 ++ Ops3),
@@ -382,7 +383,7 @@ terminate(Reason, _S) ->
          }),
   classy_table:flush(?tab),
   classy_table:flush(?site_info),
-  prep_stop(shutdown, infinity),
+  to_stopped(shutdown, infinity),
   persistent_term:erase(?pt_node_sets),
   persistent_term:erase(?pt_site_sets),
   persistent_term:erase(?pt_site),
@@ -548,7 +549,7 @@ handle_kick(Target, Intent, S = #s{site = Local}) when is_binary(Local) ->
     {ok, Cluster} ?= the_cluster(),
     ok ?= classy_hook:all(?on_pre_kick, [Cluster, Target, Intent]),
     classy_hook:foreach(?on_kick_decided, [Cluster, Target, Intent]),
-    ok ?= classy_membership:set_member(Cluster, Local, Target, false),
+    {ok, _} ?= classy_membership:set_member(Cluster, Local, Target, false),
     classy_membership:flush(Cluster, Local),
     if Target =:= Local ->
         on_leave(S, Intent);
@@ -599,8 +600,9 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
       %% Already in the same cluster with `Node'. Set our membership
       %% status and trigger re-sync (do we need to re-run hooks?):
       classy_membership:call_sync(Cluster, Local, MemData),
-      classy_membership:set_member(Cluster, Local, Local, true),
+      {ok, Clock} = classy_membership:set_member(Cluster, Local, Local, true),
       classy_membership:flush(Cluster, Local),
+      ok = classy_table:write(?tab, ?joined_at, Clock),
       {ok, update_runtime(S0)};
     {ok, OldCluster} when OldCluster =/= Cluster ->
       %% Site is currently in a different cluster. Leave it first:
@@ -618,15 +620,20 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
   end.
 
 on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
-  prep_stop(leave, infinity),
   %% Sync with the business apps:
-  classy_table:delete(?tab, ?the_cluster),
+  to_stopped(leave, infinity),
+  {ok, _} = classy_table:atomically(
+              ?tab,
+              [ {d, ?the_cluster}
+              , {d, ?joined_at}
+              ]),
   classy_hook:foreach(?on_leave, [Cluster, Local, Intent]),
   classy_table:clear(?site_info),
   case Intent of
     {join, _} ->
       {ok, S#s{cluster = undefined}};
     _ ->
+      %% maybe_initialize_after_leave hook should've created cluster:
       init_cluster()
   end.
 
@@ -737,7 +744,7 @@ start_old_clusters(Site) ->
     end,
     classy_membership:known_clusters(Site)).
 
-prep_stop(Reason, Timeout) ->
+to_stopped(Reason, Timeout) ->
   prep_stop(Reason),
   classy_rl_changer:set_sync(?stopped, Timeout).
 
@@ -770,14 +777,15 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
       %% of the node, so use the default value.
       MyNR = ?default_n_restarts
   end,
+  [JoinedAt] = classy_table:lookup(?tab, ?joined_at),
   case Deltas of
-    #{Local := #{mem := false, origin := Origin}} ->
+    #{Local := #{mem := false, clock := Clock, origin := Origin}} when is_integer(Clock), Clock > JoinedAt->
       %% We got kicked remotely. In this case we don't bother
       %% importing the data and running the hooks, and go straight to
       %% `on_leave'.
       %%
-      %% NOTE: `Local' should never be equal to the `Origin', if it
-      %% happens it indicates a bug.
+      %% NOTE: `Local' should never be equal to the `Origin', if
+      %% it happens it indicates a bug.
       ?tp(warning, ?classy_kicked_remotely,
           #{ cluster => Cluster
            , local   => Local
@@ -802,7 +810,7 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
 
 -spec on_remote_restart(#s{}) -> {ok, #s{}}.
 on_remote_restart(S) ->
-  prep_stop(remote_restart, 120_000),
+  to_stopped(remote_restart, 120_000),
   {ok, adjust_run_level(S)}.
 
 -spec import_deltas(#{classy:site() => classy_membership:update()}, #s{}) ->
