@@ -111,8 +111,11 @@ on_run_level(stopped, single) ->
 on_run_level(single, stopped) ->
   set_my_liveness_info(false);
 on_run_level(cluster, quorum) ->
+  classy_sup:ensure_liveness_server(),
   gen_server:cast(?SERVER, #cast_quorum{}),
   ok;
+on_run_level(quorum, cluster) ->
+  ok = classy_sup:terminate_liveness_server();
 on_run_level(_, _) ->
   ok.
 

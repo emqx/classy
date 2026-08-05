@@ -14,6 +14,8 @@
         , ensure_membership/2
         , ensure_vote_coordinator/2
         , ensure_vote_participant/2
+        , ensure_liveness_server/0
+        , terminate_liveness_server/0
         , ensure_vote_sup/1
         , terminate_vote_sup/1
         , prep_stop/0
@@ -39,12 +41,15 @@
 -record(top, {}).
 -record(table_sup, {}).
 -record(membership_sup, {}).
--record(vote_sup, {type :: top | coordinators | participants}).
+-record(dynamic_sup, {}).
+-record(vote_sup, {type :: coordinators | participants}).
 
 -define(SUP, ?MODULE).
 -define(TABLE_SUP, classy_table_sup).
 -define(MEMBERSHIP_SUP, classy_membership_sup).
--define(VOTE_SUP, classy_vote_sup).
+%% Supervisor for children that start and stop dynamically, e.g. when
+%% run level changes:
+-define(DYNAMIC_SUP, classy_rl_dependent_sup).
 %% Vote supervisors:
 %%   Single:
 -define(VOTE_COORDINATOR_SUP_1, classy_vote_coordinator_sup1).
@@ -91,10 +96,26 @@ ensure_vote_coordinator(RunLevel, Args) ->
 ensure_vote_participant(RunLevel, Args) ->
   simple_one_for_one_ensure_child(vote_participant_sup(RunLevel), Args).
 
+-spec ensure_liveness_server() -> ok.
+ensure_liveness_server() ->
+  {ok, _} = ensure_child(
+              ?DYNAMIC_SUP,
+              #{ id       => liveness
+               , start    => {classy_liveness, start_link, []}
+               , shutdown => 10_000
+               , restart  => permanent
+               , type     => worker
+               }),
+  ok.
+
+-spec terminate_liveness_server() -> ok.
+terminate_liveness_server() ->
+  terminate_child(?DYNAMIC_SUP, liveness).
+
 -spec ensure_vote_sup(classy_rl_changer:run_level_int()) -> ok.
 ensure_vote_sup(RunLevel) ->
   ensure_child(
-    ?VOTE_SUP,
+    ?DYNAMIC_SUP,
     #{ id => vote_coord_sup(RunLevel)
      , start => {?MODULE, start_link_vote_coordinator_sup, [RunLevel]}
      , shutdown => infinity
@@ -102,7 +123,7 @@ ensure_vote_sup(RunLevel) ->
      , type => supervisor
      }),
   ensure_child(
-    ?VOTE_SUP,
+    ?DYNAMIC_SUP,
     #{ id => vote_participant_sup(RunLevel)
      , start => {?MODULE, start_link_vote_participant_sup, [RunLevel]}
      , shutdown => infinity
@@ -113,8 +134,8 @@ ensure_vote_sup(RunLevel) ->
 
 -spec terminate_vote_sup(classy_rl_changer:run_level_int()) -> ok.
 terminate_vote_sup(RunLevel) ->
-  terminate_child(?VOTE_SUP, vote_coord_sup(RunLevel)),
-  terminate_child(?VOTE_SUP, vote_participant_sup(RunLevel)).
+  terminate_child(?DYNAMIC_SUP, vote_coord_sup(RunLevel)),
+  terminate_child(?DYNAMIC_SUP, vote_participant_sup(RunLevel)).
 
 -spec prep_stop() -> ok.
 prep_stop() ->
@@ -134,7 +155,7 @@ start_link_membership_sup() ->
 
 -spec start_link_vote_sup() -> supervisor:startlink_ret().
 start_link_vote_sup() ->
-  supervisor:start_link({local, ?VOTE_SUP}, ?MODULE, #vote_sup{type = top}).
+  supervisor:start_link({local, ?DYNAMIC_SUP}, ?MODULE, #dynamic_sup{}).
 
 -spec start_link_vote_coordinator_sup(classy_rl_changer:run_level_int()) -> supervisor:startlink_ret().
 start_link_vote_coordinator_sup(RunLevel) ->
@@ -172,12 +193,6 @@ init(#top{}) ->
           , restart  => permanent
           , type     => worker
           },
-  Liveness = #{ id       => liveness
-              , start    => {classy_liveness, start_link, []}
-              , shutdown => 10_000
-              , restart  => permanent
-              , type     => worker
-              },
   Autocluster = #{ id       => autocluster
                  , start    => {classy_autocluster_sup, start_link, []}
                  , shutdown => infinity
@@ -186,10 +201,9 @@ init(#top{}) ->
                  },
   Children = [ sup_spec(#{id => ?TABLE_SUP, start => {?MODULE, start_link_table_sup, []}})
              , sup_spec(#{id => ?MEMBERSHIP_SUP, start => {?MODULE, start_link_membership_sup, []}})
-             , sup_spec(#{id => ?VOTE_SUP, start => {?MODULE, start_link_vote_sup, []}})
+             , sup_spec(#{id => ?DYNAMIC_SUP, start => {?MODULE, start_link_vote_sup, []}})
              , RLChanger
              , Node
-             , Liveness
              , Autocluster
              ],
   SupFlags = #{ strategy      => rest_for_one
@@ -224,7 +238,7 @@ init(#membership_sup{}) ->
               , auto_shutdown => never
               },
   {ok, {SupFlags, [Children]}};
-init(#vote_sup{type = top}) ->
+init(#dynamic_sup{}) ->
   SupFlags = #{ strategy  => one_for_one
               , intensity => 10
               , period    => 10
