@@ -145,7 +145,6 @@ init(_) ->
 
 handle_call(#call_set{level = Level}, _From, S0) ->
   if ?valid_level(Level) ->
-
       S = maybe_transition(S0#s{set = to_int(Level)}),
       {reply, ok, S};
      true ->
@@ -178,10 +177,19 @@ handle_cast(Cast, S) ->
        }),
   {noreply, S}.
 
-handle_info({'EXIT', Pid, _Reason}, #s{running = #running{pid = Pid, next = Next}} = S0) ->
+handle_info({'EXIT', Pid, Reason}, #s{running = #running{pid = Pid, next = Next}} = S0) ->
   S = S0#s{ running = undefined
           , current = Next
           },
+  case Reason of
+    normal ->
+      ok;
+    _ ->
+      ?tp(error, ?classy_rl_changer_worker_crash, #{pid => Pid, reason => Reason, to => Next}),
+      %% There is a chance that the worker crashed before updating the
+      %% counter. Do it by ourselves:
+      update_counter(?ctr_c, Next)
+  end,
   {noreply, maybe_transition(S)};
 handle_info(Info, S) ->
   ?tp(warning, ?classy_unknown_event,
@@ -249,9 +257,9 @@ maybe_transition(#s{actions = AA0, set = Set, current = From, running = undefine
 run_hooks(From, Next, Actions) ->
   FromA = to_atom(From),
   NextA = to_atom(Next),
-  update_counter(?ctr_c, Next),
   Worker = spawn_link(
              fun() ->
+                 %% Run hooks:
                  if Next > From ->
                      classy_hook:foreach(?on_change_run_level, [FromA, NextA]);
                     From > Next ->
@@ -259,6 +267,9 @@ run_hooks(From, Next, Actions) ->
                     true ->
                      ok
                  end,
+                 %% All hooks RL changing have completed. Update the current run level:
+                 update_counter(?ctr_c, Next),
+                 %% Run actions scheduled by `at_lower_level':
                  lists:foreach(
                    fun(#call{f = Fun}) ->
                        try

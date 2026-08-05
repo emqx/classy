@@ -63,6 +63,7 @@
 -define(classy_run_level_change_error, classy_run_level_change_error).
 -define(classy_hook_failure, classy_hook_failure).
 -define(classy_kicked_remotely, classy_kicked_remotely).
+-define(classy_rl_changer_worker_crash, classy_rl_changer_worker_crash).
 
 -define(classy_vote_pre_results, classy_vote_pre_results).
 -define(classy_vote_coord_stage, classy_vote_coord_stage).

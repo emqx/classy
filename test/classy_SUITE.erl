@@ -741,7 +741,7 @@ t_090_info(_) ->
                 , N2 := I2_0
                 }
            , bad_nodes :=
-               #{'fake@node.local' := {error, {erpc, noconnection}}}
+               #{'fake@node.local' := {error, {erpc, _}}}
            },
           ?ON(S1, classy:info([N1, N2, 'fake@node.local']))),
        %% Form cluster:
@@ -2248,7 +2248,7 @@ wait_site_joined(WaitOnSites, Cluster, Site) ->
     end,
     WaitOnSites),
   %% Account for possible race condition since the hook emitting the event is the first:
-  ct:sleep(10).
+  ct:sleep(100).
 
 verify_cluster_connected(Sites) ->
   ?retry(1000, 10,

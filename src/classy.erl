@@ -490,7 +490,7 @@ at_lower_level(RunLevel, Fun) ->
 -doc """
 Get current run level.
 
-NOTE: the value is updated before @link{classy:run_level/2} hooks run.
+NOTE: the value is updated after all @link{classy:run_level/2} hooks complete.
 """.
 -spec run_level() -> run_level().
 run_level() ->
