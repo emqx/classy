@@ -32,7 +32,9 @@ This MFA can contain calls to various @code{classy:on_...} functions.
         , at_lower_level/2
         , run_level/0
         , the_site/0
+        , the_site_err/0
         , the_cluster/0
+        , the_cluster_err/0
         , node_sets/0
         , prep_stop/0
         , prep_stop/1
@@ -314,12 +316,9 @@ Return a mapping from known node names to site IDs.
 -spec node_to_site() -> {ok, #{node() => site()}} | {error, not_in_cluster}.
 node_to_site() ->
   maybe
-    {ok, _TheSite} ?= the_site(),
-    {ok, _TheCluster} ?= the_cluster(),
+    {ok, _TheSite} ?= the_site_err(),
+    {ok, _TheCluster} ?= the_cluster_err(),
     {ok, classy_node:node_to_site()}
-  else
-    undefined ->
-      {error, not_in_cluster}
   end.
 
 -doc """
@@ -542,6 +541,21 @@ the_site() ->
   end.
 
 -doc """
+Similar to @code{the_site/0},
+but returns an error tuple instead of @code{undefined}.
+
+This wrapper is useful for @code{maybe} blocks.
+""".
+-spec the_site_err() -> {ok, site()} | {error, site_not_initialized}.
+the_site_err() ->
+  case classy_node:maybe_site() of
+    Site when is_binary(Site) ->
+      {ok, Site};
+    undefined ->
+      {error, site_not_initialized}
+  end.
+
+-doc """
 Get ID of the cluster.
 """.
 -spec the_cluster() -> {ok, cluster_id()} | undefined.
@@ -551,6 +565,21 @@ the_cluster() ->
       {ok, Cluster};
     undefined ->
       undefined
+  end.
+
+-doc """
+Similar to @code{the_cluster/0},
+but returns an error tuple instead of @code{undefined}.
+
+This wrapper is useful for @code{maybe} blocks.
+""".
+-spec the_cluster_err() -> {ok, cluster_id()} | {error, not_in_cluster}.
+the_cluster_err() ->
+  case classy_node:maybe_cluster() of
+    Cluster when is_binary(Cluster) ->
+      {ok, Cluster};
+    undefined ->
+      {error, not_in_cluster}
   end.
 
 %%--------------------------------------------------------------------------------

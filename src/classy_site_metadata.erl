@@ -108,12 +108,7 @@ on_leave(_Cluster, _Site, _Intent) ->
 
 propagate() ->
   maybe
-    {ok, Cluster} ?= classy:the_cluster(),
-    {ok, Site} ?= classy:the_site(),
+    {ok, Cluster} ?= classy:the_cluster_err(),
+    {ok, Site} ?= classy:the_site_err(),
     classy_membership:set_info(Cluster, Site, get_all())
-  else
-    undefined ->
-      {error, site_is_not_running};
-    Err ->
-      Err
   end.
