@@ -473,7 +473,14 @@ trace_props() ->
   , fun ?MODULE:prop_every_participant_receives_outcome/1
   ].
 
-prop_every_vote_concludes(Trace) ->
+prop_every_vote_concludes(Trace0) ->
+  %% Filter out liveness votes that generally happen on their own and
+  %% aren't relevent for tests:
+  Trace = [I || I <- Trace0,
+                case I of
+                  #{id := _, tag := {classy_liveness, _}} -> false;
+                  _                                       -> true
+                end],
   ?strict_causality(
      #{?snk_kind := ?classy_vote_flow_start, id := _Id},
      #{?snk_kind := K, id := _Id} when K =:= ?classy_vote_coord_flow_complete;
