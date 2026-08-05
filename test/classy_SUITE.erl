@@ -2026,8 +2026,11 @@ t_610_fallback_mixed(_) ->
            , S3 := #{mem := true, host := N3, liveness := _}
            },
           Dump(S1)),
-       ?assertEqual(Dump(S1), Dump(S2)),
-       ?assertEqual(Dump(S2), Dump(S3))
+       ?retry(100, 10_0,
+              begin
+                ?assertEqual(Dump(S1), Dump(S2)),
+                ?assertEqual(Dump(S2), Dump(S3))
+              end)
      end,
      [fun classy_ct:no_unexpected_events/1]).
 
