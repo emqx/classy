@@ -9,7 +9,7 @@
 
 %% API:
 -export([ new/2
-        , restore/0
+        , restore/1
         , fold_ongoing/3
         ]).
 
@@ -77,6 +77,7 @@
         , post_vote  :: [classy_lib:mfargs()]
         , on_fail    :: [classy_lib:mfargs()]
         , start_time :: integer()
+        , run_level  :: classy_rl_changer:run_level_int()
         , reserved = []
         }).
 -record(d,
@@ -90,10 +91,10 @@
 %% API functions
 %%================================================================================
 
--spec new(classy_vote:id(), classy_vote:options()) -> {ok, pid()} | {error, _}.
-new(ID, Options = #{tag := Tag}) ->
+-spec new(classy_vote:id(), classy_vote:cooked_options()) -> {ok, pid()} | {error, _}.
+new(ID, Options = #{tag := Tag, run_level := RunLevel}) ->
   ?tp(debug, ?classy_vote_flow_start, #{id => ID, tag => Tag}),
-  classy_sup:ensure_vote_coordinator([true, {ID, Options}]).
+  classy_sup:ensure_vote_coordinator(RunLevel, [true, {ID, Options}]).
 
 %%================================================================================
 %% Internal exports
@@ -122,7 +123,8 @@ receive_vote(#c_vote{id = ID} = Vote) ->
     Vote).
 
 %% Restore votes that were ongoing before the node shut down
-restore() ->
+-spec restore(classy_rl_changer:run_level_int()) -> ok.
+restore(RunLevel) ->
   %% Note: This call ensures that table is restored & safe to read:
   ok = classy_vote:create_table(),
   MS = { #classy_kv{k = #pk_cd{tag = '$1', id = '$2'}, v = '$3'}
@@ -131,8 +133,9 @@ restore() ->
        },
   Ongoing = ets:select(?ptab, [MS]),
   lists:foreach(
-    fun({_, _, _} = StartArgs) ->
-        classy_sup:ensure_vote_coordinator([false, StartArgs])
+    fun({_, _, #opts{run_level = RL}} = StartArgs) ->
+        RL =:= RunLevel andalso
+          classy_sup:ensure_vote_coordinator(RunLevel, [false, StartArgs])
     end,
     Ongoing).
 
@@ -192,11 +195,12 @@ terminate(Reason, State, _Data) ->
 -spec init_new_coordinator(classy_vote:id(), map()) ->
         {ok, commit_stage(), d()} | {error, _}.
 init_new_coordinator(ID, Options) ->
-  #{ tag := Tag
-   , actions := Actions0
-   , strategy := Strategy
+  #{ tag       := Tag
+   , actions   := Actions0
+   , strategy  := Strategy
    , post_vote := PostVote
-   , on_fail := OnFail
+   , on_fail   := OnFail
+   , run_level := RunLevel
    } = Options,
   {_, Actions} =
     maps:fold(
@@ -211,11 +215,12 @@ init_new_coordinator(ID, Options) ->
       end,
       {0, #{}},
       Actions0),
-  Opts = #opts{ strategy = Strategy
-              , post_vote = PostVote
-              , on_fail = OnFail
-              , actions = Actions
+  Opts = #opts{ strategy   = Strategy
+              , post_vote  = PostVote
+              , on_fail    = OnFail
+              , actions    = Actions
               , start_time = os:system_time(millisecond)
+              , run_level  = RunLevel
               },
   D = #d{ tag = Tag
         , id = ID
@@ -437,17 +442,18 @@ prepare_multi(Function, D = #d{opts = #opts{actions = Acts}}) ->
 
 -spec prepare(d(), #act{}) -> #prepare{}.
 prepare(
-  #d{id = Id, tag = Tag, opts = #opts{on_fail = OnFail}},
+  #d{id = Id, tag = Tag, opts = #opts{on_fail = OnFail, run_level = RunLevel}},
   #act{prepare = Prep, commit = Commit, rollback = Rollback}
  ) ->
   {ok, Self} = classy:the_site(),
-  #prepare{ id = Id
-          , tag = Tag
-          , prepare = Prep
-          , commit = Commit
-          , rollback = Rollback
+  #prepare{ id          = Id
+          , tag         = Tag
+          , prepare     = Prep
+          , commit      = Commit
+          , rollback    = Rollback
           , coordinator = Self
-          , on_fail = OnFail
+          , on_fail     = OnFail
+          , run_level   = RunLevel
           }.
 
 -spec decide_pre_vote_result(classy_vote:strategy(), maps:iterator()) -> boolean().

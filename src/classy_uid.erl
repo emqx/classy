@@ -54,7 +54,7 @@ Site-unique tuples can be used to order events within the site.
 """.
 -spec site_unique_tuple() -> su_tuple().
 site_unique_tuple() ->
-  {ok, NRestarts} = classy_liveness:n_restarts(),
+  {ok, NRestarts} = classy_node:n_restarts(),
   {NRestarts, erlang:unique_integer([positive, monotonic])}.
 
 -doc """
@@ -68,7 +68,7 @@ but not globally.
 -spec cluster_unique_tuple() -> cu_tuple().
 cluster_unique_tuple() ->
   {ok, Site} = classy:the_site(),
-  {ok, NRestarts} = classy_liveness:n_restarts(),
+  {ok, NRestarts} = classy_node:n_restarts(),
   {Site, NRestarts, erlang:unique_integer([positive, monotonic])}.
 
 %%================================================================================

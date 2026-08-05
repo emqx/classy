@@ -73,7 +73,10 @@ on_node_init() ->
 
 
 on_run_level(Prev, Next) ->
-  ?defer_assert(?assertEqual(Next, classy:run_level())),
+  %% Verify that run level observed via `classy:run_level' API doesn't
+  %% change until all hooks are complete:
+  ?defer_assert(?assertEqual(Prev, classy:run_level(), {Prev, Next})),
+  %% Verify the validity of the transition:
   ?defer_assert(case {Prev, Next} of
                   {stopped, single} -> ok;
                   {single, cluster} -> ok;
@@ -101,5 +104,6 @@ no_unexpected_events(Trace) ->
         , classy_table_on_update_callback_failure
         , ?classy_bad_data
         , ?classy_run_level_change_error
+        , ?classy_rl_changer_worker_crash
         ],
         Trace)).

@@ -71,7 +71,6 @@ init() ->
   %% Cluster-global variables:
   classy:enrich_site_info(fun classy_builtin_hooks:enrich_site_info/1, ?min_hook_prio),
   classy:enrich_site_info(fun classy_rl_changer:enrich_site_info/1, ?min_hook_prio),
-  classy:on_leave(fun classy_site_metadata:on_leave/3, ?max_hook_prio),
   %% Info logging:
   classy:on_create_site(fun classy_builtin_hooks:log_create_site/1, ?max_hook_prio),
   classy:on_create_cluster(fun classy_builtin_hooks:log_create_cluster/2, ?max_hook_prio),

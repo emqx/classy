@@ -7,7 +7,7 @@
 -behavior(gen_statem).
 
 %% API:
--export([restore/0, start_link/1, fold_ongoing/3]).
+-export([restore/1, start_link/1, fold_ongoing/3]).
 
 %% Behavior callbacks:
 -export([callback_mode/0, init/1, terminate/3, handle_event/4]).
@@ -46,8 +46,8 @@
         }).
 %%   Value:
 -record(ps_ps,
-        { stage :: stage()
-        , vote :: 0..1
+        { stage             :: stage()
+        , vote              :: 0..1
         , completed_actions :: non_neg_integer()
         , reserved = []
         }).
@@ -78,7 +78,8 @@ start_link(Prepare = #prepare{id = ID}) ->
     [Prepare],
     []).
 
-restore() ->
+-spec restore(classy_rl_changer:run_level_int()) -> ok.
+restore(RunLevel) ->
   %% Note: this call returns after the table is restored & safe to read:
   ok = classy_vote:create_table(),
   MS = { #classy_kv{k = #pk_pd{_ = '_'}, v = '$1', _ = '_'}
@@ -86,8 +87,9 @@ restore() ->
        , ['$1']
        },
   lists:foreach(
-    fun(Prep) ->
-        vote(Prep)
+    fun(Prep = #prepare{run_level = RL}) ->
+        RL =:= RunLevel andalso
+          vote(Prep)
     end,
     ets:select(?ptab, [MS])).
 
@@ -105,19 +107,20 @@ fold_ongoing(Fun, Acc0, TagPattern) ->
 
 %% @private Coordinator -> Participant
 -spec pre_vote(#prepare{}) -> boolean().
-pre_vote(Prepare) ->
-  case do_prepare(Prepare, false) of
-    {ok, Bool} when is_boolean(Bool) ->
-      Bool;
-    {error, Err} ->
-      error(Err)
-  end.
+pre_vote(Prepare = #prepare{run_level = RL}) ->
+  classy_rl_changer:get_int(current) >= RL andalso
+    case do_prepare(Prepare, false) of
+      {ok, Bool} when is_boolean(Bool) ->
+        Bool;
+      {error, Err} ->
+        error(Err)
+    end.
 
 %% @private Coordinator -> Participant
 -spec vote(#prepare{}) -> ok | {error, _}.
-vote(Prepare = #prepare{tag = Tag, id = ID}) ->
+vote(Prepare = #prepare{tag = Tag, id = ID, run_level = RunLevel}) ->
   ?tp(debug, ?classy_vote_part_recv, #{id => ID, tag => Tag}),
-  case classy_sup:ensure_vote_participant([Prepare]) of
+  case classy_sup:ensure_vote_participant(RunLevel, [Prepare]) of
     {ok, _Pid} ->
       ok;
     Err ->

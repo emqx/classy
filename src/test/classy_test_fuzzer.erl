@@ -549,7 +549,7 @@ postcondition(PrevState, Call, Result) ->
 %%================================================================================
 
 wait_clusters_converge(S) ->
-  ?retry(100, 200,
+  ?retry(100, 20_0,
          maps:foreach(
            fun(Cluster, Sites) ->
                verify_cluster_converged(Cluster, Sites, S)

@@ -16,6 +16,7 @@
         , rollback      :: [classy_lib:mfargs()]
         , coordinator   :: classy:site()
         , on_fail       :: [classy_lib:mfargs()]
+        , run_level     :: classy_rl_changer:run_level_int()
         , reserved = [] :: term()
         }).
 %%   Coordinator <- Participant

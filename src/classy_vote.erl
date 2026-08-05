@@ -83,6 +83,7 @@ Instead, they are abandoned until the next node restart.
              , strategy/0
              , actions/0
              , options/0
+             , cooked_options/0
              , vote/0
              , outcome/0
              , fail_info/0
@@ -193,14 +194,32 @@ Common vote options.
   Executed on both coordinator and participant if commit / rollback / post_commit actions fail.
   This callback may be used to signal failures to the business logic.
   Classy prepends an argument of type @ref{t:classy_vote:fail_info/0} to the user-specified argument list.
+
+@item run_level
+  Minimum run level required to run vote actions.
+  Defaults to @code{cluster}.
+
+  Classy makes sure that actions don't run while the run level is not appropriate.
+
 @end table
 """.
 -type options() ::
         #{ tag       := tag()
          , actions   := #{classy:site() => actions()}
+         , run_level => classy:run_level()
          , post_vote => classy_lib:mfargs()
          , strategy  => strategy()
          , on_fail   => classy_lib:mfargs()
+         }.
+
+-doc false.
+-type cooked_options() ::
+        #{ tag       := tag()
+         , actions   := #{classy:site() => actions()}
+         , run_level := classy_rl_changer:run_level_int()
+         , post_vote := [classy_lib:mfargs()]
+         , strategy  := strategy()
+         , on_fail   := [classy_lib:mfargs()]
          }.
 
 -type vote() :: #c_vote{}.
@@ -343,11 +362,14 @@ on_fail(FailInfo, Funs) ->
 
 -doc false.
 -spec on_run_level(classy:run_level(), classy:run_level()) -> ok.
-on_run_level(single, cluster) ->
-  classy_vote_coordinator:restore(),
-  classy_vote_participant:restore();
-on_run_level(_, _) ->
-  ok.
+on_run_level(FromA, ToA) ->
+  From = classy_rl_changer:to_int(FromA),
+  To = classy_rl_changer:to_int(ToA),
+  if From < To ->
+      classy_sup:ensure_vote_sup(To);
+     true ->
+      classy_sup:terminate_vote_sup(From)
+  end.
 
 %%================================================================================
 %% Internal functions
@@ -357,7 +379,7 @@ on_run_level(_, _) ->
 %% Input validation
 %%--------------------------------------------------------------------------------
 
--spec with_defaults(options()) -> {ok, options()} | {error, _}.
+-spec with_defaults(options()) -> {ok, cooked_options()} | {error, _}.
 with_defaults(UserOpts) when is_map(UserOpts) ->
   Defaults = #{ strategy  => {all, classy_lib:rpc_timeout()}
               },
@@ -372,10 +394,12 @@ with_defaults(UserOpts) when is_map(UserOpts) ->
         {ok, Strategy} ?= verify_strategy(Strategy0),
         {ok, PostVote} ?= verify_post_vote(Merged),
         {ok, OnFail} ?= verify_on_fail(Merged),
+        {ok, RunLevel} ?= verify_run_level(UserOpts),
         {ok, Merged#{ actions   := Actions
                     , strategy  := Strategy
                     , post_vote => PostVote
                     , on_fail   => OnFail
+                    , run_level => RunLevel
                     }}
       end;
     _ ->
@@ -397,6 +421,15 @@ verify_on_fail(#{on_fail := OnFail}) ->
   end;
 verify_on_fail(#{}) ->
   {ok, []}.
+
+verify_run_level(#{run_level := RL}) when RL =:= ?single;
+                                          RL =:= ?cluster;
+                                          RL =:= ?quorum ->
+  {ok, classy_rl_changer:to_int(RL)};
+verify_run_level(#{run_level := RL}) ->
+  {error, {bad_run_level, RL}};
+verify_run_level(#{}) ->
+  {ok, classy_rl_changer:to_int(?cluster)}.
 
 verify_strategy(all) ->
   {ok, {all, classy_lib:rpc_timeout()}};
@@ -473,7 +506,14 @@ trace_props() ->
   , fun ?MODULE:prop_every_participant_receives_outcome/1
   ].
 
-prop_every_vote_concludes(Trace) ->
+prop_every_vote_concludes(Trace0) ->
+  %% Filter out liveness votes that generally happen on their own and
+  %% aren't relevant for tests:
+  Trace = [I || I <- Trace0,
+                case I of
+                  #{id := _, tag := {classy_liveness, _}} -> false;
+                  _                                       -> true
+                end],
   ?strict_causality(
      #{?snk_kind := ?classy_vote_flow_start, id := _Id},
      #{?snk_kind := K, id := _Id} when K =:= ?classy_vote_coord_flow_complete;

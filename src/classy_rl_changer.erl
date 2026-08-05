@@ -7,7 +7,7 @@
 -behavior(gen_server).
 
 %% API:
--export([to_int/1, to_atom/1, at_lower_level/2, get/1]).
+-export([to_int/1, to_atom/1, at_lower_level/2, get/1, get_int/1]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -80,15 +80,20 @@ at_lower_level(RunLevel, Fun) ->
 -doc false.
 -spec get(current | set) -> classy:run_level().
 get(K) ->
+  to_atom(get_int(K)).
+
+-doc false.
+-spec get_int(current | set) -> run_level_int().
+get_int(K) ->
   try
     Cntr = persistent_term:get(?pterm),
     Idx = case K of
             set     -> ?ctr_s;
             current -> ?ctr_c
           end,
-    to_atom(atomics:get(Cntr, Idx))
+    atomics:get(Cntr, Idx)
   catch _:_ ->
-      ?stopped
+      0
   end.
 
 -doc false.
@@ -145,7 +150,6 @@ init(_) ->
 
 handle_call(#call_set{level = Level}, _From, S0) ->
   if ?valid_level(Level) ->
-
       S = maybe_transition(S0#s{set = to_int(Level)}),
       {reply, ok, S};
      true ->
@@ -178,10 +182,19 @@ handle_cast(Cast, S) ->
        }),
   {noreply, S}.
 
-handle_info({'EXIT', Pid, _Reason}, #s{running = #running{pid = Pid, next = Next}} = S0) ->
+handle_info({'EXIT', Pid, Reason}, #s{running = #running{pid = Pid, next = Next}} = S0) ->
   S = S0#s{ running = undefined
           , current = Next
           },
+  case Reason of
+    normal ->
+      ok;
+    _ ->
+      ?tp(error, ?classy_rl_changer_worker_crash, #{pid => Pid, reason => Reason, to => Next}),
+      %% There is a chance that the worker crashed before updating the
+      %% counter. Do it by ourselves:
+      update_counter(?ctr_c, Next)
+  end,
   {noreply, maybe_transition(S)};
 handle_info(Info, S) ->
   ?tp(warning, ?classy_unknown_event,
@@ -249,9 +262,9 @@ maybe_transition(#s{actions = AA0, set = Set, current = From, running = undefine
 run_hooks(From, Next, Actions) ->
   FromA = to_atom(From),
   NextA = to_atom(Next),
-  update_counter(?ctr_c, Next),
   Worker = spawn_link(
              fun() ->
+                 %% Run hooks:
                  if Next > From ->
                      classy_hook:foreach(?on_change_run_level, [FromA, NextA]);
                     From > Next ->
@@ -259,6 +272,9 @@ run_hooks(From, Next, Actions) ->
                     true ->
                      ok
                  end,
+                 %% All hooks RL changing have completed. Update the current run level:
+                 update_counter(?ctr_c, Next),
+                 %% Run actions scheduled by `at_lower_level':
                  lists:foreach(
                    fun(#call{f = Fun}) ->
                        try
