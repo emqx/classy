@@ -85,7 +85,7 @@ c_set(Cluster, Key, Val) ->
   end.
 
 -doc """
-Persistentley set a site property.
+Persistently set a site property.
 
 These properties survive all cluster changes,
 they don't get cleaned automatically.

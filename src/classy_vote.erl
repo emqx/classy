@@ -508,7 +508,7 @@ trace_props() ->
 
 prop_every_vote_concludes(Trace0) ->
   %% Filter out liveness votes that generally happen on their own and
-  %% aren't relevent for tests:
+  %% aren't relevant for tests:
   Trace = [I || I <- Trace0,
                 case I of
                   #{id := _, tag := {classy_liveness, _}} -> false;
