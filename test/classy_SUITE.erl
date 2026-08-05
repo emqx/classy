@@ -104,10 +104,7 @@ t_020_join(_) ->
           ?ON(S2, classy:sites())),
        %% Join the nodes:
        ?tp(notice, test_join_n2, RuntimeData),
-       ?assertMatch(
-          ok,
-          ?ON(S2, classy:join_node(N1, join))),
-       wait_site_joined([S1, S2], Cluster1, S2),
+       join(S2, S1),
        %% Verify state after join:
        ?assertEqual(
           {ok, Cluster1},
@@ -151,10 +148,8 @@ t_030_kick(_) ->
        #{ site := S1
         , cluster := Cluster1
         } = ?ON(S1, classy_node:hello()),
-       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
-       ?assertMatch(ok, ?ON(S3, classy:join_node(N1, join))),
-       wait_site_joined(Sites, Cluster1, S2),
-       wait_site_joined(Sites, Cluster1, S3),
+       join(S2, S1),
+       join(S3, S1),
        %% Verify state:
        [?assertSameSet(
            Sites,
@@ -197,16 +192,11 @@ t_031_leave_by_self(_) ->
      #{timetrap => ?timetrap},
      begin
        %% Prepare the system:
-       N1 = create_start_site(S1, #{}),
+       _N1 = create_start_site(S1, #{}),
        _N2 = create_start_site(S2, #{}),
        _N3 = create_start_site(S3, #{}),
-       #{ site := S1
-        , cluster := Cluster1
-        } = ?ON(S1, classy_node:hello()),
-       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
-       ?assertMatch(ok, ?ON(S3, classy:join_node(N1, join))),
-       wait_site_joined(Sites, Cluster1, S2),
-       wait_site_joined(Sites, Cluster1, S3),
+       join(S2, S1),
+       join(S3, S1),
        ?tp(notice, test_all_joined, #{}),
        ?assertEqual(
           [Sites || _ <- Sites],
@@ -1236,7 +1226,6 @@ t_401_vote_timeout(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   S3 = <<"s3">>,
-  Sites = [S1, S2, S3],
   Ref1 = vote1,
   ?check_trace(
      #{timetrap => ?timetrap},
@@ -1245,11 +1234,8 @@ t_401_vote_timeout(_) ->
        N2 = create_start_site(S2, #{}),
        N3 = create_start_site(S3, #{}),
        Nodes = [N1, N2, N3],
-       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
-       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
-       ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
-       wait_site_joined(Sites, Cluster, S2),
-       wait_site_joined(Sites, Cluster, S3),
+       join(S2, S1),
+       join(S3, S1),
        ?force_ordering(
           #{?snk_kind := test_go},
           #{?snk_kind := classy_test_vote_prep, for_real := true}),
@@ -1294,7 +1280,6 @@ t_403_vote_coord_restart(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   S3 = <<"s3">>,
-  Sites = [S1, S2, S3],
   Ref1 = vote1,
   ?check_trace(
      #{timetrap => ?timetrap},
@@ -1303,11 +1288,8 @@ t_403_vote_coord_restart(_) ->
        N2 = create_start_site(S2, #{}),
        N3 = create_start_site(S3, #{}),
        Nodes = [N1, N2, N3],
-       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
-       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
-       ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
-       wait_site_joined(Sites, Cluster, S2),
-       wait_site_joined(Sites, Cluster, S3),
+       join(S2, S1),
+       join(S3, S1),
        ?force_ordering(
           #{?snk_kind := test_go},
           #{?snk_kind := classy_test_vote_prep, for_real := true}),
@@ -1353,7 +1335,6 @@ t_404_vote_part_restart(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
   S3 = <<"s3">>,
-  Sites = [S1, S2, S3],
   Ref1 = vote1,
   Ref2 = vote2,
   ?check_trace(
@@ -1363,11 +1344,8 @@ t_404_vote_part_restart(_) ->
        N2 = create_start_site(S2, #{}),
        N3 = create_start_site(S3, #{}),
        Nodes = [N1, N2, N3],
-       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
-       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
-       ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
-       wait_site_joined(Sites, Cluster, S2),
-       wait_site_joined(Sites, Cluster, S3),
+       join(S2, S1),
+       join(S3, S1),
        %% Case 1: participant restarts *after* establishing vote
        %% request in the DB:
        ?force_ordering(
@@ -1447,7 +1425,6 @@ t_410_vote_commit(_) ->
   S2 = <<"s2">>,
   S3 = <<"s3">>,
   Ref1 = vote1,
-  Sites = [S1, S2, S3],
   ?check_trace(
      #{timetrap => ?timetrap},
      begin
@@ -1455,11 +1432,8 @@ t_410_vote_commit(_) ->
        N2 = create_start_site(S2, #{}),
        N3 = create_start_site(S3, #{}),
        Nodes = [N1, N2, N3],
-       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
-       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
-       ?assertEqual(ok, ?ON(S3, classy:join_node(N1, join))),
-       wait_site_joined(Sites, Cluster, S2),
-       wait_site_joined(Sites, Cluster, S3),
+       join(S2, S1),
+       join(S3, S1),
        %% Vote stage fails:
        {ok, ID3} = ?ON(S1,
                        classy_vote:create(#{ tag => Ref1
@@ -1504,9 +1478,7 @@ t_411_commit_actions_after_restart(_) ->
        N1 = create_start_site(S1, #{peer => #{shutdown => halt}}),
        N2 = create_start_site(S2, #{peer => #{shutdown => halt}}),
        Nodes = [N1, N2],
-       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
-       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
-       wait_site_joined(Sites, Cluster, S2),
+       join(S2, S1),
        %% Make sure post commit actions are delayed:
        ?force_ordering(
           #{?snk_kind := test_go},
@@ -1583,9 +1555,7 @@ t_412_commit_action_crash(_) ->
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
        Nodes = [N1, N2],
-       {ok, Cluster} = ?ON(S1, classy:the_cluster()),
-       ?assertEqual(ok, ?ON(S2, classy:join_node(N1, join))),
-       wait_site_joined(Sites, Cluster, S2),
+       join(S2, S1),
        %% Inject failures into the commit flows:
        InjErr1 = ?inject_crash(
                     #{?snk_kind := classy_test_vote_commit, step := 2, ref := Ref1},
@@ -1668,6 +1638,7 @@ t_413_fold_votes(_) ->
      #{timetrap => ?timetrap},
      begin
        _N1 = create_start_site(S1, #{peer => #{shutdown => halt}}),
+       ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
        %% Make sure votes hang long enough for us to inspect them:
        ?force_ordering(
           #{?snk_kind := test_go},
@@ -1675,9 +1646,9 @@ t_413_fold_votes(_) ->
                                  K =:= classy_test_post_vote),
        {ok, _ID1} = ?ON(S1,
                        classy_vote:create(#{ tag => Ref1
-                                            , actions => #{S1 => make_vote(true, true, Ref1, 1)}
-                                            , post_vote => make_post_vote(Ref1)
-                                            })),
+                                           , actions => #{S1 => make_vote(true, true, Ref1, 1)}
+                                           , post_vote => make_post_vote(Ref1)
+                                           })),
        {ok, _ID2} = ?ON(S1,
                         classy_vote:create(#{ tag => Ref2
                                             , actions => #{S1 => make_vote(true, true, Ref2, 1)}
@@ -1757,8 +1728,7 @@ t_500_metadata_crud(_) ->
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
        {ok, Cluster} = ?ON(S1, classy:the_cluster()),
-       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
-       wait_site_joined(Sites, Cluster, S2),
+       join(S2, S1),
        %% 1. Update values on S1:
        {ok, SRef1} = snabbkaffe:subscribe(
                        ?match_event(#{?snk_kind := test_update_meta, site := S1, bar := _}),
@@ -1842,9 +1812,8 @@ t_510_metadata_classify(_) ->
        %% Setup:
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
+       join(S2, S1),
        {ok, Cluster} = ?ON(S1, classy:the_cluster()),
-       ?assertMatch(ok, ?ON(S2, classy:join_node(N1, join))),
-       wait_site_joined(Sites, Cluster, S2),
 
        %% 1. Update metadata, wait for propagation:
        ?ON(S1, classy_site_metadata:c_set(foo, bar)),
@@ -2263,9 +2232,9 @@ verify_cluster_connected(Sites) ->
               || I <- Sites})).
 
 sync_kick(ExecOn, Target, Intent, WaitOn) ->
-  Pred = fun(#{?snk_kind := classy_member_leave, remote := Target, local := Local}) ->
+  Pred = fun(#{?snk_kind := classy_member_leave, remote := T, local := Local}) when T =:= Target ->
              lists:member(Local, WaitOn);
-            (#{?snk_kind := classy_kicked_from_cluster, local := Target}) ->
+            (#{?snk_kind := classy_kicked_from_cluster, local := T}) when T =:= Target ->
              true;
             (_) ->
              false
@@ -2372,3 +2341,36 @@ proper_printout(Fmt, Args) ->
 
 fuzz_node_name(Site) ->
   familiar:last_node({classy_test_fuzzer:familiar_cluster(), Site}).
+
+join(Site, Target) ->
+  join(Site, Target, 5_000, join, ?quorum).
+
+join(Site, Target, Timeout, Intent, RunLevel) ->
+  TargetNode = familiar:which_node({get_cluster(), Target}),
+  Peers = ?ON(Target, classy:sites(connected)),
+  {ok, TargetCluster} = ?ON(Target, classy:the_cluster()),
+  Subs = [begin
+            Pred = ?match_event(#{ ?snk_kind := classy_member_join
+                                 , cluster   := TargetCluster
+                                 , local     := I
+                                 , remote    := Site
+                                 }),
+            {ok, Sub} = snabbkaffe:subscribe(Pred, Timeout),
+            Sub
+          end || I <- Peers],
+  {ok, RLSub} = snabbkaffe:subscribe(
+                  ?match_event(#{ ?snk_kind := classy_change_run_level
+                                , to := RunLevel
+                                , local := Site
+                                }),
+                  Timeout),
+  ?assertMatch(ok, ?ON(Site, classy:join_node(TargetNode, Intent))),
+  [?assertMatch(
+      {ok, [_]},
+      snabbkaffe:receive_events(I))
+   || I <- [RLSub | Subs]],
+  %% TODO: create a nicer method to account for changes that happen
+  %% after member_join event is emitted. Perhaps postpone it until the
+  %% node is fully processed?
+  ct:sleep(100),
+  ok.
