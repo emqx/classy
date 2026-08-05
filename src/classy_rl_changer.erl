@@ -7,7 +7,7 @@
 -behavior(gen_server).
 
 %% API:
--export([to_int/1, to_atom/1, at_lower_level/2, get/1]).
+-export([to_int/1, to_atom/1, at_lower_level/2, get/1, get_int/1]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -80,15 +80,20 @@ at_lower_level(RunLevel, Fun) ->
 -doc false.
 -spec get(current | set) -> classy:run_level().
 get(K) ->
+  to_atom(get_int(K)).
+
+-doc false.
+-spec get_int(current | set) -> run_level_int().
+get_int(K) ->
   try
     Cntr = persistent_term:get(?pterm),
     Idx = case K of
             set     -> ?ctr_s;
             current -> ?ctr_c
           end,
-    to_atom(atomics:get(Cntr, Idx))
+    atomics:get(Cntr, Idx)
   catch _:_ ->
-      ?stopped
+      0
   end.
 
 -doc false.
