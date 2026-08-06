@@ -156,7 +156,7 @@ c_atomically(Cluster, Ops0) ->
                Eff
            end || I <- Ops0],
     {ok, Effects} ?= classy_table:atomically(?tab, Ops),
-    propagate(Cluster),
+    _ = propagate(Cluster),
     {ok, Effects}
   end.
 
@@ -262,11 +262,13 @@ terminate() ->
 %% Internal functions
 %%================================================================================
 
+-spec propagate(classy:cluster_id()) -> ok | {error, _}.
 propagate(Cluster) ->
   maybe
     {ok, Site} ?= classy:the_site_err(),
-    classy_membership:set_info(
-      Cluster,
-      Site,
-      c_get_all(Cluster))
+    {ok, _} ?= classy_membership:set_info(
+                 Cluster,
+                 Site,
+                 c_get_all(Cluster)),
+    ok
   end.
