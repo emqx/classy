@@ -101,4 +101,6 @@
 -define(pt_node_sets, classy_pt_node_sets).
 -define(pt_site_sets, classy_pt_site_sets).
 
+-define(tab_vsn, '__schema_vsn').
+
 -endif.

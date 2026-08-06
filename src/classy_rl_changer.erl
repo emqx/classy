@@ -57,6 +57,8 @@
 %% API functions
 %%================================================================================
 
+%% NOTE: these integers are persistently stored by vote. If this
+%% mapping ever changes, votes should be migrated.
 -spec to_int(classy:run_level()) -> run_level_int().
 to_int(?stopped) -> 0;
 to_int(?single)  -> 1;

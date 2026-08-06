@@ -125,8 +125,6 @@ receive_vote(#c_vote{id = ID} = Vote) ->
 %% Restore votes that were ongoing before the node shut down
 -spec restore(classy_rl_changer:run_level_int()) -> ok.
 restore(RunLevel) ->
-  %% Note: This call ensures that table is restored & safe to read:
-  ok = classy_vote:create_table(),
   MS = { #classy_kv{k = #pk_cd{tag = '$1', id = '$2'}, v = '$3'}
        , []
        , [{{'$1', '$2', '$3'}}]

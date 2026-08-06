@@ -80,8 +80,6 @@ start_link(Prepare = #prepare{id = ID}) ->
 
 -spec restore(classy_rl_changer:run_level_int()) -> ok.
 restore(RunLevel) ->
-  %% Note: this call returns after the table is restored & safe to read:
-  ok = classy_vote:create_table(),
   MS = { #classy_kv{k = #pk_pd{_ = '_'}, v = '$1', _ = '_'}
        , []
        , ['$1']

@@ -77,6 +77,7 @@ They must not contain any sort of heavy or long-running tasks.
 
 %% API:
 -export([ open/2
+        , ensure_tab_vsn/2
         , stop/2
         , clear/1
         , drop/1
@@ -242,6 +243,33 @@ open(Tab, Options) when is_atom(Tab), is_map(Options) ->
       gen_server:call(Pid, #call_ensure_open{tab = Tab}, ?call_timeout);
     Err = {error, _} ->
       Err
+  end.
+
+-doc """
+Utility function that creates @code{?tab_vsn} key in the table with the specified value.
+
+If this key is already present,
+and its value is different from the supplied argument,
+the existing version is returned.
+Checking the return value and handling of the schema migration is up to the API consumer.
+
+NOTE: this function is just a wrapper over other APIs,
+it updates a regular key-value pair in the table.
+Other business logic iterating over the table should be prepared to deal with it,
+@code{ets:foldl} function and @code{on_update} callbacks are of particular concern.
+
+WARNING: this function is not atomic.
+""".
+-spec ensure_tab_vsn(tab(), integer()) -> {ok, integer()} | {error, _}.
+ensure_tab_vsn(Tab, Version) ->
+  case lookup(Tab, ?tab_vsn) of
+    [] ->
+      maybe
+        ok ?= write(Tab, ?tab_vsn, Version),
+        {ok, Version}
+      end;
+    [Other] ->
+      {ok, Other}
   end.
 
 -doc """

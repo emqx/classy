@@ -67,7 +67,7 @@ Instead, they are abandoned until the next node restart.
         ]).
 
 %% internal exports:
--export([ create_table/0
+-export([ open_migrate_table/0
         , verify_prepare/1
         , verify_commit/1
         , verify_rollback/1
@@ -298,12 +298,14 @@ create(UserOptions) ->
 %%================================================================================
 
 -doc false.
--spec create_table() -> ok.
-create_table() ->
-  classy_table:open(
-    ?ptab,
-    #{ ets_options => [ordered_set, {read_concurrency, true}]
-     }).
+-spec open_migrate_table() -> ok.
+open_migrate_table() ->
+  ok = classy_table:open(
+         ?ptab,
+         #{ ets_options => [ordered_set, {read_concurrency, true}]
+          }),
+  {ok, 1} = classy_table:ensure_tab_vsn(?ptab, 1),
+  ok.
 
 -doc false.
 verify_prepare(Prepare) ->
