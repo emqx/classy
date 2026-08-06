@@ -768,7 +768,7 @@ the_site() ->
 
 -spec apply_deltas_with_effects(#{classy:site() => classy_membership:update()}, #s{}) -> {ok, #s{}} | {error, _}.
 apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
-  case classy_node:n_restarts() of
+  case n_restarts() of
     {ok, MyNR} ->
       ok;
     {error, nodedown} ->

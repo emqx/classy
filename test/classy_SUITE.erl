@@ -1734,8 +1734,8 @@ t_500_metadata_crud(_) ->
                        ?match_event(#{?snk_kind := test_update_meta, site := S1, bar := _}),
                        2,
                        infinity),
-       ?ON(S1, classy_site_metadata:c_set(foo, bar)),
-       ?ON(S1, classy_site_metadata:c_set(bar, baz)),
+       ?assertMatch(ok, ?ON(S1, classy_site_metadata:c_set(foo, bar))),
+       ?assertMatch(ok, ?ON(S1, classy_site_metadata:c_set(bar, baz))),
        ?assertEqual(
           {ok, #{foo => bar, bar => baz}},
           ?ON(S1, classy_site_metadata:c_get_all())),
@@ -1758,7 +1758,7 @@ t_500_metadata_crud(_) ->
                        ?match_event(#{?snk_kind := test_update_meta, site := S1, bar := _}),
                        2,
                        infinity),
-       ?ON(S1, classy_site_metadata:c_delete(foo)),
+       ?assertMatch(ok, ?ON(S1, classy_site_metadata:c_delete(foo))),
        {ok, Events2} = snabbkaffe:receive_events(SRef2),
        ?assertMatch(
           [[_], [_]],
