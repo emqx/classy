@@ -252,7 +252,9 @@ s_get_all() ->
 
 -doc false.
 init() ->
-  classy_table:open(?tab, #{ets_options => [ordered_set, {read_concurrency, true}]}).
+  ok = classy_table:open(?tab, #{ets_options => [ordered_set, {read_concurrency, true}]}),
+  {ok, 1} = classy_table:ensure_tab_vsn(?tab, 1),
+  ok.
 
 -doc false.
 terminate() ->
