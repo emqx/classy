@@ -203,7 +203,7 @@ A set of nodes.
 %%================================================================================
 
 -doc """
-Classy application starts in dormaint mode,
+Classy application starts in dormant mode,
 so other applications can safely declare it as a dependency,
 without the risk that OTP application controller
 triggers system startup sequence before all hooks are registered.
