@@ -147,7 +147,13 @@ prep_stop() ->
 
 -spec start_link_table_sup() -> supervisor:startlink_ret().
 start_link_table_sup() ->
-  supervisor:start_link({local, ?TABLE_SUP}, ?MODULE, #table_sup{}).
+  maybe
+    {ok, Pid} ?= supervisor:start_link({local, ?TABLE_SUP}, ?MODULE, #table_sup{}),
+    %% Create internal tables shared between multiple processes:
+    classy_membership:open_migrate_table(),
+    classy_vote:open_migrate_table(),
+    {ok, Pid}
+  end.
 
 -spec start_link_membership_sup() -> supervisor:startlink_ret().
 start_link_membership_sup() ->

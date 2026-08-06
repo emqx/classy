@@ -2331,7 +2331,7 @@ verify_no_votes(Nodes) ->
          begin
            Results = erpc:multicall(Nodes, ets, tab2list, [classy_vote_table]),
            %% Filter out node down votes that may occur sporadically:
-           [?assertMatch({ok, []}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
+           [?assertMatch({ok, [#classy_kv{k = ?tab_vsn}]}, Result, Node) || {Node, Result} <- lists:zip(Nodes, Results)]
          end).
 
 -spec proper_printout(string(), list()) -> _.

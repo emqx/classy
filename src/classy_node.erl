@@ -221,7 +221,9 @@ nodes(Query) ->
 -spec peer_info() -> #{classy:site() => classy:peer_info()}.
 peer_info() ->
   ets:foldl(
-    fun(#classy_kv{k = Site, v = #site_info{node = Node, isconn = IsConn, conn_change_time = ConnChangeTime}}, Acc) ->
+    fun(#classy_kv{k = ?tab_vsn}, Acc) ->
+        Acc;
+       (#classy_kv{k = Site, v = #site_info{node = Node, isconn = IsConn, conn_change_time = ConnChangeTime}}, Acc) ->
         Info = #{ node        => Node
                 , connected   => IsConn
                 , last_update => ConnChangeTime
@@ -317,7 +319,9 @@ init(_) ->
      , nodedown_reason => true
      }),
   ok = classy_table:open(?tab, #{on_update => fun ?MODULE:on_ptab_update/2}),
+  {ok, 1} = classy_table:ensure_tab_vsn(?tab, 1),
   ok = classy_table:open(?site_info, #{ets_options => [{read_concurrency, true}]}),
+  {ok, 1} = classy_table:ensure_tab_vsn(?site_info, 1),
   classy_site_metadata:init(),
   classy_hook:foreach(?on_node_init, []),
   case init_cluster() of
@@ -660,7 +664,9 @@ join_cluster(Cluster, JoinToNode, Local, Remote, Intent, S = #s{}) ->
 -spec update_sites_status(#s{}) -> #s{}.
 update_sites_status(S) ->
   _ = ets:foldl(
-        fun(#classy_kv{k = Peer, v = SiteInfo}, Acc) ->
+        fun(#classy_kv{k = ?tab_vsn}, Acc) ->
+            Acc;
+           (#classy_kv{k = Peer, v = SiteInfo}, Acc) ->
             update_site_info(Peer, SiteInfo, S),
             Acc
         end,
@@ -929,7 +935,9 @@ update_site_info(
 classify() ->
   {NodeSets, SiteSets}
     = ets:foldl(
-        fun(#classy_kv{k = Site, v = Info}, Acc0) ->
+        fun(#classy_kv{k = ?tab_vsn}, Acc) ->
+            Acc;
+           (#classy_kv{k = Site, v = Info}, Acc0) ->
             #site_info{node = Node} = Info,
             lists:foldl(
               fun(SetName, {AccNodes, AccSites}) ->

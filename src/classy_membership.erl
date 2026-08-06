@@ -35,7 +35,7 @@ Business code should not use it directly.
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([start_link/2, cast_sync/3, call_sync/3, mem_data_fallback/3]).
+-export([open_migrate_table/0, start_link/2, cast_sync/3, call_sync/3, mem_data_fallback/3]).
 
 -ifdef(TEST).
 -export([reset_acked_out/4]).
@@ -176,7 +176,9 @@ Business code should not use it directly.
 -spec known_clusters(classy:site()) -> #{classy:cluster_id() => [classy:site()]}.
 known_clusters(Site) ->
   ets:foldl(
-    fun(#classy_kv{k = K}, Acc) ->
+    fun(#classy_kv{k = ?tab_vsn}, Acc) ->
+        Acc;
+       (#classy_kv{k = K}, Acc) ->
         case K of
           #kl{c = Cluster, l = Local, k = #mem{s = Remote}} when Local =:= Site ->
             maps:update_with(
@@ -324,7 +326,9 @@ this function doesn't return internal metadata related to synchronization.
 """.
 dump_values() ->
   ets:foldl(
-    fun(#classy_kv{k = K, v = V}, Acc) ->
+    fun(#classy_kv{k = ?tab_vsn}, Acc) ->
+        Acc;
+       (#classy_kv{k = K, v = V}, Acc) ->
         case K of
           #kl{c = Cluster, l = Local} ->
             #vl{ op = #op_set{ k = Key
@@ -352,7 +356,9 @@ dump_values() ->
 -spec dump() -> #{{classy:cluster_id(), classy:site()} => map()}.
 dump() ->
   ets:foldl(
-    fun(#classy_kv{k = K, v = V}, Acc) ->
+    fun(#classy_kv{k = ?tab_vsn}, Acc) ->
+        Acc;
+       (#classy_kv{k = K, v = V}, Acc) ->
         case K of
           #kl{c = Cluster, l = Local} ->
             #vl{ op = #op_set{ origin = Origin
@@ -551,6 +557,15 @@ wipe(Cluster, Local, Stop) when is_boolean(Stop) ->
       end
   end.
 
+-doc false.
+-spec open_migrate_table() -> ok.
+open_migrate_table() ->
+  ok = classy_table:open(
+         ?ptab,
+         #{ets_options => [{read_concurrency, true}]}),
+  {ok, 1} = classy_table:ensure_tab_vsn(?ptab, 1),
+  ok.
+
 %%================================================================================
 %% behavior callbacks
 %%================================================================================
@@ -563,9 +578,6 @@ init(#{cluster := Cluster, site := Site}) when is_binary(Site), is_binary(Cluste
     #{ cluster => Cluster
      , local => Site
      }),
-  ok = classy_table:open(
-         ?ptab,
-         #{ets_options => [{read_concurrency, true}]}),
   case classy_table:lookup(?ptab, #kc{c = Cluster, s = Site}) of
     [Clock] -> ok;
     [] -> Clock = 0
@@ -1156,7 +1168,7 @@ table_scans_test() ->
   S1 = #s{cluster = <<"c1">>, site = <<"s1">>},
   S2 = #s{cluster = <<"c2">>, site = <<"s2">>},
   try
-    classy_table:open(?ptab, #{}),
+    open_migrate_table(),
     [begin
        true = merge(
                 0,
