@@ -8,7 +8,8 @@
 -behavior(supervisor).
 
 %% API:
--export([ start_link/0
+-export([ start_system/0
+        , start_link/0
         , stop/1
         , start_table/2
         , ensure_membership/2
@@ -25,7 +26,8 @@
 -export([init/1]).
 
 %% internal exports:
--export([ start_link_table_sup/0
+-export([ start_link_top/0
+        , start_link_table_sup/0
         , start_link_membership_sup/0
         , start_link_vote_sup/0
         , start_link_vote_coordinator_sup/1
@@ -38,13 +40,15 @@
 %% Type declarations
 %%================================================================================
 
+-record(app, {}).
 -record(top, {}).
 -record(table_sup, {}).
 -record(membership_sup, {}).
 -record(dynamic_sup, {}).
 -record(vote_sup, {type :: coordinators | participants}).
 
--define(SUP, ?MODULE).
+-define(APP, classy_app_sup).
+-define(TOP, ?MODULE).
 -define(TABLE_SUP, classy_table_sup).
 -define(MEMBERSHIP_SUP, classy_membership_sup).
 %% Supervisor for children that start and stop dynamically, e.g. when
@@ -65,13 +69,33 @@
 %% API functions
 %%================================================================================
 
+-doc false.
 -spec start_link() -> supervisor:startlink_ret().
 start_link() ->
-  supervisor:start_link({local, ?SUP}, ?MODULE, #top{}).
+  supervisor:start_link({local, ?APP}, ?MODULE, #app{}).
+
+-doc false.
+-spec start_link_top() -> supervisor:startlink_ret().
+start_link_top() ->
+  supervisor:start_link({local, ?TOP}, ?MODULE, #top{}).
+
+-spec start_system() -> ok.
+start_system() ->
+  Ret = supervisor:start_child(
+          ?APP,
+          sup_spec(#{id => ?TOP, start => {?MODULE, start_link_top, []}})),
+  case Ret of
+    {ok, _} ->
+      ok;
+    {error, {already_started, _}} ->
+      ok;
+    _ ->
+      Ret
+  end.
 
 -spec stop(timeout()) -> ok.
 stop(Timeout) ->
-  classy_lib:sync_stop_proc(?SUP, shutdown, Timeout).
+  classy_lib:sync_stop_proc(?TOP, shutdown, Timeout).
 
 -spec start_table(classy_table:tab(), classy_table:options()) -> {ok, pid()} | {error, _}.
 start_table(Tab, Options) ->
@@ -139,7 +163,7 @@ terminate_vote_sup(RunLevel) ->
 
 -spec prep_stop() -> ok.
 prep_stop() ->
-  gen_server:stop(?SUP, shutdown, infinity).
+  gen_server:stop(?TOP, shutdown, infinity).
 
 %%================================================================================
 %% Internal exports
@@ -185,8 +209,20 @@ start_link_vote_participant_sup(RunLevel) ->
 %% behavior callbacks
 %%================================================================================
 
+init(#app{}) ->
+  %% Supervisor connected to the application controller. It starts
+  %% empty, so other applications can safely declare classy as a
+  %% dependency and register hooks in their app module, without
+  %% messing up the startup sequence. The system is launched by
+  %% running `start_system()'
+  SupFlags = #{ strategy  => one_for_one
+              , intensity => 1
+              , period    => 1
+              },
+  {ok, {SupFlags, []}};
 init(#top{}) ->
-  _ = classy_hook:init(),
+  %% Top business logic supervisor which launches the system. When it
+  %% launches, classy starts executing hooks.
   RLChanger = #{ id       => run_level_mgr
                , start    => {classy_rl_changer, start_link, []}
                , shutdown => infinity
@@ -219,6 +255,7 @@ init(#top{}) ->
               },
   {ok, {SupFlags, Children}};
 init(#table_sup{}) ->
+  %% Supervisor for tables. One child per table.
   Children = #{ id       => worker
               , start    => {classy_table, start_link, []}
               , shutdown => infinity
@@ -232,6 +269,7 @@ init(#table_sup{}) ->
               },
   {ok, {SupFlags, [Children]}};
 init(#membership_sup{}) ->
+  %% Supervisor for membership CRDTs. One child per cluster.
   Children = #{ id       => worker
               , start    => {classy_membership, start_link, []}
               , shutdown => 5_000
@@ -245,6 +283,7 @@ init(#membership_sup{}) ->
               },
   {ok, {SupFlags, [Children]}};
 init(#dynamic_sup{}) ->
+  %% Supervisor for processes that start and stop in the runtime.
   SupFlags = #{ strategy  => one_for_one
               , intensity => 10
               , period    => 10

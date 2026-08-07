@@ -110,15 +110,15 @@ init_cluster(#{sites := Sites, quorum := Quorum, n_sites := NSites}) ->
   lists:foreach(
     fun({Site, Conf0}) ->
         Fixtures = maps:get(fixtures, Conf0, []),
-        ClassyFixture = {familiar_app,
-                         #{ app => classy
-                          , env => #{ setup_hooks => {classy_ct, setup_hooks, [Site]}
-                                    , quorum => Quorum
-                                    , n_sites => NSites
-                                    , sync_timeout => 1000
-                                    }
-                          }},
-        Conf = Conf0#{fixtures => [ClassyFixture] ++ Fixtures},
+        AppFixture = {familiar_app,
+                      #{ app => classy
+                       , env => #{ setup_hooks => {classy_ct, setup_hooks, [Site]}
+                                 , quorum => Quorum
+                                 , n_sites => NSites
+                                 , sync_timeout => 1000
+                                 }
+                       }},
+        Conf = Conf0#{fixtures => [AppFixture] ++ Fixtures ++ [{classy_start_system_fixture, #{}}]},
         ?assertMatch(
            {ok, _},
            familiar:create_site(familiar_cluster(), Site, Conf))

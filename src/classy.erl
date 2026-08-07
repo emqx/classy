@@ -15,7 +15,8 @@ This MFA can contain calls to various @code{classy:on_...} functions.
 """.
 
 %% API:
--export([ info/0
+-export([ start_system/0
+        , info/0
         , info/1
         , info/2
         , get_meta/1
@@ -200,6 +201,19 @@ A set of nodes.
 %%================================================================================
 %% API functions
 %%================================================================================
+
+-doc """
+Classy application starts in dormant mode,
+so other applications can safely declare it as a dependency,
+without the risk that OTP application controller
+triggers system startup sequence before all hooks are registered.
+
+So simply launching classy application does nothing.
+This function must be called in order for the system to come alive.
+""".
+-spec start_system() -> ok.
+start_system() ->
+  classy_sup:start_system().
 
 %% RPC target
 -doc """

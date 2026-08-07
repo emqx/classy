@@ -23,17 +23,20 @@ create_start_site(Site, CustomConf) ->
   create_start_site(get_cluster(), Site, CustomConf).
 
 create_start_site(Cluster, Site, CustomConf) ->
-  Fixture = {familiar_app,
-             #{ app => classy
-              , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site]}
-                        , cleanup_check_interval => 100
-                        , vote_retry_interval => 100
-                        , rpc_timeout => 100
-                        , discovery_interval => 100
-                        }
-              }},
+  AppFixture = {familiar_app,
+                #{ app => classy
+                 , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site]}
+                           , cleanup_check_interval => 100
+                           , vote_retry_interval => 100
+                           , rpc_timeout => 100
+                           , discovery_interval => 100
+                           }
+                 }},
+  StartSysFixture = {classy_start_system_fixture, #{}},
   Fixtures = maps:get(fixtures, CustomConf, []),
-  Conf = CustomConf#{fixtures => [Fixture | Fixtures], start => true},
+  Conf = CustomConf#{ fixtures => [AppFixture, StartSysFixture | Fixtures]
+                    , start => true
+                    },
   case familiar:create_site(Cluster, Site, Conf) of
     {ok, _Site, Node} ->
       Node;
