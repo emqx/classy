@@ -17,12 +17,13 @@ Module responsible for managing the hooks.
         , fold/3
         , all/2
         , first_match/2
-        , timeout/0
+        , default_timeout/0
         ]).
 
 -export_type([ hookpoint/0
              , prio/0
              , hook/0
+             , conf/0
              ]).
 
 -include("classy_internal.hrl").
@@ -43,6 +44,8 @@ Functions registered into a hookpoint with higher priority are executed first.
 """.
 -type prio() :: integer().
 
+-type conf() :: prio() | #{prio := prio(), timeout => timeout()}.
+
 -doc """
 A handle of a hook.
 It can be used to unregister the hook.
@@ -56,7 +59,7 @@ It can be used to unregister the hook.
 -doc """
 Get the configured hook timeout value (with defaults).
 """.
-timeout() ->
+default_timeout() ->
   application:get_env(classy, hook_timeout, 30_000).
 
 -doc false.
@@ -99,10 +102,23 @@ init() ->
       ok
   end.
 
--spec insert(hookpoint(), fun(), prio()) -> hook().
-insert(Hookpoint, Hook, Prio) when is_atom(Hookpoint), is_integer(Prio), is_function(Hook) ->
+-spec insert(hookpoint(), fun(), conf()) -> hook().
+insert(Hookpoint, Hook, Prio) when is_integer(Prio) ->
+  insert(Hookpoint, Hook, #{prio => Prio});
+insert(Hookpoint, Hook, #{prio := Prio} = Conf) when is_atom(Hookpoint),
+                                                     is_integer(Prio),
+                                                     is_function(Hook) ->
   Key = {Hookpoint, -Prio, Hook},
-  ets:insert(?tab, {Key}),
+  Timeout = case Conf of
+              #{timeout := TO} when TO =:= infinity;
+                                    is_integer(TO) andalso TO > 0 ->
+                TO;
+              #{timeout := TO} ->
+                error({invalid_hook_timeout, Hookpoint, Hook, TO});
+              #{} ->
+                undefined
+            end,
+  ets:insert(?tab, {Key, Timeout}),
   Key.
 
 -doc """
@@ -121,8 +137,8 @@ Errors are ignored (logged).
 -spec foreach(hookpoint(), list()) -> ok.
 foreach(Hookpoint, Args) ->
   lists:foreach(
-    fun(Hook) ->
-        safe_apply(Hookpoint, Hook, Args)
+    fun({Hook, Timeout}) ->
+        safe_apply(Hookpoint, Hook, Args, Timeout)
     end,
     hooks(Hookpoint)).
 
@@ -133,8 +149,8 @@ but hooks run in reverse priority order.
 -spec foreach_rev(hookpoint(), list()) -> ok.
 foreach_rev(Hookpoint, Args) ->
   lists:foreach(
-    fun(Hook) ->
-        safe_apply(Hookpoint, Hook, Args)
+    fun({Hook, Timeout}) ->
+        safe_apply(Hookpoint, Hook, Args, Timeout)
     end,
     lists:reverse(hooks(Hookpoint))).
 
@@ -148,8 +164,8 @@ Errors are ignored (logged).
 fold(Hookpoint, Args, Acc0) ->
   try
     lists:foldl(
-      fun(Hook, Acc1) ->
-          case safe_apply(Hookpoint, Hook, Args ++ [Acc1]) of
+      fun({Hook, Timeout}, Acc1) ->
+          case safe_apply(Hookpoint, Hook, Args ++ [Acc1], Timeout) of
             {ok, Acc} ->
               Acc;
             error ->
@@ -172,8 +188,8 @@ Failures are ignored (logged).
 -spec map(hookpoint(), list()) -> list().
 map(Hookpoint, Args) ->
   lists:filtermap(
-    fun(Hook) ->
-        case safe_apply(Hookpoint, Hook, Args) of
+    fun({Hook, Timeout}) ->
+        case safe_apply(Hookpoint, Hook, Args, Timeout) of
           {ok, Result} ->
             {true, Result};
           _ ->
@@ -192,8 +208,8 @@ this function returns @code{@{error, _@}}.
 all(Hookpoint, Args) ->
   try
     lists:foreach(
-      fun(Hook) ->
-          case safe_apply(Hookpoint, Hook, Args) of
+      fun({Hook, Timeout}) ->
+          case safe_apply(Hookpoint, Hook, Args, Timeout) of
             {ok, ok}           -> ok;
             {ok, {error, Err}} -> throw({found, Err});
             {ok, Res}          -> throw({found, {invalid_result, Res}});
@@ -214,8 +230,8 @@ a given set of arguments.
 first_match(Hookpoint, Args) ->
   try
     lists:foreach(
-      fun(Hook) ->
-          case safe_apply(Hookpoint, Hook, Args) of
+      fun({Hook, Timeout}) ->
+          case safe_apply(Hookpoint, Hook, Args, Timeout) of
             {ok, {ok, Val}} -> throw({found, Val});
             _               -> ok
           end
@@ -231,15 +247,18 @@ first_match(Hookpoint, Args) ->
 %%================================================================================
 
 hooks(Hookpoint) ->
-  MS = { {{Hookpoint, '_', '$1'}}
+  MS = { {{Hookpoint, '_', '$1'}, '$2'}
        , []
-       , ['$1']
+       , [{{'$1', '$2'}}]
        },
   ets:select(?tab, [MS]).
 
--spec safe_apply(hookpoint(), fun(), list()) -> {ok, _Val} | error.
-safe_apply(HookPoint, Fun, Args) ->
-  Timeout = timeout(),
+-spec safe_apply(hookpoint(), fun(), list(), timeout() | undefined) -> {ok, _Val} | error.
+safe_apply(HookPoint, Fun, Args, MaybeTimeout) ->
+  case MaybeTimeout of
+    undefined -> Timeout = default_timeout();
+    Timeout   -> ok
+  end,
   case classy_lib:safe_apply_with_timeout({Fun, Args}, Timeout) of
     {ok, _} = Ok ->
       Ok;
