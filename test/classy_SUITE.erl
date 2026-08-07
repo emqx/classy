@@ -544,6 +544,35 @@ t_062_run_level_hook_order(_) ->
             ?of_kind(test_rl, Trace))
      end).
 
+%% Verify custom timeouts
+t_063_custom_timeouts(_) ->
+  S1 = ~"s1",
+  ?check_trace(
+     #{timetrap => ?timetrap},
+     begin
+       _N1 = create_start_site(S1, #{}),
+       ?ON(S1,
+           begin
+             application:set_env(classy, hook_timeout, 100),
+             classy_hook:insert(
+               test_hook,
+               fun() -> timer:sleep(1000) end,
+               #{prio => 0, timeout => 2000}),
+             classy_hook:insert(
+               test_hook,
+               fun() -> timer:sleep(2000) end,
+               #{prio => 0, timeout => infinity}),
+             ?assertMatch(
+                ok,
+                classy_hook:foreach(test_hook, []))
+           end)
+     end,
+     fun(Trace) ->
+         ?assertMatch(
+            [],
+            ?of_kind(?classy_hook_failure, Trace))
+     end).
+
 %% This testcase verifies site autoclean functionality
 t_070_cleanup(_) ->
   S1 = <<"s1">>,

@@ -609,7 +609,7 @@ It is called before @ref{classy:the_site/0} and @code{classy:the_cluster/0}
 are initialized,
 and can be used to override the default cluster and site initialization logic.
 """.
--spec on_node_init(fun(() -> _), classy_hook:prio()) -> classy_hook:hook().
+-spec on_node_init(fun(() -> _), classy_hook:conf()) -> classy_hook:hook().
 on_node_init(Hook, Prio) ->
   classy_hook:insert(?on_node_init, Hook, Prio).
 
@@ -619,14 +619,14 @@ Register a hook that is executed before shutting down business applications.
 It is called before classy application starts the shutdown procedure,
 as well when the site leaves a cluster or heals from a network partition.
 """.
--spec on_prep_stop(fun((_Reason) -> _), classy_hook:prio()) -> classy_hook:hook().
+-spec on_prep_stop(fun((_Reason) -> _), classy_hook:conf()) -> classy_hook:hook().
 on_prep_stop(Hook, Prio) ->
   classy_hook:insert(?on_prep_stop, Hook, Prio).
 
 -doc """
 This callback is executed once per cluster by the site that originally creates the cluster.
 """.
--spec on_create_cluster(fun((cluster_id(), Local) -> _), classy_hook:prio()) ->
+-spec on_create_cluster(fun((cluster_id(), Local) -> _), classy_hook:conf()) ->
         classy_hook:hook()
   when Local :: site().
 on_create_cluster(Hook, Prio) ->
@@ -635,7 +635,7 @@ on_create_cluster(Hook, Prio) ->
 -doc """
 This callback is called once per site.
 """.
--spec on_create_site(fun((site()) -> _), classy_hook:prio()) -> classy_hook:hook().
+-spec on_create_site(fun((site()) -> _), classy_hook:conf()) -> classy_hook:hook().
 on_create_site(Hook, Prio) ->
   classy_hook:insert(?on_create_site, Hook, Prio).
 
@@ -649,7 +649,7 @@ Hence it should avoid blocking it.
 WARNING: status change to @code{false} is not indicative of the remote site being actually down.
 This can happen during a network partition.
 """.
--spec on_peer_connection_change(Fun, classy_hook:prio()) -> classy_hook:hook()
+-spec on_peer_connection_change(Fun, classy_hook:conf()) -> classy_hook:hook()
    when Fun :: fun((Remote, node(), _IsConnected :: boolean()) -> _),
         Remote :: site().
 on_peer_connection_change(Hook, Prio) ->
@@ -665,7 +665,7 @@ the hook may or may not run.
 """.
 -spec on_membership_change(
         fun((cluster_id(), _Local :: site(), _Remote :: site(), _IsMember :: boolean()) -> _),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook().
 on_membership_change(Hook, Prio) ->
   classy_hook:insert(?on_membership_change, Hook, Prio).
@@ -683,7 +683,7 @@ or from the quorum of other running peers.
 """.
 -spec on_peer_liveness_change(
         fun((_Remote :: site(), _IsAlive :: boolean()) -> _),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook().
 on_peer_liveness_change(Hook, Prio) ->
   classy_hook:insert(?on_peer_liveness_change, Hook, Prio).
@@ -695,7 +695,7 @@ Register a hook that is executed when a peer site changes the Erlang node name.
 """.
 -spec on_peer_node_change(
         fun((_Remote :: site(), _OldNode :: node(), _NewNode :: node()) -> _),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook().
 on_peer_node_change(Hook, Prio) ->
   classy_hook:insert(?on_peer_node_change, Hook, Prio).
@@ -707,7 +707,7 @@ Register a hook that is executed when a peer restarts.
 """.
 -spec on_peer_restart(
         fun((_Remote :: site(), _NRestarts :: pos_integer()) -> _),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook().
 on_peer_restart(Hook, Prio) ->
   classy_hook:insert(?on_peer_restart, Hook, Prio).
@@ -720,7 +720,7 @@ based on @ref{t:classy:info/0}.
 """.
 -spec on_node_classify(
         fun((site_metadata()) -> [node_set()]),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook().
 on_node_classify(Hook, Prio) ->
   classy_hook:insert(?on_node_classify, Hook, Prio).
@@ -733,7 +733,7 @@ It should only check if it is ok to join.
 """.
 -spec pre_join(
         fun((cluster_id(), Remote, node(), join_intent()) -> ok | {error, _}),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook()
   when Remote :: site().
 pre_join(Hook, Prio) ->
@@ -747,7 +747,7 @@ and must be idempotent.
 """.
 -spec post_join(
         fun((cluster_id(), Local, JoinedTo, join_intent()) -> _),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook()
   when Local :: site(),
        JoinedTo :: node().
@@ -762,7 +762,7 @@ WARNING: this hook cannot have side effects.
 """.
 -spec pre_kick(
         fun((cluster_id(), Target, kick_intent()) -> ok | {error, _}),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook()
   when Target :: site().
 pre_kick(Hook, Prio) ->
@@ -786,7 +786,7 @@ Normally, such actions should be performed in @link{classy:on_membership_change/
 """.
 -spec on_kick_decided(
         fun((cluster_id(), Target, kick_intent()) -> _),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook()
   when Target :: site().
 on_kick_decided(Hook, Prio) ->
@@ -798,7 +798,7 @@ This hook can perform destructive actions associated with cleanup.
 """.
 -spec on_leave(
         fun((OldCluster, Local, kick_intent()) -> _),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook()
   when OldCluster :: cluster_id(),
        Local :: site().
@@ -812,7 +812,7 @@ WARNING: this hook cannot have side effects.
 """.
 -spec pre_autoclean(
         fun((Remote) -> ok | {error, _}),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook()
   when Remote :: site().
 pre_autoclean(Hook, Prio) ->
@@ -826,7 +826,7 @@ WARNING: this hook cannot have side effects.
 """.
 -spec pre_autocluster(
         fun((cluster_info(), Discovered) -> Discovered),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook()
   when Discovered :: [{cluster_id(), [node()]}].
 pre_autocluster(Hook, Prio) ->
@@ -845,7 +845,7 @@ Use @code{classy:prep_stop()} function to safely lower the run level and shut do
 """.
 -spec run_level(
         fun((run_level(), run_level()) -> _),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook().
 run_level(Hook, Prio) ->
   classy_hook:insert(?on_change_run_level, Hook, Prio).
@@ -855,7 +855,7 @@ Register a hook that can add entries to the map returned by @ref{classy:info/0}.
 """.
 -spec enrich_site_info(
         fun((info()) -> info()),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook().
 enrich_site_info(Hook, Prio) ->
   classy_hook:insert(?on_enrich_site_info, Hook, Prio).
@@ -865,7 +865,7 @@ Register a hook that is called when metadata of a site (local or remote) changes
 """.
 -spec on_metadata_change(
         fun((cluster_id(), site(), site_metadata()) -> _),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook().
 on_metadata_change(Hook, Prio) ->
   classy_hook:insert(?on_metadata_change, Hook, Prio).
@@ -925,7 +925,7 @@ This hook is optional.
 """.
 -spec fallback_get_meta(
         fun((node(), site_metadata()) -> site_metadata()),
-        classy_hook:prio()
+        classy_hook:conf()
        ) -> classy_hook:hook().
 fallback_get_meta(Hook, Prio) ->
   classy_hook:insert(?fallback_get_meta, Hook, Prio).
