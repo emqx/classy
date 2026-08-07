@@ -79,7 +79,7 @@ start_link() ->
 start_link_top() ->
   supervisor:start_link({local, ?TOP}, ?MODULE, #top{}).
 
--spec start_system() -> ok.
+-spec start_system() -> ok | {error, _}.
 start_system() ->
   Ret = supervisor:start_child(
           ?APP,

@@ -211,14 +211,14 @@ triggers system startup sequence before all hooks are registered.
 So simply launching classy application does nothing.
 This function must be called in order for the system to come alive.
 """.
--spec start_system() -> ok.
+-spec start_system() -> ok | {error, _}.
 start_system() ->
   classy_sup:start_system().
 
 -doc """
 Equivalent to @code{stop_system(shutdown)}.
 """.
--spec stop_system() -> ok.
+-spec stop_system() -> ok | {error, _}.
 stop_system() ->
   stop_system(shutdown).
 
