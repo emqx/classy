@@ -19,7 +19,7 @@
         , terminate_liveness_server/0
         , ensure_vote_sup/1
         , terminate_vote_sup/1
-        , prep_stop/0
+        , stop_system/0
         ]).
 
 %% behavior callbacks:
@@ -89,6 +89,9 @@ start_system() ->
       ok;
     {error, {already_started, _}} ->
       ok;
+    {error, already_present} ->
+      ok = supervisor:delete_child(?APP, ?TOP),
+      start_system();
     _ ->
       Ret
   end.
@@ -161,9 +164,12 @@ terminate_vote_sup(RunLevel) ->
   terminate_child(?DYNAMIC_SUP, vote_coord_sup(RunLevel)),
   terminate_child(?DYNAMIC_SUP, vote_participant_sup(RunLevel)).
 
--spec prep_stop() -> ok.
-prep_stop() ->
-  gen_server:stop(?TOP, shutdown, infinity).
+-spec stop_system() -> ok | {error, _}.
+stop_system() ->
+  maybe
+    ok ?= supervisor:terminate_child(?APP, ?TOP),
+    supervisor:delete_child(?APP, ?TOP)
+  end.
 
 %%================================================================================
 %% Internal exports
