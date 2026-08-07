@@ -72,6 +72,10 @@ t_discover(_) ->
          ]} = classy_discovery_strategy:discover(classy_discovery_dns, Options2),
 
     Options3 = #{name => "localhost"},
-    %% below test relies on rebar3 ct is run with '--name ct@127.0.0.1'
-    {ok, ['ct@127.0.0.1']} = classy_discovery_strategy:discover(classy_discovery_dns, Options3),
+    {ok, [Discovered]} = classy_discovery_strategy:discover(classy_discovery_dns, Options3),
+    %% Verify discovered node:
+    {ok, DefaultAppName, _} = classy_lib:split_node_name(node()),
+    ?assertEqual(
+       {ok, DefaultAppName, ~"127.0.0.1"},
+       classy_lib:split_node_name(Discovered)),
     ok.
