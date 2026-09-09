@@ -18,6 +18,7 @@
         , log_peer_restart/2
         , log_peer_node_change/3
         , log_autoclean/1
+        , on_node_classify/1
         ]).
 
 -include("classy_internal.hrl").
@@ -140,6 +141,11 @@ log_autoclean(Target) ->
   ?tp(debug, classy_peer_autoclean,
       #{ site => Target
        }).
+
+on_node_classify(#{via_fallback := true}) ->
+  [via_fallback];
+on_node_classify(_) ->
+  [].
 
 %%================================================================================
 %% Internal functions
