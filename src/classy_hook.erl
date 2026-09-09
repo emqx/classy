@@ -93,6 +93,8 @@ init() ->
   classy_discovery_etcd:install_dispatch_hook(),
   %% Restore aborted votes at the end of transition to the `cluster' RL:
   classy:run_level(fun classy_vote:on_run_level/2, ?min_hook_prio + 1),
+  %% Fallback:
+  classy:on_node_classify(fun classy_builtin_hooks:on_node_classify/1, ?max_hook_prio),
   %% User initialization:
   case application:get_env(classy, setup_hooks) of
     {ok, {Mod, Func, Args}} ->

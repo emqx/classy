@@ -112,7 +112,7 @@ init_cluster(#{sites := Sites, quorum := Quorum, n_sites := NSites}) ->
         Fixtures = maps:get(fixtures, Conf0, []),
         AppFixture = {familiar_app,
                       #{ app => classy
-                       , env => #{ setup_hooks => {classy_ct, setup_hooks, [Site]}
+                       , env => #{ setup_hooks => {classy_ct, setup_hooks, [Site, undefined]}
                                  , quorum => Quorum
                                  , n_sites => NSites
                                  , sync_timeout => 1000
