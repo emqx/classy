@@ -718,6 +718,59 @@ t_080_desync(_) ->
      , fun events_on_all_sites/1
      ]).
 
+%% This testcase emulates a scenario that occurs during migration from
+%% legacy cluster management system (e.g. based on mnesia) to classy.
+%% Initially, both nodes start disconnected, but their cluster IDs are
+%% set to the same value, as it happens when the node initialization
+%% hook detects presence of a legacy cluster, and maps it to the
+%% classy cluster ID.
+%%
+%% Then the nodes are implicitly connected via `extra_sync_targets'
+%% hook, that lets them discover each other, skipping the side effects
+%% that usually run during normal join/leave.
+t_085_extra_sync_targets(_) ->
+  S1 = ~"s1",
+  S2 = ~"s2",
+  Sites = [S1, S2],
+  ?check_trace(
+     #{timetrap => ?timetrap},
+     begin
+       %% Prepare system:
+       Nodes = [create_start_site(I, #{cluster_id => ~"migration"}) || I <- Sites],
+       %% 1. Verify that both sites start as singletons:
+       ct:sleep(2000),
+       [?assertMatch(
+           [I],
+           ?ON(I, classy:sites(all))) || I <- Sites],
+       [?assertMatch(
+           [_],
+           ?ON(I, classy:nodes(all))) || I <- Sites],
+       %% 2. Enable extra sync targets:
+       Hook = fun(~"migration") -> Nodes;
+                 (_) -> []
+              end,
+       [?ON(I, classy:extra_sync_targets(Hook)) || I <- Sites],
+       wait_site_joined([S2], ~"migration", S1),
+       wait_site_joined([S1], ~"migration", S2),
+       %% 3. Cluster should be formed:
+       ct:sleep(10),
+       [?assertMatch(
+           Sites,
+           ?ON(I, classy:sites(all))) || I <- Sites],
+       [?assertMatch(
+           Nodes,
+           ?ON(I, classy:nodes(all))) || I <- Sites]
+     end,
+     [ fun classy_ct:no_unexpected_events/1
+     , {"no join leave hooks",
+        fun(Trace) ->
+            Kinds = [classy_pre_join_node, classy_member_leave],
+            ?assertMatch(
+               [],
+               ?of_kind(Kinds, Trace))
+        end}
+     ]).
+
 %% This testcase verifies `classy:info/0' and `classy:info/1'
 t_090_info(_) ->
   S1 = <<"s1">>,

@@ -19,6 +19,7 @@ Business code should not use it directly.
         , set_liveness/6
         , members/2
         , list_local_sites/1
+        , list_local_sites/2
         , get_data/4
         , cleanup/3
         , flush/2
@@ -281,6 +282,12 @@ list_local_sites(all) ->
        },
   classy_table:select(?ptab, [MS]).
 
+-doc "List local sites that belong to the given cluster".
+-spec list_local_sites(running, classy:cluster_id()) -> [classy:site()].
+list_local_sites(running, Cluster) ->
+  MS = {{?name(Cluster, '$1'), '_', '_'}, [], ['$1']},
+  gproc:select({local, names}, [MS]).
+
 -doc """
 Return mapping of nodes to sites.
 
@@ -288,7 +295,7 @@ WARNING: it includes kicked members.
 """.
 -spec site_of_node(classy:cluster_id(), classy:site()) -> #{node() => classy:site()}.
 site_of_node(Cluster, Local) ->
-  maps:from_list(select_nodes(Cluster, Local, {{'$2', '$1'}})).
+  maps:from_list(select_nodes(Cluster, Local, [], {{'$2', '$1'}})).
 
 -doc """
 Return mapping of sites to nodes.
@@ -297,7 +304,7 @@ WARNING: it includes kicked members.
 """.
 -spec node_of_site(classy:cluster_id(), classy:site()) -> #{classy:site() => node()}.
 node_of_site(Cluster, Local) ->
-  maps:from_list(select_nodes(Cluster, Local, {{'$1', '$2'}})).
+  maps:from_list(select_nodes(Cluster, Local, [], {{'$1', '$2'}})).
 
 -doc """
 Delete sites that have been kicked for longer than
@@ -472,7 +479,7 @@ start_link(Cluster, Local) ->
   Args = #{cluster => Cluster, site => Local},
   gen_server:start_link(?via(Cluster, Local), ?MODULE, Args, []).
 
-%% @doc Send membership data to the process
+-doc "Send membership data to the process".
 -spec cast_sync(classy:cluster_id(), classy:site(), sync_data()) -> ok.
 cast_sync(Cluster, Site, SyncData) ->
   gen_server:cast(?via(Cluster, Site), SyncData).
@@ -819,8 +826,8 @@ handle_wipe(#s{cluster = Cluster, site = Local, sync_timer = Timer} = S0, Stop, 
 handle_sync_out(S = #s{cluster = Cluster}) ->
   SyncTargets = sync_targets(S),
   ?tp(classy_membership_sync_out, #{targets => SyncTargets}),
-  maps:foreach(
-    fun(Site, Node) ->
+  lists:foreach(
+    fun({Site, Node}) ->
         Since = get_acked_out(Site, S),
         Acked = get_acked_in(Site, S),
         Data = get_sync_data(Since, Acked, S),
@@ -1029,16 +1036,19 @@ peers(#s{cluster = Cluster, site = Local}) ->
        },
   classy_table:select(?ptab, [MS]).
 
--spec nodes_of_cluster(#s{}) -> #{classy:site() => node()}.
-nodes_of_cluster(#s{cluster = Cluster, site = Local}) ->
-  maps:from_list(select_nodes(Cluster, Local, {{'$1', '$2'}})).
+-doc """
+Return list of peer sites together with the last known host.
+""".
+-spec peer_members(#s{}) -> [{classy:site(), node()}].
+peer_members(#s{cluster = Cluster, site = Local}) ->
+  select_nodes(Cluster, Local, [{'=/=', '$1', Local}], {{'$1', '$2'}}).
 
-select_nodes(Cluster, Local, Action) ->
+select_nodes(Cluster, Local, Guards, Action) ->
   MS = { #classy_kv{ k = #kl{c = Cluster, l = Local,  k = #host{s = '$1'}}
                    , v = #vl{op = #op_set{val = '$2', _ = '_'}, _ = '_'}
                    , _ = '_'
                    }
-       , []
+       , Guards
        , [Action]
        },
   classy_table:select(?ptab, [MS]).
@@ -1152,10 +1162,42 @@ set_acked_out(Site, Clock, #s{cluster = Cluster, site = Local}) ->
     #ko{c = Cluster, l = Local, r = Site},
     Clock).
 
-sync_targets(S = #s{site = Local}) ->
-  maps:remove(
-    Local,
-    nodes_of_cluster(S)).
+-spec sync_targets(#s{}) -> [{classy:site(), node()}].
+sync_targets(S = #s{cluster = Cluster}) ->
+  %% Known cluster members are always the targets:
+  Members = peer_members(S),
+  %% The user can inject additional sync targets via a hook to
+  %% facilitate cluster recovery and migration:
+  ExtraTargetNodes =
+    lists:foldr(
+      fun(L, Acc) when is_list(L) ->
+          [Node || Node <- L, is_atom(Node)] ++ Acc;
+         (_Bad, Acc) ->
+          %% Don't log anything, since this function runs frequently.
+          Acc
+      end,
+      [],
+      classy_hook:map(?extra_sync_targets, [Cluster])),
+  Extras = list_remote_sites(ExtraTargetNodes, Cluster),
+  lists:usort(Extras ++ Members).
+
+-spec list_remote_sites([node()], classy:cluster_id()) -> [{classy:site(), node()}].
+list_remote_sites(Nodes, Cluster) ->
+  Rets = erpc:multicall(
+           Nodes,
+           ?MODULE, list_local_sites, [running, Cluster],
+           classy_lib:rpc_timeout()),
+  filter_remote_sites(Nodes, Rets).
+
+filter_remote_sites([], []) ->
+  [];
+filter_remote_sites([Node | Nodes], [Ret | Rets]) ->
+  case Ret of
+    {ok, Sites} ->
+      [{Site, Node} || Site <- Sites];
+    _ ->
+      []
+  end ++ filter_remote_sites(Nodes, Rets).
 
 %%--------------------------------------------------------------------------------
 %% Unit tests
@@ -1215,11 +1257,13 @@ table_scans_test() ->
     ?assertEqual(
        [],
        members(<<"c1">>, <<"s2">>)),
-    %% Check `nodes_of_cluster' function:
-    [?assertEqual(
-        #{<<"s1">> => 'n1@localhost', <<"s2">> => 'n2@localhost'},
-        nodes_of_cluster(S))
-     || S <- [S1, S2]]
+    %% Check `peer_members' function:
+    ?assertEqual(
+       [{~"s2", 'n2@localhost'}],
+       peer_members(S1)),
+    ?assertEqual(
+       [{~"s1", 'n1@localhost'}],
+       peer_members(S2))
   after
     classy_table:drop(?ptab),
     classy_table_tests:cleanup(Cleanup)

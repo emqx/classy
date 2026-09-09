@@ -48,6 +48,7 @@
 -define(fallback_get_cluster, fallback_get_cluster).
 -define(fallback_get_meta, fallback_get_meta).
 -define(fallback_get_peer_nodes, fallback_get_peer_nodes).
+-define(extra_sync_targets, extra_sync_targets).
 
 %% Run levels:
 -define(stopped, stopped).

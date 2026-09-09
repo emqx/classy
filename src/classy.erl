@@ -71,6 +71,7 @@ See also:
         , fallback_get_cluster/1
         , fallback_get_meta/2
         , fallback_get_peer_nodes/1
+        , extra_sync_targets/1
         ]).
 
 -export_type([ cluster_id/0
@@ -961,6 +962,18 @@ It implies that all nodes subsequently update to classy-aware code.
 -spec fallback_get_peer_nodes(fun((node()) -> {ok, [node()]} | undefined)) -> classy_hook:hook().
 fallback_get_peer_nodes(Hook) ->
   classy_hook:insert(?fallback_get_peer_nodes, Hook, 0).
+
+-doc """
+Register a callback that returns a list of extra CRDT sync targets for a cluster.
+This is needed primarily for migrations.
+
+In absence of this hook,
+classy syncs the cluster state with all nodes that are known to have previously hosted member sites.
+This hook allows to expand the list of nodes.
+""".
+-spec extra_sync_targets(fun((cluster_id()) -> [node()])) -> classy_hook:hook().
+extra_sync_targets(Hook) ->
+  classy_hook:insert(?extra_sync_targets, Hook, 0).
 
 %%================================================================================
 %% Internal exports

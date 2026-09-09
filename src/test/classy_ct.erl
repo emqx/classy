@@ -23,9 +23,10 @@ create_start_site(Site, CustomConf) ->
   create_start_site(get_cluster(), Site, CustomConf).
 
 create_start_site(Cluster, Site, CustomConf) ->
+  ClusterId = maps:get(cluster_id, CustomConf, undefined),
   AppFixture = {familiar_app,
                 #{ app => classy
-                 , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site]}
+                 , env => #{ setup_hooks => {?MODULE, setup_hooks, [Site, ClusterId]}
                            , cleanup_check_interval => 100
                            , vote_retry_interval => 100
                            , rpc_timeout => 100
@@ -60,20 +61,25 @@ get_cluster() ->
   {ok, Cluster} = get(classy_SUITE_cluster),
   Cluster.
 
-setup_hooks(Site) ->
+setup_hooks(Site, MaybeClusterId) ->
   %% Not-so-elegant way to avoid setting `on_node_init' hook to a
   %% closure. When closure is used, it interacts badly with code
   %% load/unload, and makes `no_unexpected_events' property flaky,
   %% when hooks fail with badfun.
-  persistent_term:put(classy_ct_site, Site),
+  persistent_term:put(classy_ct_site, {Site, MaybeClusterId}),
   classy:on_node_init(fun ?MODULE:on_node_init/0, 0).
 
 on_node_init() ->
-  classy_node:maybe_init_the_site(persistent_term:get(classy_ct_site)),
+  {Site, MaybeClusterId} = persistent_term:get(classy_ct_site),
+  case MaybeClusterId of
+    undefined ->
+      classy_node:maybe_init_the_site(Site);
+    _ ->
+      classy_node:maybe_init_the_site(Site, MaybeClusterId)
+  end,
   classy:on_metadata_change(fun ?MODULE:on_metadata_change/3, 0),
   classy:on_node_classify(fun ?MODULE:on_node_classify/1, 0),
   classy:run_level(fun ?MODULE:on_run_level/2, 0).
-
 
 on_run_level(Prev, Next) ->
   %% Verify that run level observed via `classy:run_level' API doesn't
