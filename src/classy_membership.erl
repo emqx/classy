@@ -1169,15 +1169,18 @@ sync_targets(S = #s{cluster = Cluster}) ->
   %% The user can inject additional sync targets via a hook to
   %% facilitate cluster recovery and migration:
   ExtraTargetNodes =
-    lists:foldr(
-      fun(L, Acc) when is_list(L) ->
-          [Node || Node <- L, is_atom(Node)] ++ Acc;
-         (_Bad, Acc) ->
-          %% Don't log anything, since this function runs frequently.
-          Acc
-      end,
-      [],
-      classy_hook:map(?extra_sync_targets, [Cluster])),
+    lists:usort(
+      lists:foldl(
+        fun(L, Acc) when is_list(L) ->
+            [Node || Node <- L,
+                     is_atom(Node),
+                     Node =/= node()] ++ Acc;
+           (_Bad, Acc) ->
+            %% Don't log anything, since this function runs frequently.
+            Acc
+        end,
+        [],
+        classy_hook:map(?extra_sync_targets, [Cluster]))),
   Extras = list_remote_sites(ExtraTargetNodes, Cluster),
   lists:usort(Extras ++ Members).
 
