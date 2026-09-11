@@ -63,7 +63,7 @@ See also:
         , on_leave/2
         , pre_autoclean/2
         , pre_autocluster/2
-        , run_level/2
+        , on_run_level/2
         , enrich_site_info/2
         , on_metadata_change/2
 
@@ -508,7 +508,7 @@ at_lower_level(RunLevel, Fun) ->
 -doc """
 Get current run level.
 
-NOTE: the value is updated after all @erlfn{link,erlref,classy,run_level,2} hooks complete.
+NOTE: the value is updated after all @erlfn{link,erlref,classy,on_run_level,2} hooks complete.
 """.
 -spec run_level() -> run_level().
 run_level() ->
@@ -847,11 +847,11 @@ WARNING: if the callback interacts with the OTP application controller
 then stopping classy application using @code{application:stop(classy)} will lead to a deadlock.
 Use @code{classy:stop_system()} function to safely lower the run level and shut down classy.
 """.
--spec run_level(
+-spec on_run_level(
         fun((run_level(), run_level()) -> _),
         classy_hook:conf()
        ) -> classy_hook:hook().
-run_level(Hook, Prio) ->
+on_run_level(Hook, Prio) ->
   classy_hook:insert(?on_change_run_level, Hook, Prio).
 
 -doc """

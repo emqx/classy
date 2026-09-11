@@ -427,7 +427,7 @@ t_061_run_level_timeouts(_) ->
                                                   K =:= ?classy_run_level_change_error),
        ?ON(S1,
            begin
-             classy:run_level(
+             classy:on_run_level(
                fun(From, To) ->
                    ?tp(rl_change, #{f => From, t => To}),
                    timer:sleep(100)
@@ -520,12 +520,12 @@ t_062_run_level_hook_order(_) ->
        ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
        ?ON(S1,
            begin
-             classy:run_level(
+             classy:on_run_level(
                fun(From, To) ->
                    ?tp(test_rl, #{f => From, t => To, p => 1})
                end,
                1),
-             classy:run_level(
+             classy:on_run_level(
                fun(From, To) ->
                    ?tp(test_rl, #{f => From, t => To, p => 0})
                end,
