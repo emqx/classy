@@ -79,7 +79,7 @@ on_node_init() ->
   end,
   classy:on_metadata_change(fun ?MODULE:on_metadata_change/3, 0),
   classy:on_node_classify(fun ?MODULE:on_node_classify/1, 0),
-  classy:run_level(fun ?MODULE:on_run_level/2, 0).
+  classy:on_run_level(fun ?MODULE:on_run_level/2, 0).
 
 on_run_level(Prev, Next) ->
   %% Verify that run level observed via `classy:run_level' API doesn't

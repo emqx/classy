@@ -112,7 +112,7 @@ The document was typeset with
   (@code{erlang:halt}, @code{kill}, power loss),
   run levels always advance and retard in sequence.
 
-  Business applications can track the run level via @erlfn{link,erlref,classy,run_level,2} hook.
+  Business applications can track the run level via @erlfn{link,erlref,classy,on_run_level,2} hook.
   This hook can, for example,
   activate or deactivate some business applications.
 
