@@ -294,7 +294,13 @@ init(#dynamic_sup{}) ->
               , intensity => 10
               , period    => 10
               },
-  {ok, {SupFlags, []}};
+  NodeMonitor = #{ id       => node_monitor
+                 , start    => {classy_node_monitor, start_link, []}
+                 , shutdown => 5_000
+                 , restart  => permanent
+                 , type     => worker
+                 },
+  {ok, {SupFlags, [NodeMonitor]}};
 init(#vote_sup{type = coordinators}) ->
   %% Note: since both coordinator and participant workers deal with
   %% persistent data, recovery via restart by the supervisor is too

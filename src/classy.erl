@@ -14,7 +14,8 @@ This MFA can contain calls to various @code{classy:on_...} functions.
 See also:
 @erlmodref{ref,classy_site_metadata},
 @erlmodref{ref,classy_vote},
-@erlmodref{ref,classy_uid}.
+@erlmodref{ref,classy_uid},
+@erlmodref{ref,classy_node_monitor}.
 """.
 
 %% API:
