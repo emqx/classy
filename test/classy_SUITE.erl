@@ -390,7 +390,7 @@ t_041_node_monitoring(_) ->
      end,
      [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
-     , {"no unexpected nodup/nodedown events",
+     , {"no unexpected nodeup/nodedown events",
         fun(Trace) ->
             %% Total number of nodeup/nodedown events should be equal
             %% to the sum of expected numbers of events at all stages:

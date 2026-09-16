@@ -488,7 +488,7 @@ precondition(S, {call, ?MODULE, join_node, [Local, Target|_]}) ->
 precondition(S, {call, ?MODULE, stop_site, [Site | _]}) ->
   %% For simplicity, we avoid stopping all sites in clusters that have >1 sites.
   %% Stopping all sites at once leads to loss of synchronization and split views,
-  %% since the site that recieved the last command may become unable to propagate data.
+  %% since the site that received the last command may become unable to propagate data.
   %% Verifying such scenarios requires a more sophisticated model than we have now.
   Peers = sites_of_cluster(cluster_of(Site, S), S),
   case Peers of

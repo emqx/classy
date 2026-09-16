@@ -20,7 +20,7 @@ When a node joins a cluster,
 other members of the cluster receive @code{@{nodeup, N@}} event for the new node.
 @item
 When a site leaves a cluster,
-the remaining members, that were previously connected to it, recieve @code{@{nodedown, N@}} event.
+the remaining members, that were previously connected to it, receive @code{@{nodedown, N@}} event.
 @end enumerate
 """.
 
