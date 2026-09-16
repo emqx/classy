@@ -50,7 +50,7 @@ the remaining members, that were previously connected to it, receive @code{@{nod
         , enable :: boolean()
         }).
 
--record(cast_conn_change,
+-record(call_conn_change,
         { site :: classy:site()
         , node :: node()
         , conn :: boolean()
@@ -104,15 +104,7 @@ handle_call(#call_monitor{pid = Pid, enable = Enable}, _From, S = #s{subs = Subs
           {reply, ok, S}
       end
   end;
-handle_call(Call, From, S) ->
-  ?tp(warning, ?classy_unknown_event,
-      #{ call   => Call
-       , from   => From
-       , server => ?MODULE
-       }),
-  {reply, {error, unknown_call}, S}.
-
-handle_cast(#cast_conn_change{node = Node, conn = Conn}, S = #s{subs = Subs}) ->
+handle_call(#call_conn_change{node = Node, conn = Conn}, _From, S = #s{subs = Subs}) ->
   Msg = case Conn of
           false -> {nodedown, Node};
           true  -> {nodeup, Node}
@@ -127,7 +119,15 @@ handle_cast(#cast_conn_change{node = Node, conn = Conn}, S = #s{subs = Subs}) ->
         end,
         Subs)
   end,
-  {noreply, S};
+  {reply, ok, S};
+handle_call(Call, From, S) ->
+  ?tp(warning, ?classy_unknown_event,
+      #{ call   => Call
+       , from   => From
+       , server => ?MODULE
+       }),
+  {reply, {error, unknown_call}, S}.
+
 handle_cast(Cast, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ cast   => Cast
@@ -158,9 +158,9 @@ start_link() ->
 
 -spec on_peer_connection_change(classy:site(), node(), boolean()) -> ok.
 on_peer_connection_change(Site, Node, IsConn) ->
-  gen_server:cast(
+  gen_server:call(
     ?SERVER,
-    #cast_conn_change{ site = Site
+    #call_conn_change{ site = Site
                      , node = Node
                      , conn = IsConn
                      }).
