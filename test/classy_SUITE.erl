@@ -329,6 +329,117 @@ t_040_kick_in_absentia(_) ->
      , fun events_on_all_sites/1
      ]).
 
+%% Verify `classy_node_monitor' functionality
+t_042_node_monitoring(_) ->
+  S1 = ~"s1",
+  S2 = ~"s2",
+  S3 = ~"s3",
+  Sites = [S1, S2, S3],
+  Subscribe = fun(N) ->
+                  {ok, Sub} = snabbkaffe:subscribe(
+                                ?match_event(#{?snk_kind := test_node_event}),
+                                N,
+                                1000),
+                  Sub
+              end,
+  Receive = fun(Sub) ->
+                {ok, Events} = snabbkaffe:receive_events(Sub),
+                maps:groups_from_list(
+                  fun(#{local := L}) -> L end,
+                  Events)
+            end,
+  ?check_trace(
+     #{timetrap => ?timetrap},
+     begin
+       %% Prepare the system:
+       N1 = create_start_site(S1, #{}),
+       N2 = create_start_site(S2, #{}),
+       N3 = create_start_site(S3, #{}),
+       %% Create Erlang distribution link between all sites:
+       [?ON(I, net_adm:ping(J)) || I <- Sites, J <- [N1, N2, N3]],
+       %% 0. Verify subscribe and unsubscribe:
+       ?ON(S1,
+           begin
+             ?assertMatch(ok, classy_node_monitor:monitor_nodes(true)),
+             %% Verify idempotency:
+             ?assertMatch(ok, classy_node_monitor:monitor_nodes(true)),
+             ?assertMatch(ok, classy_node_monitor:monitor_nodes(false)),
+             %% Verify idempotency:
+             ?assertMatch(ok, classy_node_monitor:monitor_nodes(false)),
+             %% Verify automatic clean-up due to process termination:
+             ?assertMatch(ok, classy_node_monitor:monitor_nodes(true))
+           end),
+       %% 1. Restart S2 while it's not in the cluster with the rest of
+       %% the nodes. No notifications should be received:
+       ?tp(notice, test_stage0, #{}),
+       Sub0 = Subscribe(1),
+       stop_site(S2),
+       restart_site(S2),
+       ?assertMatch(
+          {timeout, []},
+          snabbkaffe:receive_events(Sub0)),
+       %% Start monitoring events:
+       _ = [?ON(I, spawn(fun start_peer_conn_monitor/0)) || I <- Sites],
+       timer:sleep(100),
+       %% 2. Join nodes. Both should receive up notifications:
+       ?tp(notice, test_stage1, #{}),
+       Sub1 = Subscribe(2),
+       ?ON(S2, classy:join_node(N1, join)),
+       ?assertMatch(
+          #{ N1 := [#{remote := N2, up := true}]
+           , N2 := [#{remote := N1, up := true}]
+           },
+          Receive(Sub1)),
+       %% 3. Restart S2 node. S1 should receive down and up notification:
+       ?tp(notice, test_stage2, #{}),
+       Sub2 = Subscribe(2),
+       stop_site(S2),
+       restart_site(S2),
+       ?assertMatch(
+          #{N1 := [#{remote := N2, up := false}, #{remote := N2, up := true}]},
+          Receive(Sub2)),
+       ?ON(S2, spawn(fun start_peer_conn_monitor/0)),
+       timer:sleep(100),
+       %% 4. Join S1 to S3 instead.
+       ?tp(notice, test_stage3, #{}),
+       Sub3 = Subscribe(4),
+       ?ON(S1, classy:join_node(N3, join)),
+       ?assertMatch(
+          #{ N1 := [#{remote := N2, up := false}, #{remote := N3, up := true}]
+           , N2 := [#{remote := N1, up := false}]
+           , N3 := [#{remote := N1, up := true}]
+           },
+          Receive(Sub3))
+     end,
+     [ fun classy_ct:no_unexpected_events/1
+     , fun events_on_all_sites/1
+     , {"no unexpected nodeup/nodedown events",
+        fun(Trace) ->
+            %% Total number of nodeup/nodedown events should be equal
+            %% to the sum of expected numbers of events at all stages:
+            ?assertMatch(
+               [ _, _
+               , _, _
+               , _, _, _, _
+               ],
+               ?of_kind(test_node_event, Trace))
+        end}
+     ]).
+
+
+start_peer_conn_monitor() ->
+  classy_node_monitor:monitor_nodes(true),
+  peer_conn_monitor_loop().
+
+peer_conn_monitor_loop() ->
+  receive
+    {nodeup, Node} ->
+      ?tp(test_node_event, #{remote => Node, local => node(), up => true});
+    {nodedown, Node} ->
+      ?tp(test_node_event, #{remote => Node, local => node(), up => false})
+  end,
+  peer_conn_monitor_loop().
+
 %% Verify that join and kick can be forbidden via hooks:
 t_050_pre_checks(_) ->
   S1 = <<"s1">>,

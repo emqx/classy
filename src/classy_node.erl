@@ -624,6 +624,11 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
   end.
 
 on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
+  %% Trigger some of the events related to the old cluster:
+  foreach_site_info(
+    fun(Peer, _) ->
+        update_site_info(Peer, undefined, S)
+    end),
   %% Sync with the business apps:
   to_stopped(leave, infinity),
   {ok, _} = classy_table:atomically(
@@ -663,15 +668,10 @@ join_cluster(Cluster, JoinToNode, Local, Remote, Intent, S = #s{}) ->
 %% Update node tracking information
 -spec update_sites_status(#s{}) -> #s{}.
 update_sites_status(S) ->
-  _ = ets:foldl(
-        fun(#classy_kv{k = ?tab_vsn}, Acc) ->
-            Acc;
-           (#classy_kv{k = Peer, v = SiteInfo}, Acc) ->
-            update_site_info(Peer, SiteInfo, S),
-            Acc
-        end,
-        [],
-        ?site_info),
+  foreach_site_info(
+    fun(Peer, SiteInfo) ->
+        update_site_info(Peer, SiteInfo, S)
+    end),
   ok = classy_table:flush(?site_info),
   classify(),
   S.
@@ -824,8 +824,10 @@ on_remote_restart(S) ->
 import_deltas(Updated, S0 = #s{cluster = Cluster, site = Local}) ->
   maps:foreach(
     fun(Peer, #{mem := false}) ->
-        classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, false]),
-        classy_table:dirty_delete(?site_info, Peer);
+        %% First, notify that the remote node disconnected:
+        update_site_info(Peer, undefined, S0),
+        %% Then notify that it's no longer a member:
+        classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, false]);
        (Peer, #{mem := true} = Update) ->
         case classy_table:lookup(?site_info, Peer) of
           [Info0] -> ok;
@@ -857,15 +859,40 @@ import_deltas(Updated, S0 = #s{cluster = Cluster, site = Local}) ->
     {ok, adjust_run_level(S0)}
   end.
 
-%% 1. Calculate connectivity to the node
-%% 2. Diff the current information with the past
-%% 3. Run the hooks if the site's status changes
-%% 4. Schedule writing of the updated data to the DB
+update_site_info(
+  Peer,
+  undefined,
+  #s{site = Local}
+) ->
+  %% Run connection status hooks and delete site from site info table.
+  %%
+  %% TODO: currently it doesn't run `on_membership_change' hooks. This
+  %% is done because this clause also runs in `on_leave', which can be
+  %% trigger after a remote node kicks us. In this case running
+  %% `on_membership_change' hooks is not appropriate, as the business
+  %% applications probably don't expect this callback to run when the
+  %% local node is not part of the cluster.
+  Old = classy_table:lookup(?site_info, Peer),
+  case Old of
+    [#site_info{node = Node, isconn = WasConn}] ->
+      if Peer =/= Local, WasConn ->
+          classy_hook:foreach(?on_peer_connection_status_change, [Peer, Node, false]);
+         true ->
+          ok
+      end;
+    [] ->
+      ok
+  end,
+  classy_table:dirty_delete(?site_info, Peer);
 update_site_info(
   Peer,
   #site_info{isup = IsUp, nrestarts = NR, meta = Meta} = New0,
   #s{cluster = Cluster, site = Local}
 ) ->
+  %% 1. Calculate connectivity to the node
+  %% 2. Diff the current information with the past
+  %% 3. Run the hooks if the site's status changes
+  %% 4. Schedule writing of the updated data to the DB
   Node = maps:get(Peer, classy_membership:node_of_site(Cluster, Local), undefined),
   IsConn = lists:member(Node, [node() | nodes()]),
   New1 = New0#site_info{isconn = IsConn, node = Node},
@@ -990,6 +1017,19 @@ default_site_info() ->
 
 intersection(Sets) ->
   ordsets:intersection([classy:nodes(S) || S <- Sets]).
+
+-spec foreach_site_info(fun((classy:site(), #site_info{}) -> ok)) -> ok.
+foreach_site_info(Fun) ->
+  _ = ets:foldl(
+        fun(#classy_kv{k = ?tab_vsn}, Acc) ->
+            Acc;
+           (#classy_kv{k = Peer, v = SiteInfo}, Acc) ->
+            Fun(Peer, SiteInfo),
+            Acc
+        end,
+        [],
+        ?site_info),
+  ok.
 
 -ifndef(TEST).
 %% In real live we change levels async-ly:
