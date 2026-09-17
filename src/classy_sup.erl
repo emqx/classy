@@ -278,7 +278,7 @@ init(#membership_sup{}) ->
   %% Supervisor for membership CRDTs. One child per cluster.
   Children = #{ id       => worker
               , start    => {classy_membership, start_link, []}
-              , shutdown => 5_000
+              , shutdown => 15_000
               , type     => worker
               , restart  => permanent
               },
@@ -296,7 +296,7 @@ init(#dynamic_sup{}) ->
               },
   NodeMonitor = #{ id       => node_monitor
                  , start    => {classy_node_monitor, start_link, []}
-                 , shutdown => 5_000
+                 , shutdown => 15_000
                  , restart  => permanent
                  , type     => worker
                  },
