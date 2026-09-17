@@ -826,7 +826,7 @@ import_deltas(Updated, S0 = #s{cluster = Cluster, site = Local}) ->
     fun(Peer, #{mem := false}) ->
         %% First, notify that the remote node disconnected:
         update_site_info(Peer, undefined, S0),
-        %% Then notify that it's not longer a member:
+        %% Then notify that it's no longer a member:
         classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, false]);
        (Peer, #{mem := true} = Update) ->
         case classy_table:lookup(?site_info, Peer) of
