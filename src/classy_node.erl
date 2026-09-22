@@ -821,13 +821,11 @@ on_remote_restart(S) ->
 
 -spec import_deltas(#{classy:site() => classy_membership:update()}, #s{}) ->
         {ok, #s{}} | {error, _}.
-import_deltas(Updated, S0 = #s{cluster = Cluster, site = Local}) ->
+import_deltas(Updated, S0) ->
   maps:foreach(
     fun(Peer, #{mem := false}) ->
         %% First, notify that the remote node disconnected:
-        update_site_info(Peer, undefined, S0),
-        %% Then notify that it's no longer a member:
-        classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, false]);
+        update_site_info(Peer, undefined, S0);
        (Peer, #{mem := true} = Update) ->
         case classy_table:lookup(?site_info, Peer) of
           [Info0] -> ok;
@@ -862,7 +860,7 @@ import_deltas(Updated, S0 = #s{cluster = Cluster, site = Local}) ->
 update_site_info(
   Peer,
   undefined,
-  #s{site = Local}
+  #s{cluster = Cluster, site = Local}
 ) ->
   %% Run connection status hooks and delete site from site info table.
   %%
@@ -883,6 +881,8 @@ update_site_info(
     [] ->
       ok
   end,
+  %% Then notify that it's no longer a member:
+  classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, false]),
   classy_table:dirty_delete(?site_info, Peer);
 update_site_info(
   Peer,
