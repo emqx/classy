@@ -64,6 +64,7 @@ Instead, they are abandoned until the next node restart.
         , ls_votes/0
         , ls_votes/1
         , fold_ongoing/3
+        , rm/3
         ]).
 
 %% internal exports:
@@ -106,7 +107,6 @@ Instead, they are abandoned until the next node restart.
 %%================================================================================
 %% Type declarations
 %%================================================================================
-
 
 -doc """
 Arbitrary tag associated with the operation.
@@ -292,6 +292,24 @@ create(UserOptions) ->
     {ok, _} ?= classy_vote_coordinator:new(ID, Options),
     {ok, ID}
   end.
+
+-doc """
+Forcibly remove ongoing vote from the database regardless of its current state or outcome.
+
+WARNING: Deleting vote coordinator will leave the remaining participants hanging forever.
+This API is intended as an escape hatch that can be used by human operator for disaster recovery.
+Normal code should not call this function.
+""".
+-spec rm(coordinator | participant | all, tag(), id()) -> ok | {error, _}.
+rm(all, Tag, Id) ->
+  maybe
+    ok ?= rm(participant, Tag, Id),
+    rm(coordinator, Tag, Id)
+  end;
+rm(coordinator, Tag, Id) ->
+  classy_vote_coordinator:rm(Tag, Id);
+rm(participant, Tag, Id) ->
+  classy_vote_participant:rm(Tag, Id).
 
 %%================================================================================
 %% Internal exports

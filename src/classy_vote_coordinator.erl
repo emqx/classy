@@ -11,6 +11,7 @@
 -export([ new/2
         , restore/1
         , fold_ongoing/3
+        , rm/2
         ]).
 
 %% Behavior callbacks:
@@ -95,6 +96,17 @@
 new(ID, Options = #{tag := Tag, run_level := RunLevel}) ->
   ?tp(debug, ?classy_vote_flow_start, #{id => ID, tag => Tag}),
   classy_sup:ensure_vote_coordinator(RunLevel, [true, {ID, Options}]).
+
+-doc false.
+-spec rm(classy_vote:tag(), classy_vote:id()) -> ok | {error, _}.
+rm(Tag, Id) ->
+  case gproc:where(?coordinator(Id)) of
+    Pid when is_pid(Pid) ->
+      exit(Pid, kill);
+    undefined ->
+      ok
+  end,
+  db_teardown(Tag, Id).
 
 %%================================================================================
 %% Internal exports
@@ -368,8 +380,13 @@ perform_post_commit(Outcome, #d{id = ID, tag = Tag, opts = #opts{post_vote = PV}
   perform_post_commit(Outcome, PV, D).
 
 -spec perform_post_commit(boolean(), [classy_lib:mfargs()], d()) -> {stop, normal}.
-perform_post_commit(Outcome, [], D) ->
-  ok = db_teardown(Outcome, D),
+perform_post_commit(Outcome, [], #d{tag = Tag, id = Id}) ->
+  ok = db_teardown(Tag, Id),
+  ?tp(debug, ?classy_vote_coord_flow_complete,
+      #{ id      => Id
+       , tag     => Tag
+       , outcome => Outcome
+       }),
   {stop, normal};
 perform_post_commit(Outcome, [{M, F, Args} | Rest], D) ->
   case classy_lib:safe_apply(M, F, [Outcome, D#d.id | Args]) of
@@ -518,21 +535,17 @@ db_establish(Stage, Remaining, #d{tag = Tag, id = Id, opts = Opts}) ->
   ok.
 
 %% Atomically delete information about the vote from the DB.
--spec db_teardown(boolean(), d()) -> ok.
-db_teardown(Outcome, #d{id = Id, tag = Tag}) ->
+-spec db_teardown(classy_vote:tag(), classy_vote:id()) -> ok | {error, _}.
+db_teardown(Tag, Id) ->
   StateKey = #pk_cs{id = Id},
   StaticDataKey = #pk_cd{tag = Tag, id = Id},
-  {ok, _} = classy_table:atomically(
-              ?ptab,
-              [ {d, StateKey}
-              , {d, StaticDataKey}
-              ]),
-  ?tp(debug, ?classy_vote_coord_flow_complete,
-      #{ id      => Id
-       , tag     => Tag
-       , outcome => Outcome
-       }),
-  ok.
+  Ops = [ {d, StateKey}
+        , {d, StaticDataKey}
+        ],
+  case classy_table:atomically(?ptab, Ops) of
+    {ok, _} -> ok;
+    Err     -> Err
+  end.
 
 -spec ones(pos_integer()) -> pos_integer().
 ones(N) ->

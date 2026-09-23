@@ -5,6 +5,12 @@
 -module(classy_partition).
 -moduledoc """
 This module contains various algorithms for calculating network partitions.
+
+Most functions in this module are pure and operate on @code{classy:cluster_info()} data structure
+obtained by calling @code{classy:info([Node1, Node2, ...])}.
+Different checks may require information from different nodes.
+If cluster info data structure is missing the required info (or if the node is unreachable)
+@code{@{error, insufficient_data@}} error is returned.
 """.
 
 %% API:
@@ -86,10 +92,9 @@ bidi_link(ClusterInfo, NodeA, NodeB) ->
   end.
 
 -doc """
-This greedy algorithm finds full meshes in the network.
-Each site appears in exactly one full mesh.
-
-Note: because of that property,
+This greedy algorithm finds fully connected digraphs in the network
+in such a way that each site appears in exactly one full mesh.
+Because of this property,
 this function returns ambiguous results when network partitions are overlapping.
 More specifically, it will be overly eager in detecting partitions,
 and will ignore some existing links.

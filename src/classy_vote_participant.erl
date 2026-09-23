@@ -7,7 +7,7 @@
 -behavior(gen_statem).
 
 %% API:
--export([restore/1, start_link/1, fold_ongoing/3]).
+-export([restore/1, start_link/1, fold_ongoing/3, rm/2]).
 
 %% Behavior callbacks:
 -export([callback_mode/0, init/1, terminate/3, handle_event/4]).
@@ -98,6 +98,17 @@ fold_ongoing(Fun, Acc0, TagPattern) ->
        , ['$_']
        },
   do_fold_ongoing(Fun, Acc0, ets:select(?ptab, [MS], ?fold_batch_size)).
+
+-doc false.
+-spec rm(classy_vote:tag(), classy_vote:id()) -> ok | {error, _}.
+rm(Tag, Id) ->
+  case gproc:where(?participant(Id)) of
+    Pid when is_pid(Pid) ->
+      exit(Pid, kill);
+    undefined ->
+      ok
+  end,
+  db_teardown(Tag, Id).
 
 %%================================================================================
 %% Internal exports
@@ -255,7 +266,7 @@ perform_rollback(D = #d{completed_actions = CA, prep = Prep}) ->
 
 -spec perform_actions(stage(), [classy_lib:mfargs()], d()) -> {stop, normal, d()}.
 perform_actions(_, [], D) ->
-  db_teardown(D),
+  complete_flow(D),
   {stop, normal, D};
 perform_actions(Stage, [{Mod, Fun, Args} | Rest], D0 = #d{completed_actions = CA, vote = Vote, prep = Prep}) ->
   #prepare{id = ID, tag = Tag, on_fail = OnFail} = Prep,
@@ -358,21 +369,24 @@ db_establish(Stage, Vote, CompletedActions, Prep) ->
            }}
   end.
 
--spec db_teardown(d()) -> ok | {error, _}.
-db_teardown(#d{prep = #prepare{id = ID, tag = Tag}}) ->
-  DataKey = #pk_pd{tag = Tag, id = ID},
-  StateKey = #pk_ps{id = ID},
+-spec complete_flow(d()) -> ok | {error, _}.
+complete_flow(#d{prep = #prepare{id = ID, tag = Tag}}) ->
   maybe
-    {ok, _} ?= classy_table:atomically(
-                 ?ptab,
-                 [ {d, DataKey}
-                 , {d, StateKey}
-                 ]),
+    ok ?= db_teardown(Tag, ID),
     ?tp(debug, ?classy_vote_part_flow_complete,
         #{ id => ID
          , tag => Tag
-         }),
-    ok
+         })
+  end.
+
+-spec db_teardown(classy_vote:tag(), classy_vote:id()) -> ok | {error, _}.
+db_teardown(Tag, ID) ->
+  DataKey = #pk_pd{tag = Tag, id = ID},
+  StateKey = #pk_ps{id = ID},
+  Ops = [{d, DataKey}, {d, StateKey}],
+  case classy_table:atomically(?ptab, Ops) of
+    {ok, _} -> ok;
+    Error   -> Error
   end.
 
 -spec db_update(stage(), boolean(), non_neg_integer(), #d{}) -> {ok, d()} | {error, _}.

@@ -1907,6 +1907,89 @@ t_413_fold_votes(_) ->
      , fun events_on_all_sites/1
      ]).
 
+%% Verify basic functioning of classy_vote:rm API.
+t_413_force_rm(_) ->
+  S1 = <<"s1">>,
+  Ref1 = vote1,
+  Ref2 = vote2,
+  ?check_trace(
+     #{timetrap => ?timetrap},
+     begin
+       _N1 = create_start_site(S1, #{peer => #{shutdown => halt}}),
+       ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
+       %% Make sure votes hang long enough for us to inspect them:
+       ?force_ordering(
+          #{?snk_kind := test_go},
+          #{?snk_kind := K} when K =:= classy_test_vote_commit;
+                                 K =:= classy_test_post_vote),
+       {ok, ID1} = ?ON(S1,
+                       classy_vote:create(#{ tag => Ref1
+                                           , actions => #{S1 => make_vote(true, true, Ref1, 1)}
+                                           , post_vote => make_post_vote(Ref1)
+                                           })),
+       {ok, ID2} = ?ON(S1,
+                       classy_vote:create(#{ tag => Ref2
+                                           , actions => #{S1 => make_vote(true, true, Ref2, 1)}
+                                           , post_vote => make_post_vote(Ref2)
+                                           })),
+       ct:sleep(100),
+       %% Verify that votes were created and are currently waiting:
+       ?assertMatch(
+          [ #{ id := ID1
+             , tag := Ref1
+             , role := participant
+             }
+          , #{ id := ID2
+             , tag := Ref2
+             , role := participant
+             }
+          , #{ id := ID1
+             , tag := Ref1
+             , role := coordinator
+             }
+          , #{ id := ID2
+             , tag := Ref2
+             , role := coordinator
+             }
+          ],
+          ?ON(S1, lists:sort(classy_vote:ls_votes()))),
+       %% 1. Delete participant only:
+       ?assertMatch(
+          ok,
+          ?ON(S1, classy_vote:rm(participant, Ref1, ID1))),
+       ?assertMatch(
+          [ #{ id := ID1
+             , tag := Ref1
+             , role := coordinator
+             }
+          ],
+          ?ON(S1, lists:sort(classy_vote:ls_votes(Ref1)))),
+       %% 2. Delete coordinator only:
+       ?assertMatch(
+          ok,
+          ?ON(S1, classy_vote:rm(coordinator, Ref2, ID2))),
+       ?assertMatch(
+          [ #{ id := ID2
+             , tag := Ref2
+             , role := participant
+             }
+          ],
+          ?ON(S1, lists:sort(classy_vote:ls_votes(Ref2)))),
+       %% 3. Delete all:
+       ?assertMatch(
+          ok,
+          ?ON(S1, classy_vote:rm(all, Ref1, ID1))),
+       ?assertMatch(
+          ok,
+          ?ON(S1, classy_vote:rm(all, Ref2, ID2))),
+       ?assertMatch(
+          [],
+          ?ON(S1, classy_vote:ls_votes()))
+     end,
+     [ fun classy_ct:no_unexpected_events/1
+     , fun events_on_all_sites/1
+     ]).
+
 %% This testcase validates CRUD operations with the site metadata.
 t_500_metadata_crud(_) ->
   S1 = ~"s1",
