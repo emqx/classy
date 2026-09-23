@@ -93,7 +93,7 @@ bidi_link(ClusterInfo, NodeA, NodeB) ->
 
 -doc """
 This greedy algorithm finds fully connected digraphs in the network
-in such way that each site appears in exactly one full mesh.
+in such a way that each site appears in exactly one full mesh.
 Because of this property,
 this function returns ambiguous results when network partitions are overlapping.
 More specifically, it will be overly eager in detecting partitions,
