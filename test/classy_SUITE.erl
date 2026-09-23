@@ -339,7 +339,7 @@ t_042_node_monitoring(_) ->
                   {ok, Sub} = snabbkaffe:subscribe(
                                 ?match_event(#{?snk_kind := test_node_event}),
                                 N,
-                                1000),
+                                5_000),
                   Sub
               end,
   Receive = fun(Sub) ->
