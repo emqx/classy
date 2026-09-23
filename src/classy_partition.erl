@@ -6,10 +6,10 @@
 -moduledoc """
 This module contains various algorithms for calculating network partitions.
 
-Most functions in this module are pure and operate on @code{classy:cluster_info()} datastructure
+Most functions in this module are pure and operate on @code{classy:cluster_info()} data structure
 obtained by calling @code{classy:info([Node1, Node2, ...])}.
 Different checks may require information from different nodes.
-If cluster info datastructure is missing the required info (or if the node is unreachable)
+If cluster info data structure is missing the required info (or if the node is unreachable)
 @code{@{error, insufficient_data@}} error is returned.
 """.
 
