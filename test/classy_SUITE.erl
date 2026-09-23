@@ -339,7 +339,7 @@ t_042_node_monitoring(_) ->
                   {ok, Sub} = snabbkaffe:subscribe(
                                 ?match_event(#{?snk_kind := test_node_event}),
                                 N,
-                                1000),
+                                5_000),
                   Sub
               end,
   Receive = fun(Sub) ->
@@ -526,6 +526,7 @@ t_060_at_lower_level(_) ->
 
 %% Verify handling of timeouts during run level changes.
 t_061_run_level_timeouts(_) ->
+  ct:pal(asciiart:visible($., "Error messages are expected", [])),
   S1 = <<"s1">>,
   ?check_trace(
      #{timetrap => ?timetrap},
