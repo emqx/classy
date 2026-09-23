@@ -535,7 +535,7 @@ db_establish(Stage, Remaining, #d{tag = Tag, id = Id, opts = Opts}) ->
   ok.
 
 %% Atomically delete information about the vote from the DB.
--spec db_teardown(classy_vote:tag(), classy_vote:id()) -> ok.
+-spec db_teardown(classy_vote:tag(), classy_vote:id()) -> ok | {error, _}.
 db_teardown(Tag, Id) ->
   StateKey = #pk_cs{id = Id},
   StaticDataKey = #pk_cd{tag = Tag, id = Id},
