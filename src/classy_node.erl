@@ -627,7 +627,7 @@ on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
   %% Trigger some of the events related to the old cluster:
   foreach_site_info(
     fun(Peer, _) ->
-        update_site_info(Peer, undefined, S)
+        update_site_info(false, Peer, undefined, S)
     end),
   %% Sync with the business apps:
   to_stopped(leave, infinity),
@@ -670,7 +670,7 @@ join_cluster(Cluster, JoinToNode, Local, Remote, Intent, S = #s{}) ->
 update_sites_status(S) ->
   foreach_site_info(
     fun(Peer, SiteInfo) ->
-        update_site_info(Peer, SiteInfo, S)
+        update_site_info(true, Peer, SiteInfo, S)
     end),
   ok = classy_table:flush(?site_info),
   classify(),
@@ -803,7 +803,7 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
       end;
     #{} ->
       maybe
-        {ok, S} ?= import_deltas(Deltas, S0),
+        {ok, S} ?= import_deltas(true, Deltas, S0),
         case Deltas of
           #{Local := #{mem := true, liveness := {NR, false, false}}} when NR >= MyNR ->
             on_remote_restart(S);
@@ -819,13 +819,13 @@ on_remote_restart(S) ->
   to_stopped(remote_restart, 120_000),
   {ok, adjust_run_level(S)}.
 
--spec import_deltas(#{classy:site() => classy_membership:update()}, #s{}) ->
+-spec import_deltas(boolean(), #{classy:site() => classy_membership:update()}, #s{}) ->
         {ok, #s{}} | {error, _}.
-import_deltas(Updated, S0) ->
+import_deltas(LocalIsMember, Updated, S0) ->
   maps:foreach(
     fun(Peer, #{mem := false}) ->
         %% First, notify that the remote node disconnected:
-        update_site_info(Peer, undefined, S0);
+        update_site_info(LocalIsMember, Peer, undefined, S0);
        (Peer, #{mem := true} = Update) ->
         case classy_table:lookup(?site_info, Peer) of
           [Info0] -> ok;
@@ -848,7 +848,7 @@ import_deltas(Updated, S0) ->
                  #{} ->
                    Info2
                end,
-        update_site_info(Peer, Info, S0)
+        update_site_info(LocalIsMember, Peer, Info, S0)
     end,
     Updated),
   maybe
@@ -858,18 +858,12 @@ import_deltas(Updated, S0) ->
   end.
 
 update_site_info(
+  LocalIsMember,
   Peer,
   undefined,
   #s{cluster = Cluster, site = Local}
 ) ->
-  %% Run connection status hooks and delete site from site info table.
-  %%
-  %% TODO: currently it doesn't run `on_membership_change' hooks. This
-  %% is done because this clause also runs in `on_leave', which can be
-  %% trigger after a remote node kicks us. In this case running
-  %% `on_membership_change' hooks is not appropriate, as the business
-  %% applications probably don't expect this callback to run when the
-  %% local node is not part of the cluster.
+  %% Run connection status hooks and delete site from site info table:
   Old = classy_table:lookup(?site_info, Peer),
   case Old of
     [#site_info{node = Node, isconn = WasConn}] ->
@@ -882,9 +876,11 @@ update_site_info(
       ok
   end,
   %% Then notify that it's no longer a member:
-  classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, false]),
+  LocalIsMember andalso
+    classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, false]),
   classy_table:dirty_delete(?site_info, Peer);
 update_site_info(
+  LocalIsMember,
   Peer,
   #site_info{isup = IsUp, nrestarts = NR, meta = Meta} = New0,
   #s{cluster = Cluster, site = Local}
@@ -932,17 +928,17 @@ update_site_info(
     [] -> classy_hook:foreach(?on_membership_change, [Cluster, Local, Peer, true]);
     _  -> ok
   end,
-  if Peer =/= Local, IsUp0 =/= IsUp ->
+  if LocalIsMember, Peer =/= Local, IsUp0 =/= IsUp ->
       classy_hook:foreach(?on_peer_liveness_change, [Peer, IsUp]);
      true ->
       ok
   end,
-  if Node =/= Node0 ->
+  if LocalIsMember, Node =/= Node0 ->
       classy_hook:foreach(?on_peer_node_change, [Peer, Node0, Node]);
      true ->
       ok
   end,
-  if Peer =/= Local, NR > NR0, IsUp ->
+  if LocalIsMember, Peer =/= Local, NR > NR0, IsUp ->
       classy_hook:foreach(?on_peer_restart, [Peer, NR]);
      true ->
       ok
@@ -952,7 +948,7 @@ update_site_info(
      true ->
       ok
   end,
-  if Meta0 =/= Meta ->
+  if LocalIsMember, Meta0 =/= Meta ->
       classy_hook:foreach(?on_metadata_change, [Cluster, Peer, Meta]);
      true ->
       ok
