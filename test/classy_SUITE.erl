@@ -409,14 +409,16 @@ t_042_node_monitoring(_) ->
            , N2 := [#{remote := N1, up := false}]
            , N3 := [#{remote := N1, up := true}]
            },
-          Receive(Sub3))
+          Receive(Sub3)),
+       ?tp(test_end, #{})
      end,
      [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      , {"no unexpected nodeup/nodedown events",
-        fun(Trace) ->
+        fun(Trace0) ->
             %% Total number of nodeup/nodedown events should be equal
             %% to the sum of expected numbers of events at all stages:
+            {Trace, _} = ?split_trace_at(#{?snk_kind := test_end}, Trace0),
             ?assertMatch(
                [ _, _
                , _, _
@@ -871,6 +873,7 @@ t_090_info(_) ->
        %% Prepare system:
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
+       [?block_until(#{?snk_kind := ?classy_enter_run_level, level := ready, local := I}) || I <- Sites],
        [?ON(I, classy:enrich_site_info(EnrichInfo, 0))
         || I <- Sites],
        %% Verify functions in singleton clusters:
