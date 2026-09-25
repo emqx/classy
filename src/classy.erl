@@ -15,7 +15,8 @@ See also:
 @erlmodref{ref,classy_site_metadata},
 @erlmodref{ref,classy_vote},
 @erlmodref{ref,classy_uid},
-@erlmodref{ref,classy_node_monitor}.
+@erlmodref{ref,classy_node_monitor},
+@erlmodref{ref,classy_boot}.
 """.
 
 %% API:
@@ -36,7 +37,6 @@ See also:
         , nodes/1
         , quorum/1
         , fault_tolerance/1
-        , at_lower_level/2
         , run_level/0
         , the_site/0
         , the_site_err/0
@@ -87,6 +87,7 @@ See also:
              , cluster_info/0
 
              , run_level/0
+             , predefined_run_level/0
 
              , node_set_name/0
              , node_set/0
@@ -175,7 +176,9 @@ Site is kicked by the autoclean logic.
 -doc """
 @xref{Run level}
 """.
--type run_level() :: ?stopped | ?single | ?cluster | ?quorum.
+-type run_level() :: ?classy_rl_stopped .. ?classy_rl_ready.
+
+-type predefined_run_level() :: ?classy_rl_single | ?classy_rl_cluster | ?classy_rl_quorum | ?classy_rl_ready.
 
 -doc """
 An arbitrary ID of a node set.
@@ -492,28 +495,13 @@ node_sets() ->
   persistent_term:get(?pt_node_sets, #{}).
 
 -doc """
-This function can be used to
-lower the run level of the system to the given value
-and run the specified function.
-
-This function can be used to implement migrations that
-require business applications to be stopped.
-
-Note: this function returns immediately after scheduling the action,
-but before the function is executed.
-""".
--spec at_lower_level(run_level(), fun(() -> any())) -> ok | {error, _}.
-at_lower_level(RunLevel, Fun) ->
-  classy_rl_changer:at_lower_level(RunLevel, Fun).
-
--doc """
 Get current run level.
 
 NOTE: the value is updated after all @erlfn{link,erlref,classy,on_run_level,2} hooks complete.
 """.
 -spec run_level() -> run_level().
 run_level() ->
-  classy_rl_changer:get(current).
+  classy_boot:get(current).
 
 -doc """
 Get ID of the local site.
@@ -591,7 +579,12 @@ Quorum among the running sites, not less than @code{quorum(config)}
 quorum(N) when is_integer(N), N >= 0 ->
   N div 2 + 1;
 quorum(config) ->
-  max(1, application:get_env(classy, quorum, 1));
+  case classy_lib:n_quorum() of
+    Int when is_integer(Int) ->
+      Int;
+    auto ->
+      quorum(classy_lib:n_sites())
+  end;
 quorum(running) ->
   max(
     quorum(length(nodes(connected))),
@@ -849,7 +842,7 @@ then stopping classy application using @code{application:stop(classy)} will lead
 Use @code{classy:stop_system()} function to safely lower the run level and shut down classy.
 """.
 -spec on_run_level(
-        fun((run_level(), run_level()) -> _),
+        fun((enter | leave, run_level()) -> _),
         classy_hook:conf()
        ) -> classy_hook:hook().
 on_run_level(Hook, Prio) ->

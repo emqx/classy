@@ -206,7 +206,7 @@ Common vote options.
 -type options() ::
         #{ tag       := tag()
          , actions   := #{classy:site() => actions()}
-         , run_level => classy:run_level()
+         , run_level => classy:predefined_run_level()
          , post_vote => classy_lib:mfargs()
          , strategy  => strategy()
          , on_fail   => classy_lib:mfargs()
@@ -216,7 +216,7 @@ Common vote options.
 -type cooked_options() ::
         #{ tag       := tag()
          , actions   := #{classy:site() => actions()}
-         , run_level := classy_rl_changer:run_level_int()
+         , run_level := classy:run_level()
          , post_vote := [classy_lib:mfargs()]
          , strategy  := strategy()
          , on_fail   := [classy_lib:mfargs()]
@@ -381,15 +381,15 @@ on_fail(FailInfo, Funs) ->
     Funs).
 
 -doc false.
--spec on_run_level(classy:run_level(), classy:run_level()) -> ok.
-on_run_level(FromA, ToA) ->
-  From = classy_rl_changer:to_int(FromA),
-  To = classy_rl_changer:to_int(ToA),
-  if From < To ->
-      classy_sup:ensure_vote_sup(To);
-     true ->
-      classy_sup:terminate_vote_sup(From)
-  end.
+-spec on_run_level(enter | leave, classy:run_level()) -> ok.
+on_run_level(enter, To) when To > 0,
+                             ?predefined_run_level(To) ->
+  classy_sup:ensure_vote_sup(To);
+on_run_level(leave, From) when From > 0,
+                               ?predefined_run_level(From) ->
+  classy_sup:terminate_vote_sup(From);
+on_run_level(_, _) ->
+  ok.
 
 %%================================================================================
 %% Internal functions
@@ -442,14 +442,19 @@ verify_on_fail(#{on_fail := OnFail}) ->
 verify_on_fail(#{}) ->
   {ok, []}.
 
-verify_run_level(#{run_level := RL}) when RL =:= ?single;
-                                          RL =:= ?cluster;
-                                          RL =:= ?quorum ->
-  {ok, classy_rl_changer:to_int(RL)};
+verify_run_level(#{run_level := RL}) when RL > 0,
+                                          ?predefined_run_level(RL) ->
+  %% Run votes at the very end of the run level sequence:
+  {ok, case RL of
+         ?classy_rl_ready -> ?classy_rl_ready;
+         ?classy_rl_quorum -> ?classy_rl_ready;
+         ?classy_rl_cluster -> ?classy_rl_quorum;
+         ?classy_rl_single -> ?classy_rl_cluster
+       end};
 verify_run_level(#{run_level := RL}) ->
   {error, {bad_run_level, RL}};
 verify_run_level(#{}) ->
-  {ok, classy_rl_changer:to_int(?cluster)}.
+  {ok, ?classy_rl_cluster}.
 
 verify_strategy(all) ->
   {ok, {all, classy_lib:rpc_timeout()}};

@@ -78,7 +78,7 @@ start_link(Prepare = #prepare{id = ID}) ->
     [Prepare],
     []).
 
--spec restore(classy_rl_changer:run_level_int()) -> ok.
+-spec restore(classy:run_level()) -> ok.
 restore(RunLevel) ->
   MS = { #classy_kv{k = #pk_pd{_ = '_'}, v = '$1', _ = '_'}
        , []
@@ -117,7 +117,7 @@ rm(Tag, Id) ->
 %% @private Coordinator -> Participant
 -spec pre_vote(#prepare{}) -> boolean().
 pre_vote(Prepare = #prepare{run_level = RL}) ->
-  classy_rl_changer:get_int(current) >= RL andalso
+  classy_boot:get(current) >= RL andalso
     case do_prepare(Prepare, false) of
       {ok, Bool} when is_boolean(Bool) ->
         Bool;

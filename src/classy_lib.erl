@@ -28,6 +28,7 @@ Misc. utility functions.
         , discovery_complete_sets/0
         , table_dir/0
         , n_sites/0
+        , n_quorum/0
         , time_s/0
         , adjust_time_s_skew/2
 
@@ -317,8 +318,26 @@ table_dir() ->
   application:get_env(classy, table_dir, ".").
 
 -doc "Return value of @ref{n_sites} environment variable (with default)".
+-spec n_sites() -> non_neg_integer().
 n_sites() ->
-  application:get_env(classy, n_sites, 1).
+  case application:get_env(classy, n_sites) of
+    {ok, Int} when is_integer(Int), Int >= 0 ->
+      Int;
+    _ ->
+      1
+  end.
+
+-doc "Return value of @ref{quorum} environement variable (with default).".
+-spec n_quorum() -> non_neg_integer() | auto.
+n_quorum() ->
+  case application:get_env(classy, quorum) of
+    {ok, auto} ->
+      auto;
+    {ok, Int} when is_integer(Int), Int >= 0 ->
+      Int;
+    _ ->
+      1
+  end.
 
 -doc """
 Adjust a local timestamp @code{Val} to the remote nodes's clock,

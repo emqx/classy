@@ -16,7 +16,7 @@
         , rollback      :: [classy_lib:mfargs()]
         , coordinator   :: classy:site()
         , on_fail       :: [classy_lib:mfargs()]
-        , run_level     :: classy_rl_changer:run_level_int()
+        , run_level     :: classy:run_level()
         , reserved = [] :: term()
         }).
 %%   Coordinator <- Participant
@@ -41,11 +41,5 @@
 -define(via(NAME), {via, gproc, NAME}).
 
 -define(state_timeout, state_timeout).
-
--ifndef(TEST).
--define(fold_batch_size, 100).
--else.
--define(fold_batch_size, 1).
--endif.
 
 -endif.

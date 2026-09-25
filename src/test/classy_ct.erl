@@ -81,19 +81,31 @@ on_node_init() ->
   classy:on_node_classify(fun ?MODULE:on_node_classify/1, 0),
   classy:on_run_level(fun ?MODULE:on_run_level/2, 0).
 
-on_run_level(Prev, Next) ->
-  %% Verify that run level observed via `classy:run_level' API doesn't
+
+on_run_level(Action, Level) when (Action =:= enter orelse Action =:= leave),
+                                 ?valid_run_level(Level) ->
+  %% Valid run level hook data
+  if ?predefined_run_level(Level); Level =:= 0 ->
+      ?tp(test_rl, #{Action => classy_boot:classify(Level)});
+     true ->
+      ok
+  end,
+  %% Verify that run level observed by `classy:run_level' API doesn't
   %% change until all hooks are complete:
-  ?defer_assert(?assertEqual(Prev, classy:run_level(), {Prev, Next})),
-  %% Verify the validity of the transition:
-  ?defer_assert(case {Prev, Next} of
-                  {stopped, single} -> ok;
-                  {single, cluster} -> ok;
-                  {cluster, quorum} -> ok;
-                  {quorum, cluster} -> ok;
-                  {cluster, single} -> ok;
-                  {single, stopped} -> ok
-                end).
+  case Action of
+    enter ->
+      ?defer_assert(?assertEqual(
+                       max(0, Level - 1),
+                       classy:run_level(),
+                       "Current level when entering"));
+    leave ->
+      ?defer_assert(?assertEqual(
+                       Level,
+                       classy:run_level(),
+                       "Current level when leaving"))
+  end;
+on_run_level(Action, Level) ->
+  ?defer_assert(error({invalid_run_level, Action, Level})).
 
 on_metadata_change(Cluster, Site, Meta) ->
   ?tp(notice, test_update_meta, Meta#{cluster => Cluster, site => Site}).
@@ -113,6 +125,6 @@ no_unexpected_events(Trace) ->
         , classy_table_on_update_callback_failure
         , ?classy_bad_data
         , ?classy_run_level_change_error
-        , ?classy_rl_changer_worker_crash
+        , ?classy_boot_worker_crash
         ],
         Trace)).

@@ -722,20 +722,34 @@ ensure_the_id(Key, OnCreateHook, HookArgs, Default) ->
       }
   end.
 
+%% NOTE: must be called after `classify':
 -spec adjust_run_level(#s{}) -> #s{}.
 adjust_run_level(S) ->
-  %% NOTE: must be called after `classify':
+  %% Manage cluster barrier:
+  ClusterBarrier = cluster,
   NKnown = length(intersection(classy_lib:to_cluster_sets())),
+  case NKnown >= classy_lib:n_sites() of
+    true  ->
+      classy_boot:rm_barrier(ClusterBarrier);
+    false ->
+      classy_boot:set_barrier(
+        ClusterBarrier,
+        ?classy_rl_cluster,
+        [async, {hint, <<"Waiting for the sufficient number of known peers">>}])
+  end,
+  %% Manage quorum barrier:
+  QuorumBarrier = quorum,
   NConnected = length(intersection(classy_lib:quorum_sets())),
-  RunLevel = case NKnown >= classy_lib:n_sites() of
-               true  ->
-                 case NConnected >= classy:quorum(config) of
-                   true  -> ?quorum;
-                   false -> ?cluster
-                 end;
-               false -> ?single
-             end,
-  set_run_level(RunLevel),
+  case NConnected >= classy:quorum(config) of
+    true  ->
+      classy_boot:rm_barrier(QuorumBarrier);
+    false ->
+      classy_boot:set_barrier(
+        QuorumBarrier,
+        ?classy_rl_quorum,
+        [async, {hint, <<"Waiting for the sufficient number of connected peers">>}])
+  end,
+  classy_boot:ensure_started(),
   S.
 
 %% Start membership processes for all known former clusters, in order
@@ -750,9 +764,9 @@ start_old_clusters(Site) ->
     end,
     classy_membership:known_clusters(Site)).
 
-to_stopped(Reason, Timeout) ->
+to_stopped(Reason, _Timeout) -> % FIXME
   prep_stop(Reason),
-  classy_rl_changer:set_sync(?stopped, Timeout).
+  classy_boot:stop_system().
 
 -spec the_cluster() -> {ok, classy:cluster_id()} | undefined.
 the_cluster() ->
@@ -1026,14 +1040,3 @@ foreach_site_info(Fun) ->
         [],
         ?site_info),
   ok.
-
--ifndef(TEST).
-%% In real live we change levels async-ly:
-set_run_level(Level) ->
-  classy_rl_changer:set(Level).
--else.
-%% In the tests we want to sequence the events.
-set_run_level(Level) ->
-  ok = classy_rl_changer:set_sync(Level, 5_000),
-  ok.
--endif.

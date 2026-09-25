@@ -107,17 +107,17 @@ on_peer_connection_change(Site, Node, false) ->
   gen_server:cast(?SERVER, #cast_check_site{site = Site, node = Node}).
 
 -doc false.
--spec on_run_level(classy:run_level(), classy:run_level()) -> ok.
-on_run_level(stopped, single) ->
+-spec on_run_level(enter | leave, classy:run_level()) -> ok.
+on_run_level(enter, ?classy_rl_single) ->
   classy_node:increase_n_restarts(),
   set_my_liveness_info(true);
-on_run_level(single, stopped) ->
+on_run_level(leave, ?classy_rl_single) ->
   set_my_liveness_info(false);
-on_run_level(cluster, quorum) ->
+on_run_level(enter, ?classy_rl_quorum) ->
   classy_sup:ensure_liveness_server(),
   gen_server:cast(?SERVER, #cast_quorum{}),
   ok;
-on_run_level(quorum, cluster) ->
+on_run_level(leave, ?classy_rl_quorum) ->
   ok = classy_sup:terminate_liveness_server();
 on_run_level(_, _) ->
   ok.

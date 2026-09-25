@@ -5,5 +5,6 @@
 -define(CLASSY_HRL, true).
 
 -record(classy_kv, {k, v}).
+-include("classy_rl.hrl").
 
 -endif.
