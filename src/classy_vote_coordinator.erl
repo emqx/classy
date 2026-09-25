@@ -78,7 +78,7 @@
         , post_vote  :: [classy_lib:mfargs()]
         , on_fail    :: [classy_lib:mfargs()]
         , start_time :: integer()
-        , run_level  :: classy_rl_changer:run_level_int()
+        , run_level  :: classy:run_level()
         , reserved = []
         }).
 -record(d,
@@ -135,7 +135,7 @@ receive_vote(#c_vote{id = ID} = Vote) ->
     Vote).
 
 %% Restore votes that were ongoing before the node shut down
--spec restore(classy_rl_changer:run_level_int()) -> ok.
+-spec restore(classy:run_level()) -> ok.
 restore(RunLevel) ->
   MS = { #classy_kv{k = #pk_cd{tag = '$1', id = '$2'}, v = '$3'}
        , []

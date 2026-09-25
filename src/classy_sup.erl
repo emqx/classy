@@ -36,6 +36,8 @@
 
 -export_type([]).
 
+-include_lib("classy_rl.hrl").
+
 %%================================================================================
 %% Type declarations
 %%================================================================================
@@ -64,6 +66,9 @@
 %%   Quorum:
 -define(VOTE_COORDINATOR_SUP_3, classy_vote_coordinator_sup3).
 -define(VOTE_PARTICIPANT_SUP_3, classy_vote_participant_sup3).
+%%   Ready:
+-define(VOTE_COORDINATOR_SUP_4, classy_vote_coordinator_sup4).
+-define(VOTE_PARTICIPANT_SUP_4, classy_vote_participant_sup4).
 
 %%================================================================================
 %% API functions
@@ -115,11 +120,11 @@ ensure_membership(Cluster, Site) ->
       Err
   end.
 
--spec ensure_vote_coordinator(classy_rl_changer:run_level_int(), list()) -> {ok, pid()} | {error, _}.
+-spec ensure_vote_coordinator(classy:run_level(), list()) -> {ok, pid()} | {error, _}.
 ensure_vote_coordinator(RunLevel, Args) ->
   simple_one_for_one_ensure_child(vote_coord_sup(RunLevel), Args).
 
--spec ensure_vote_participant(classy_rl_changer:run_level_int(), list()) -> {ok, pid()} | {error, _}.
+-spec ensure_vote_participant(classy:run_level(), list()) -> {ok, pid()} | {error, _}.
 ensure_vote_participant(RunLevel, Args) ->
   simple_one_for_one_ensure_child(vote_participant_sup(RunLevel), Args).
 
@@ -139,7 +144,7 @@ ensure_liveness_server() ->
 terminate_liveness_server() ->
   terminate_child(?DYNAMIC_SUP, liveness).
 
--spec ensure_vote_sup(classy_rl_changer:run_level_int()) -> ok.
+-spec ensure_vote_sup(classy:run_level()) -> ok.
 ensure_vote_sup(RunLevel) ->
   ensure_child(
     ?DYNAMIC_SUP,
@@ -159,7 +164,7 @@ ensure_vote_sup(RunLevel) ->
      }),
   ok.
 
--spec terminate_vote_sup(classy_rl_changer:run_level_int()) -> ok.
+-spec terminate_vote_sup(classy:run_level()) -> ok.
 terminate_vote_sup(RunLevel) ->
   terminate_child(?DYNAMIC_SUP, vote_coord_sup(RunLevel)),
   terminate_child(?DYNAMIC_SUP, vote_participant_sup(RunLevel)).
@@ -193,7 +198,7 @@ start_link_membership_sup() ->
 start_link_vote_sup() ->
   supervisor:start_link({local, ?DYNAMIC_SUP}, ?MODULE, #dynamic_sup{}).
 
--spec start_link_vote_coordinator_sup(classy_rl_changer:run_level_int()) -> supervisor:startlink_ret().
+-spec start_link_vote_coordinator_sup(classy:predefined_run_level()) -> supervisor:startlink_ret().
 start_link_vote_coordinator_sup(RunLevel) ->
   Name = vote_coord_sup(RunLevel),
   maybe
@@ -202,7 +207,7 @@ start_link_vote_coordinator_sup(RunLevel) ->
     {ok, Pid}
   end.
 
--spec start_link_vote_participant_sup(classy_rl_changer:run_level_int()) -> supervisor:startlink_ret().
+-spec start_link_vote_participant_sup(classy:predefined_run_level()) -> supervisor:startlink_ret().
 start_link_vote_participant_sup(RunLevel) ->
   Name = vote_participant_sup(RunLevel),
   maybe
@@ -381,18 +386,22 @@ terminate_child(Sup, Id) ->
       Other
   end.
 
--spec vote_coord_sup(classy_rl_changer:run_level_int()) -> atom().
-vote_coord_sup(1) ->
+-spec vote_coord_sup(classy:predefined_run_level()) -> atom().
+vote_coord_sup(?classy_rl_single) ->
   ?VOTE_COORDINATOR_SUP_1;
-vote_coord_sup(2) ->
+vote_coord_sup(?classy_rl_cluster) ->
   ?VOTE_COORDINATOR_SUP_2;
-vote_coord_sup(3) ->
-  ?VOTE_COORDINATOR_SUP_3.
+vote_coord_sup(?classy_rl_quorum) ->
+  ?VOTE_COORDINATOR_SUP_3;
+vote_coord_sup(?classy_rl_ready) ->
+  ?VOTE_COORDINATOR_SUP_4.
 
--spec vote_participant_sup(classy_rl_changer:run_level_int()) -> atom().
-vote_participant_sup(1) ->
+-spec vote_participant_sup(classy:predefined_run_level()) -> atom().
+vote_participant_sup(?classy_rl_single) ->
   ?VOTE_PARTICIPANT_SUP_1;
-vote_participant_sup(2) ->
+vote_participant_sup(?classy_rl_cluster) ->
   ?VOTE_PARTICIPANT_SUP_2;
-vote_participant_sup(3) ->
-  ?VOTE_PARTICIPANT_SUP_3.
+vote_participant_sup(?classy_rl_quorum) ->
+  ?VOTE_PARTICIPANT_SUP_3;
+vote_participant_sup(?classy_rl_ready) ->
+  ?VOTE_PARTICIPANT_SUP_4.

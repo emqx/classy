@@ -50,12 +50,6 @@
 -define(fallback_get_peer_nodes, fallback_get_peer_nodes).
 -define(extra_sync_targets, extra_sync_targets).
 
-%% Run levels:
--define(stopped, stopped).
--define(single, single).
--define(cluster, cluster).
--define(quorum, quorum).
-
 %% Trace events
 -define(classy_unknown_event, classy_unknown_event).
 -define(classy_abnormal_exit, classy_abnormal_exit).
@@ -65,6 +59,8 @@
 -define(classy_hook_failure, classy_hook_failure).
 -define(classy_kicked_remotely, classy_kicked_remotely).
 -define(classy_rl_changer_worker_crash, classy_rl_changer_worker_crash).
+-define(classy_enter_run_level, classy_enter_run_level).
+-define(classy_leave_run_level, classy_leave_run_level).
 
 -define(classy_vote_pre_results, classy_vote_pre_results).
 -define(classy_vote_coord_stage, classy_vote_coord_stage).
@@ -103,5 +99,18 @@
 -define(pt_site_sets, classy_pt_site_sets).
 
 -define(tab_vsn, '__schema_vsn').
+
+-ifndef(TEST).
+-define(fold_batch_size, 100).
+-else.
+-define(fold_batch_size, 1).
+-endif.
+
+-define(valid_run_level(LEVEL), (LEVEL >= ?classy_rl_stopped andalso LEVEL =< ?classy_rl_ready)).
+-define(predefined_run_level(LEVEL), (LEVEL =:= ?classy_rl_stopped orelse
+                                      LEVEL =:= ?classy_rl_single orelse
+                                      LEVEL =:= ?classy_rl_cluster orelse
+                                      LEVEL =:= ?classy_rl_quorum orelse
+                                      LEVEL =:= ?classy_rl_ready)).
 
 -endif.

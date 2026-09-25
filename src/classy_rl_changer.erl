@@ -7,15 +7,13 @@
 -behavior(gen_server).
 
 %% API:
--export([to_int/1, to_atom/1, at_lower_level/2, get/1, get_int/1]).
+-export([at_lower_level/2, get/1, set_barrier/4, rm_barrier/1, classify/1]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([start_link/0, set/1, set_sync/2, enrich_site_info/1]).
-
--export_type([run_level_int/0]).
+-export([start_link/0, ensure_started/0, stop_system/0, enrich_site_info/1, do_at_lower_level/3]).
 
 -include("classy_internal.hrl").
 
@@ -30,63 +28,97 @@
 
 -define(SERVER, ?MODULE).
 
--define(valid_level(LEVEL), ((LEVEL) =:= ?stopped orelse (LEVEL) =:= ?single orelse (LEVEL) =:= ?cluster orelse (LEVEL) =:= ?quorum)).
+-record(call_start, {}).
+-record(call_stop, {}).
 
--type run_level_int() :: 0..3.
-
--record(call_set, {level :: classy:run_level()}).
-
--record(call_at_run_level,
-        { level :: classy:run_level()
-        , function :: fun(() -> _)
+-record(call_set_barrier,
+        { id :: barrier_id()
+        , level :: classy:run_level()
+        , monitor :: pid() | undefined
+        , description :: binary() | undefined
         }).
 
--record(call,
-        { at :: run_level_int()
-        , f :: fun(() -> _)
+-record(call_rm_barrier,
+        { id :: barrier_id()
         }).
 
 -record(running,
-        { next :: run_level_int()
+        { next :: classy:run_level()
         , pid :: pid()
         }).
 
 -define(pterm, classy_run_level_ctr).
 
+-type barrier_id() :: classy:run_level_barrier_id().
+
+-define(tab, classy_rl_barriers).
+
 %%================================================================================
 %% API functions
 %%================================================================================
 
-%% NOTE: these integers are persistently stored by vote. If this
-%% mapping ever changes, votes should be migrated.
--spec to_int(classy:run_level()) -> run_level_int().
-to_int(?stopped) -> 0;
-to_int(?single)  -> 1;
-to_int(?cluster) -> 2;
-to_int(?quorum)  -> 3.
-
--spec to_atom(run_level_int()) -> classy:run_level().
-to_atom(0) -> ?stopped;
-to_atom(1) -> ?single;
-to_atom(2) -> ?cluster;
-to_atom(3) -> ?quorum.
-
+%% Note: this function only guarantees that the run level will be _at most_ RunLevel.
 -doc false.
--spec at_lower_level(classy:run_level(), fun(() -> any())) -> ok | {error, _}.
+-spec at_lower_level(classy:run_level(), fun(() -> Ret)) -> Ret.
 at_lower_level(RunLevel, Fun) ->
+  Result = proc_lib:start(
+             ?MODULE, do_at_lower_level, [self(), RunLevel, Fun]),
+  case Result of
+    {ok, Ret} ->
+      Ret;
+    {error, EC, Err, Stack} ->
+      erlang:raise(EC, Err, Stack)
+  end.
+
+-doc """
+This function does the following:
+
+@enumerate
+@item Lowers the run level to the specified one (or less),
+if the current run level was higher.
+@item Return @code{ok} to the caller.
+@item Prevents classy from advancing the run level until
+@code{unlock_level} is called with the same lock ID.
+@end enumerate
+
+If @code{Monitor} flag is set to true,
+the barrier is automatically removed when the process that called this function terminates.
+
+If the barrier with the same ID already existed,
+its level is updated.
+
+WARNING: Business logic is responsible for removing the barriers.
+""".
+-spec set_barrier(boolean(), barrier_id(), classy:run_level() | classy:run_level(), binary() | undefined) ->
+        ok | {error, deleted | badarg}.
+set_barrier(Monitor, LockId, RunLevel, MaybeDescription) ->
+  case ?valid_run_level(RunLevel) of
+    true  -> ok;
+    false -> error({badarg, level, RunLevel})
+  end,
+  MaybePid = case Monitor of
+               true  -> self();
+               false -> undefined
+             end,
   gen_server:call(
     ?SERVER,
-    #call_at_run_level{level = RunLevel, function = Fun},
+    #call_set_barrier{ id = LockId
+                     , monitor = MaybePid
+                     , level = RunLevel
+                     , description = MaybeDescription
+                     },
+    infinity).
+
+-spec rm_barrier(barrier_id()) -> ok.
+rm_barrier(LockId) ->
+  gen_server:call(
+    ?SERVER,
+    #call_rm_barrier{id = LockId},
     infinity).
 
 -doc false.
 -spec get(current | set) -> classy:run_level().
 get(K) ->
-  to_atom(get_int(K)).
-
--doc false.
--spec get_int(current | set) -> run_level_int().
-get_int(K) ->
   try
     Cntr = persistent_term:get(?pterm),
     Idx = case K of
@@ -103,6 +135,29 @@ get_int(K) ->
 enrich_site_info(Info) ->
   Info#{rl => get(current)}.
 
+-doc false.
+-spec do_at_lower_level(pid(), classy:run_level(), fun(() -> any())) -> ok.
+do_at_lower_level(Parent, Level, Fun) ->
+  LockId = self(),
+  %% FIXME: description should be present
+  try
+    ok = set_barrier(true, LockId, Level, undefined),
+    Ret = Fun(),
+    proc_lib:init_ack(Parent, {ok, Ret})
+  catch
+    EC:Err:Stack ->
+      proc_lib:init_ack(Parent, {error, EC, Err, Stack})
+  end.
+
+-spec classify(classy:run_level()) -> stopped | single | cluster | quorum | ready.
+classify(N) when is_integer(N), N >= 0 ->
+  if N < ?classy_rl_single  -> stopped;
+     N < ?classy_rl_cluster -> single;
+     N < ?classy_rl_quorum  -> cluster;
+     N < ?classy_rl_ready   -> quorum;
+     true                   -> ready
+  end.
+
 %%================================================================================
 %% Internal exports
 %%================================================================================
@@ -111,36 +166,33 @@ enrich_site_info(Info) ->
 start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [self()], []).
 
--spec set(classy:run_level()) -> ok.
-set(RunLevel) ->
-  gen_server:call(
-    ?SERVER,
-    #call_set{level = RunLevel},
-    infinity).
+-spec stop_system() -> ok.
+stop_system() ->
+  gen_server:call(?SERVER, #call_stop{}, infinity).
 
-%% Warning: this function only works for _lowering_ the layer.
--spec set_sync(classy:run_level(), timeout()) -> ok | {error, timeout}.
-set_sync(RunLevel, Timeout) ->
-  set(RunLevel),
-  Parent = erlang:alias([reply]),
-  Ref = make_ref(),
-  at_lower_level(RunLevel, fun() -> Parent ! Ref end),
-  receive
-    Ref -> ok
-  after Timeout ->
-      unalias(Parent),
-      {error, timeout}
-  end.
+-spec ensure_started() -> ok.
+ensure_started() ->
+  gen_server:call(?SERVER, #call_start{}, infinity).
 
 %%================================================================================
 %% behavior callbacks
 %%================================================================================
 
+-record(barrier,
+        { k :: {classy:run_level(), barrier_id()}
+        , mref :: reference() | atom()
+        , description :: binary() | atom()
+        , reply_to :: gen_server:from() | atom()
+        }).
+
 -record(s,
-        { set = 0 :: run_level_int()
-        , current = 0 :: run_level_int()
+        { started = false :: boolean()
+          %% Maximum run level that the system naturally gravitates to.
+        , max = 0
+          %% Run leavel that has been currently reached:
+        , current = 0 :: classy:run_level() | -1
+          %% Information about currently running transition hooks
         , running :: #running{} | undefined
-        , actions = [] :: [#call{}]
         , counter :: atomics:atomics_ref()
         }).
 
@@ -148,25 +200,22 @@ init(_) ->
   process_flag(trap_exit, true),
   Ctr = atomics:new(2, []),
   persistent_term:put(?pterm, Ctr),
+  ets:new(?tab, [protected, ordered_set, named_table, {keypos, #barrier.k}]),
   {ok, #s{counter = Ctr}}.
 
-handle_call(#call_set{level = Level}, _From, S0) ->
-  if ?valid_level(Level) ->
-      S = maybe_transition(S0#s{set = to_int(Level)}),
-      {reply, ok, S};
-     true ->
-      {reply, {error, badarg}, S0}
-  end;
-handle_call(#call_at_run_level{level = Level, function = Fun}, _From, #s{actions = AA} = S0) ->
-  if ?valid_level(Level), is_function(Fun, 0) ->
-      New = #call{ at = to_int(Level)
-                 , f  = Fun
-                 },
-      S = maybe_transition(S0#s{actions = [New | AA]}),
-      {reply, ok, S};
-     true ->
-      {reply, {error, badarg}, S0}
-  end;
+handle_call(#call_start{}, _From, #s{started = Started} = S0) ->
+  S = case Started of
+        true  -> S0;
+        false -> maybe_transition(S0#s{started = true, max = ?classy_rl_ready})
+      end,
+  {reply, ok, S};
+handle_call(#call_stop{}, _From, S) ->
+  {reply, ok, do_stop_system(S)};
+handle_call(#call_set_barrier{} = Call, From, S) ->
+  {noreply, handle_set_barrier(Call, From, S)};
+handle_call(#call_rm_barrier{id = Id}, _From, S0) ->
+  S = rm_barrier(by_id, Id, S0),
+  {reply, ok, S};
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => call
@@ -185,19 +234,12 @@ handle_cast(Cast, S) ->
   {noreply, S}.
 
 handle_info({'EXIT', Pid, Reason}, #s{running = #running{pid = Pid, next = Next}} = S0) ->
-  S = S0#s{ running = undefined
-          , current = Next
-          },
-  case Reason of
-    normal ->
-      ok;
-    _ ->
-      ?tp(error, ?classy_rl_changer_worker_crash, #{pid => Pid, reason => Reason, to => Next}),
-      %% There is a chance that the worker crashed before updating the
-      %% counter. Do it by ourselves:
-      update_counter(?ctr_c, Next)
-  end,
-  {noreply, maybe_transition(S)};
+  %% Finished running run level transition hooks:
+  S = enter_level(Next, Reason, S0),
+  {noreply, S};
+handle_info({'DOWN', MRef, process, _, _}, S0) ->
+   S = rm_barrier(by_mref, MRef, S0),
+  {noreply, S};
 handle_info(Info, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => info
@@ -212,34 +254,157 @@ terminate(Reason, S) ->
         #{ server => ?MODULE
          , reason => Reason
          }),
-  terminate_loop(maybe_transition(S#s{set = 0, actions = []})),
+  do_stop_system(S),
   persistent_term:erase(?pterm).
 
 %%================================================================================
 %% Internal functions
 %%================================================================================
 
-terminate_loop(#s{current = 0, running = undefined}) ->
+-spec enter_level(classy:run_level(), term(), #s{}) -> #s{}.
+enter_level(Level, Reason, S0) ->
+  S = S0#s{ running = undefined
+          , current = Level
+          },
+  finish_set_barriers(Level),
+  case Reason of
+    normal ->
+      ok;
+    _ ->
+      ?tp(error, ?classy_rl_changer_worker_crash, #{reason => Reason, to => Level}),
+      %% There is a chance that the worker crashed before updating the
+      %% counter. Do it by ourselves:
+      update_counter(?ctr_c, Level)
+  end,
+  maybe_transition(S).
+
+finish_set_barriers(Level) ->
+  MS = { #barrier{k = {Level, {'$1'}}, reply_to = '$2', _ = '_'}
+       , [{'=/=', '$2', undefined}]
+       , [{{'$1', '$2'}}]
+       },
+  finish_set_barriers(Level, ets:select(?tab, [MS], ?fold_batch_size)).
+
+finish_set_barriers(_Level, '$end_of_table') ->
   ok;
-terminate_loop(#s{running = #running{next = Next, pid = Pid}} = S0) ->
+finish_set_barriers(Level, {Batch, Cont}) ->
+  _ = [begin
+         gen_server:reply(From, ok),
+         ets:update_element(?tab, {Level, Id}, {#barrier.reply_to, undefined})
+       end
+       || {Id, From} <- Batch],
+  finish_set_barriers(Level, ets:select(Cont)).
+
+-spec maybe_reply_setter(#barrier{}, term()) -> ok.
+maybe_reply_setter(#barrier{reply_to = undefined}, _) ->
+  ok;
+maybe_reply_setter(#barrier{k = K, reply_to = ReplyTo}, Reply) ->
+  gen_server:reply(ReplyTo, Reply),
+  ets:update_element(?tab, K, {#barrier.reply_to, undefined}),
+  ok.
+
+-spec maybe_demonitor(#barrier{}) -> ok.
+maybe_demonitor(#barrier{mref = Ref}) when is_reference(Ref) ->
+  demonitor(Ref),
+  ok;
+maybe_demonitor(_) ->
+  ok.
+
+-spec handle_set_barrier(#call_set_barrier{}, gen_server:from(), #s{}) -> #s{}.
+handle_set_barrier(Call, From, S) ->
+  #call_set_barrier{ id          = Id
+                   , level       = Level
+                   , monitor     = MaybeMonitor
+                   , description = MaybeDescription
+                   } = Call,
+  maybe
+    true ?= Id =/= undefined,
+    true ?= ?valid_run_level(Level),
+    true ?= is_binary(MaybeDescription) orelse MaybeDescription =:= undefined,
+    true ?= is_pid(MaybeMonitor) orelse MaybeMonitor =:= undefined,
+    do_rm_barrier(by_id, Id),
+    maybe_transition(do_add_barrier(From, Id, Level, MaybeMonitor, MaybeDescription, S))
+  else
+    _ ->
+      gen_server:reply(From, {error, badarg}),
+      S
+  end.
+
+-spec do_add_barrier(gen_server:from(), barrier_id(), classy:run_level(), pid() | undefined, binary() | undefined, #s{}) -> #s{}.
+do_add_barrier(From, Id, Level, MaybeMonitor, MaybeDescription, #s{current = Current} = S) ->
+  %% Monitor the process that sets the barrior if needed:
+  MaybeMRef = case is_pid(MaybeMonitor) of
+                true ->
+                  monitor(process, MaybeMonitor);
+                false ->
+                  undefined
+              end,
+  ReplyTo = if Current =< Level ->
+                %% Already at a low enough level. Unblock the caller immediately:
+                gen_server:reply(From, ok),
+                undefined;
+               true ->
+                From
+            end,
+  Barrier = #barrier{ k           = {Level, {Id}}
+                    , mref        = MaybeMRef
+                    , description = MaybeDescription
+                    , reply_to    = ReplyTo
+                    },
+  ets:insert(?tab, Barrier),
+  S.
+
+-spec rm_barrier(by_mref, reference(), #s{}) -> #s{};
+                (by_id, barrier_id(), #s{}) -> #s{}.
+rm_barrier(How, Key, S) ->
+  do_rm_barrier(How, Key),
+  maybe_transition(S).
+
+-spec do_rm_barrier(by_mref, reference()) -> ok;
+                   (by_id, barrier_id()) -> ok.
+do_rm_barrier(How, Del) ->
+  %% TODO: this is inefficient, but we don't expect to have many
+  %% barriers.
+  ets:foldl(
+    fun(#barrier{k = {_Level, {Id}} = Key, mref = MRef} = I, Acc) ->
+        Keep = if How =:= by_mref, MRef =:= Del ->
+                   maybe_reply_setter(I, {error, deleted}),
+                   false;
+                  How =:= by_id, Id =:= Del ->
+                   maybe_reply_setter(I, {error, deleted}),
+                   maybe_demonitor(I),
+                   false;
+                  true ->
+                   true
+               end,
+        Keep orelse ets:delete(?tab, Key),
+        Acc
+    end,
+    ok,
+    ?tab).
+
+do_stop_system(#s{started = Started} = S0) ->
+  S1 = S0#s{max = 0, started = false},
+  S = case Started of
+        true  -> terminate_loop(maybe_transition(S1));
+        false -> S1
+      end,
+  ets:match_delete(?tab, '_'),
+  S.
+
+terminate_loop(#s{current = 0, running = undefined} = S) ->
+  S;
+terminate_loop(#s{running = #running{next = Next, pid = Pid}} = S) ->
   receive
-    {'EXIT', Pid, _} ->
-      S = S0#s{ running = undefined
-              , current = Next
-              },
-      terminate_loop(maybe_transition(S))
+    {'EXIT', Pid, Reason} ->
+      terminate_loop(enter_level(Next, Reason, S))
   end.
 
 -spec maybe_transition(#s{}) -> #s{}.
 maybe_transition(#s{running = #running{}} = S) ->
-  update_counter(?ctr_s, S#s.set),
   S;
-maybe_transition(#s{actions = AA0, set = Set, current = From, running = undefined} = S0) ->
-  update_counter(?ctr_s, Set),
-  To = lists:foldl(
-         fun(#call{at = At}, Acc) -> min(At, Acc) end,
-         Set,
-         AA0),
+maybe_transition(#s{running = undefined, current = From} = S) ->
+  To = target(S),
   Next = if To > From ->
              From + 1;
             To < From ->
@@ -247,54 +412,41 @@ maybe_transition(#s{actions = AA0, set = Set, current = From, running = undefine
             To =:= From ->
              From
          end,
-  {ExecNow, AA} =
-    lists:partition(
-      fun(#call{at = L}) -> L >= Next end,
-      AA0),
-  case ExecNow of
-    [] when Next =:= From ->
-      %% Nothing to do:
-      S0;
-    _ ->
-      %% Start transition:
-      Running = run_hooks(From, Next, ExecNow),
-      S0#s{running = Running, actions = AA}
+  if Next =:= From ->
+      S;
+     true ->
+      Running = run_hooks(From, Next, []),
+      S#s{running = Running}
   end.
 
-run_hooks(From, Next, Actions) ->
-  FromA = to_atom(From),
-  NextA = to_atom(Next),
+run_hooks(From, Next, _Actions) ->
   Worker = spawn_link(
              fun() ->
                  %% Run hooks:
                  if Next > From ->
-                     classy_hook:foreach(?on_change_run_level, [FromA, NextA]);
+                     classy_hook:foreach(?on_change_run_level, [enter, Next]);
                     From > Next ->
-                     classy_hook:foreach_rev(?on_change_run_level, [FromA, NextA]);
+                     classy_hook:foreach_rev(?on_change_run_level, [leave, From]);
                     true ->
                      ok
                  end,
                  %% All hooks RL changing have completed. Update the current run level:
-                 update_counter(?ctr_c, Next),
-                 %% Run actions scheduled by `at_lower_level':
-                 lists:foreach(
-                   fun(#call{f = Fun}) ->
-                       try
-                         Fun()
-                       catch
-                         EC:Err:Stack ->
-                           ?tp(critical, ?classy_run_level_change_error,
-                               #{ call => Fun
-                                , EC => Err
-                                , stack => Stack
-                                })
-                       end
-                   end,
-                   Actions)
+                 update_counter(?ctr_c, Next)
              end),
   #running{ next = Next
           , pid = Worker
           }.
+
+target(#s{max = Max}) ->
+  Target = calc_target(Max),
+  update_counter(?ctr_s, Target),
+  Target.
+
+calc_target(Max) ->
+  case ets:first(?tab) of
+    '$end_of_table' -> Max;
+    {Level, _}      -> min(Max, Level)
+  end.
 
 update_counter(Idx, Val) ->
   atomics:put(persistent_term:get(?pterm), Idx, Val).

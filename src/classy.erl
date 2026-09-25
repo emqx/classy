@@ -87,6 +87,8 @@ See also:
              , cluster_info/0
 
              , run_level/0
+             , predefined_run_level/0
+             , run_level_barrier_id/0
 
              , node_set_name/0
              , node_set/0
@@ -175,7 +177,16 @@ Site is kicked by the autoclean logic.
 -doc """
 @xref{Run level}
 """.
--type run_level() :: ?stopped | ?single | ?cluster | ?quorum.
+-type run_level() :: ?classy_rl_stopped .. ?classy_rl_ready.
+
+-type predefined_run_level() :: ?classy_rl_single | ?classy_rl_cluster | ?classy_rl_quorum | ?classy_rl_ready.
+
+-doc """
+Identifier of the run level barrier.
+It should be legible,
+since it can be logged and seen by the operator.
+""".
+-type run_level_barrier_id() :: term().
 
 -doc """
 An arbitrary ID of a node set.
@@ -849,7 +860,7 @@ then stopping classy application using @code{application:stop(classy)} will lead
 Use @code{classy:stop_system()} function to safely lower the run level and shut down classy.
 """.
 -spec on_run_level(
-        fun((run_level(), run_level()) -> _),
+        fun((enter | leave, run_level()) -> _),
         classy_hook:conf()
        ) -> classy_hook:hook().
 on_run_level(Hook, Prio) ->
