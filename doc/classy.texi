@@ -333,9 +333,13 @@ The document was typeset with
       List of node set names used to additionally restrict when the node is considered having a quorum.
       Sets from the lists are combined using set intersection operation.
 
-    @defen{quorum, @code{pos_integer()}, @code{$@{n_sites@}}}
+    @defen{quorum, @code{pos_integer() | auto}, 1}
 
-      Minimum number of known peers necessary to advance the run level from @code{cluster} to @code{quorum}.
+      Minimum number of known peers necessary to make quorum decisions and to advance the run level from @code{cluster} to @code{quorum}.
+
+      If set to @code{auto},
+      then the value is calculated as majority @code{@ref{n_sites}}.
+
 
   @section Two-phase commit
     @defen{vote_retry_interval, @code{pos_integer()}, 5000}

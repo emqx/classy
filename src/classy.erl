@@ -579,7 +579,12 @@ Quorum among the running sites, not less than @code{quorum(config)}
 quorum(N) when is_integer(N), N >= 0 ->
   N div 2 + 1;
 quorum(config) ->
-  max(1, application:get_env(classy, quorum, 1));
+  case classy_lib:n_quorum() of
+    Int when is_integer(Int) ->
+      Int;
+    auto ->
+      quorum(classy_lib:n_sites())
+  end;
 quorum(running) ->
   max(
     quorum(length(nodes(connected))),

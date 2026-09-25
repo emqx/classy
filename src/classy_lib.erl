@@ -320,12 +320,24 @@ table_dir() ->
 -doc "Return value of @ref{n_sites} environment variable (with default)".
 -spec n_sites() -> non_neg_integer().
 n_sites() ->
-  max(0, application:get_env(classy, n_sites, 1)).
+  case application:get_env(classy, n_sites) of
+    {ok, Int} when is_integer(Int), Int >= 0 ->
+      Int;
+    _ ->
+      1
+  end.
 
--doc "Return value of @ref{quorum} environement variable (with default = n_sites).".
--spec n_quorum() -> non_neg_integer().
+-doc "Return value of @ref{quorum} environement variable (with default).".
+-spec n_quorum() -> non_neg_integer() | auto.
 n_quorum() ->
-  max(0, application:get_env(classy, quorum, n_sites())).
+  case application:get_env(classy, quorum) of
+    {ok, auto} ->
+      auto;
+    {ok, Int} when is_integer(Int), Int >= 0 ->
+      Int;
+    _ ->
+      1
+  end.
 
 -doc """
 Adjust a local timestamp @code{Val} to the remote nodes's clock,

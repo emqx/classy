@@ -740,7 +740,7 @@ adjust_run_level(S) ->
   %% Manage quorum barrier:
   QuorumBarrier = quorum,
   NConnected = length(intersection(classy_lib:quorum_sets())),
-  case NConnected >= classy_lib:n_quorum() of
+  case NConnected >= classy:quorum(config) of
     true  ->
       classy_boot:rm_barrier(QuorumBarrier);
     false ->
