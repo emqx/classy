@@ -106,7 +106,7 @@
 -define(fold_batch_size, 1).
 -endif.
 
--define(valid_run_level(LEVEL), (LEVEL >= ?classy_rl_stopped andalso LEVEL =< ?classy_rl_ready)).
+-define(valid_run_level(LEVEL), (is_integer(LEVEL) andalso LEVEL >= ?classy_rl_stopped andalso LEVEL =< ?classy_rl_ready)).
 -define(predefined_run_level(LEVEL), (LEVEL =:= ?classy_rl_stopped orelse
                                       LEVEL =:= ?classy_rl_single orelse
                                       LEVEL =:= ?classy_rl_cluster orelse
