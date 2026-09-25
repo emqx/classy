@@ -66,7 +66,7 @@ The developer can use @erlfn{ref,erlref,classy_boot,diagnostics,1} function to t
 -behavior(gen_server).
 
 %% API:
--export([at_lower_level/2, get/1, set_barrier/5, rm_barrier/1, classify/1, diagnostics/1]).
+-export([at_lower_level/2, get/1, set_barrier/3, rm_barrier/1, classify/1, diagnostics/1]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -95,7 +95,7 @@ The developer can use @erlfn{ref,erlref,classy_boot,diagnostics,1} function to t
         , sync :: boolean()
         , level :: classy:run_level()
         , monitor :: pid() | undefined
-        , description :: binary() | undefined
+        , description :: term() | undefined
         }).
 
 -record(call_rm_barrier,
@@ -150,37 +150,49 @@ This function does the following:
 if the current run level was higher.
 @item Return @code{ok} to the caller.
 @item Prevents classy from advancing the run level until
-@code{unlock_level} is called with the same lock ID.
+@erlfn{ref,erlref,classy_boot,rm_barrier,1} is called with the same lock ID.
 @end enumerate
 
-If @code{Monitor} flag is set to true,
+If @code{async} option is present,
+the function returns immediately without waiting for the level to be adjusted.
+
+If @code{monitor} option is present,
 the barrier is automatically removed when the process that called this function terminates.
 
-If the barrier with the same ID already existed,
-its level is updated.
+@code{@{hint, Hint@}} option allows to attach an arbitrary term
+serving as a hint to the operator explaining what the boot is waiting for.
 
-WARNING: Business logic is responsible for removing the barriers.
+If the barrier with the same ID already existed,
+its level and description are updated.
+
+WARNING: With exception of @code{monitor} option,
+business logic is entirely responsible for removing the barriers.
 """.
--spec set_barrier(boolean(), boolean(), barrier_id(), classy:run_level() | classy:run_level(), binary() | undefined) ->
-        ok | {error, deleted | badarg}.
-set_barrier(Sync, Monitor, LockId, RunLevel, MaybeDescription) when is_boolean(Sync),
-                                                                    is_boolean(Monitor),
-                                                                    ?valid_run_level(RunLevel) ->
-  MaybePid = case Monitor of
+-spec set_barrier(barrier_id(), classy:run_level(), [Option]) -> ok | {error, deleted | badarg}
+          when Option :: monitor | async | {hint, term()}.
+set_barrier(LockId, RunLevel, Options) when ?valid_run_level(RunLevel) ->
+  MaybePid = case lists:member(monitor, Options) of
                true  -> self();
                false -> undefined
              end,
+  Sync = not lists:member(async, Options),
+  case lists:keyfind(hint, 1, Options) of
+    {hint, Hint} ->
+      ok;
+    false ->
+      Hint = undefined
+  end,
   gen_server:call(
     ?SERVER,
     #call_set_barrier{ id = LockId
                      , sync = Sync
                      , monitor = MaybePid
                      , level = RunLevel
-                     , description = MaybeDescription
+                     , description = Hint
                      },
     infinity);
-set_barrier(_, _, _, _, _) ->
-  error(badarg).
+set_barrier(_, _, _) ->
+  {error, badarg}.
 
 -spec rm_barrier(barrier_id()) -> ok.
 rm_barrier(LockId) ->
@@ -214,7 +226,7 @@ do_at_lower_level(Parent, Level, Fun) ->
   LockId = self(),
   %% FIXME: description should be present
   try
-    ok = set_barrier(true, true, LockId, Level, undefined),
+    ok = set_barrier(LockId, Level, [monitor]),
     Ret = Fun(),
     proc_lib:init_ack(Parent, {ok, Ret})
   catch
@@ -407,7 +419,6 @@ handle_set_barrier(Call, From, S) ->
   maybe
     true ?= Id =/= undefined,
     true ?= ?valid_run_level(Level),
-    true ?= is_binary(MaybeDescription) orelse MaybeDescription =:= undefined,
     true ?= is_pid(MaybeMonitor) orelse MaybeMonitor =:= undefined,
     do_rm_barrier(by_id, Id),
     maybe_transition(do_add_barrier(Sync, From, Id, Level, MaybeMonitor, MaybeDescription, S))
@@ -477,6 +488,12 @@ do_stop_system(#s{started = Started} = S0) ->
         true  -> terminate_loop(maybe_transition(S1));
         false -> S1
       end,
+  ets:foldl(fun(I, ok) ->
+                maybe_reply_setter(I, {error, deleted}),
+                maybe_demonitor(I)
+            end,
+            ok,
+            ?tab),
   ets:match_delete(?tab, '_'),
   S.
 

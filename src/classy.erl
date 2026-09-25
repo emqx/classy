@@ -15,7 +15,8 @@ See also:
 @erlmodref{ref,classy_site_metadata},
 @erlmodref{ref,classy_vote},
 @erlmodref{ref,classy_uid},
-@erlmodref{ref,classy_node_monitor}.
+@erlmodref{ref,classy_node_monitor},
+@erlmodref{ref,classy_boot}.
 """.
 
 %% API:
