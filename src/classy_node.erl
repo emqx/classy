@@ -730,9 +730,10 @@ adjust_run_level(S) ->
   NKnown = length(intersection(classy_lib:to_cluster_sets())),
   case NKnown >= classy_lib:n_sites() of
     true  ->
-      classy_rl_changer:rm_barrier(ClusterBarrier);
+      classy_boot:rm_barrier(ClusterBarrier);
     false ->
-      classy_rl_changer:set_barrier(
+      classy_boot:set_barrier(
+        false,
         false,
         ClusterBarrier,
         ?classy_rl_cluster,
@@ -741,17 +742,18 @@ adjust_run_level(S) ->
   %% Manage quorum barrier:
   QuorumBarrier = quorum,
   NConnected = length(intersection(classy_lib:quorum_sets())),
-  case NConnected >= classy_lib:n_sites() of
+  case NConnected >= classy_lib:n_quorum() of
     true  ->
-      classy_rl_changer:rm_barrier(QuorumBarrier);
+      classy_boot:rm_barrier(QuorumBarrier);
     false ->
-      classy_rl_changer:set_barrier(
+      classy_boot:set_barrier(
+        false,
         false,
         QuorumBarrier,
         ?classy_rl_quorum,
         <<"Waiting for the sufficient number of connected peers">>)
   end,
-  classy_rl_changer:ensure_started(),
+  classy_boot:ensure_started(),
   S.
 
 %% Start membership processes for all known former clusters, in order
@@ -768,7 +770,7 @@ start_old_clusters(Site) ->
 
 to_stopped(Reason, _Timeout) -> % FIXME
   prep_stop(Reason),
-  classy_rl_changer:stop_system().
+  classy_boot:stop_system().
 
 -spec the_cluster() -> {ok, classy:cluster_id()} | undefined.
 the_cluster() ->

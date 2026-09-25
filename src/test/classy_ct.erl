@@ -86,7 +86,7 @@ on_run_level(Action, Level) when (Action =:= enter orelse Action =:= leave),
                                  ?valid_run_level(Level) ->
   %% Valid run level hook data
   if ?predefined_run_level(Level); Level =:= 0 ->
-      ?tp(test_rl, #{Action => classy_rl_changer:classify(Level)});
+      ?tp(test_rl, #{Action => classy_boot:classify(Level)});
      true ->
       ok
   end,
@@ -125,6 +125,6 @@ no_unexpected_events(Trace) ->
         , classy_table_on_update_callback_failure
         , ?classy_bad_data
         , ?classy_run_level_change_error
-        , ?classy_rl_changer_worker_crash
+        , ?classy_boot_worker_crash
         ],
         Trace)).

@@ -507,7 +507,7 @@ t_060_at_lower_level(_) ->
        ?assertMatch(
           hello,
           ?ON(S1,
-                classy:at_lower_level(
+                classy_boot:at_lower_level(
                   ?classy_rl_single,
                   fun() ->
                       ?defer_assert(?assertEqual(?classy_rl_single, classy:run_level())),
@@ -522,7 +522,7 @@ t_060_at_lower_level(_) ->
        ?assertException(
           error, _,
           ?ON(S1,
-                classy:at_lower_level(
+                classy_boot:at_lower_level(
                   ?classy_rl_quorum,
                   fun() ->
                       error(mymy)
@@ -569,7 +569,7 @@ t_061_run_level_timeouts(_) ->
                fun(Action, Level) ->
                    ?predefined_run_level(Level) andalso
                      begin
-                       ?tp(rl_change, #{Action => classy_rl_changer:classify(Level)}),
+                       ?tp(rl_change, #{Action => classy_boot:classify(Level)}),
                        timer:sleep(100)
                      end
                end,
@@ -586,7 +586,7 @@ t_061_run_level_timeouts(_) ->
        %% Set barrier (cleaned automatically via monitor):
        ?ON(S1,
            begin
-             ok = classy_rl_changer:set_barrier(true, Lock, ?classy_rl_stopped, undefined),
+             ok = classy_boot:set_barrier(true, true, Lock, ?classy_rl_stopped, undefined),
              ?assertMatch(?classy_rl_stopped, classy:run_level())
            end),
        %% Verify events:
@@ -611,7 +611,7 @@ t_061_run_level_timeouts(_) ->
        {ok, Sub3} = snabbkaffe:subscribe(Pred, 100, 3000, 0),
        ?ON(S1,
            begin
-             ok = classy_rl_changer:set_barrier(true, Lock, ?classy_rl_cluster, undefined),
+             ok = classy_boot:set_barrier(true, true, Lock, ?classy_rl_cluster, undefined),
              ?assertMatch(?classy_rl_cluster, classy:run_level())
            end),
        {_, Events3} = snabbkaffe:receive_events(Sub3),

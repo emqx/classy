@@ -36,7 +36,6 @@ See also:
         , nodes/1
         , quorum/1
         , fault_tolerance/1
-        , at_lower_level/2
         , run_level/0
         , the_site/0
         , the_site_err/0
@@ -88,7 +87,6 @@ See also:
 
              , run_level/0
              , predefined_run_level/0
-             , run_level_barrier_id/0
 
              , node_set_name/0
              , node_set/0
@@ -180,13 +178,6 @@ Site is kicked by the autoclean logic.
 -type run_level() :: ?classy_rl_stopped .. ?classy_rl_ready.
 
 -type predefined_run_level() :: ?classy_rl_single | ?classy_rl_cluster | ?classy_rl_quorum | ?classy_rl_ready.
-
--doc """
-Identifier of the run level barrier.
-It should be legible,
-since it can be logged and seen by the operator.
-""".
--type run_level_barrier_id() :: term().
 
 -doc """
 An arbitrary ID of a node set.
@@ -503,28 +494,13 @@ node_sets() ->
   persistent_term:get(?pt_node_sets, #{}).
 
 -doc """
-This function can be used to
-lower the run level of the system to the given value
-and run the specified function.
-
-This function can be used to implement migrations that
-require business applications to be stopped.
-
-Note: this function returns immediately after scheduling the action,
-but before the function is executed.
-""".
--spec at_lower_level(run_level(), fun(() -> any())) -> ok | {error, _}.
-at_lower_level(RunLevel, Fun) ->
-  classy_rl_changer:at_lower_level(RunLevel, Fun).
-
--doc """
 Get current run level.
 
 NOTE: the value is updated after all @erlfn{link,erlref,classy,on_run_level,2} hooks complete.
 """.
 -spec run_level() -> run_level().
 run_level() ->
-  classy_rl_changer:get(current).
+  classy_boot:get(current).
 
 -doc """
 Get ID of the local site.

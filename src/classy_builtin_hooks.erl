@@ -97,12 +97,12 @@ log_membership_change(Cluster, Local, Remote, Member) ->
 
 log_run_level(enter, To) when ?predefined_run_level(To) ->
   ?tp(info, ?classy_enter_run_level,
-      #{ level => classy_rl_changer:classify(To)
+      #{ level => classy_boot:classify(To)
        , local => classy_node:maybe_site()
        });
 log_run_level(leave, To) when ?predefined_run_level(To) ->
   ?tp(info, ?classy_leave_run_level,
-      #{ level => classy_rl_changer:classify(To)
+      #{ level => classy_boot:classify(To)
        , local => classy_node:maybe_site()
        });
 log_run_level(_, _) ->

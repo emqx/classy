@@ -235,7 +235,7 @@ init(#top{}) ->
   %% Top business logic supervisor which launches the system. When it
   %% launches, classy starts executing hooks.
   RLChanger = #{ id       => run_level_mgr
-               , start    => {classy_rl_changer, start_link, []}
+               , start    => {classy_boot, start_link, []}
                , shutdown => infinity
                , restart  => permanent
                , type     => worker

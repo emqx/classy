@@ -117,7 +117,7 @@ rm(Tag, Id) ->
 %% @private Coordinator -> Participant
 -spec pre_vote(#prepare{}) -> boolean().
 pre_vote(Prepare = #prepare{run_level = RL}) ->
-  classy_rl_changer:get(current) >= RL andalso
+  classy_boot:get(current) >= RL andalso
     case do_prepare(Prepare, false) of
       {ok, Bool} when is_boolean(Bool) ->
         Bool;

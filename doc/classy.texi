@@ -333,7 +333,7 @@ The document was typeset with
       List of node set names used to additionally restrict when the node is considered having a quorum.
       Sets from the lists are combined using set intersection operation.
 
-    @defen{quorum, @code{pos_integer()}, 1}
+    @defen{quorum, @code{pos_integer()}, @code{$@{n_sites@}}}
 
       Minimum number of known peers necessary to advance the run level from @code{cluster} to @code{quorum}.
 
