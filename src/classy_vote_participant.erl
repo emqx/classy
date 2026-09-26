@@ -117,7 +117,12 @@ rm(Tag, Id) ->
 %% @private Coordinator -> Participant
 -spec pre_vote(#prepare{}) -> boolean().
 pre_vote(Prepare = #prepare{run_level = RL}) ->
-  classy_boot:get(current) >= RL andalso
+  %% NOTE: this method of getting minimal safe run level is prone to
+  %% race conditions. However, keep in mind that this is merely a
+  %% pre-check. At worst, we enter a heavier persistent path and vote
+  %% NO there.
+  NodeRunLevel = min(classy_boot:run_level(current), classy_boot:run_level(next)),
+  NodeRunLevel >= RL andalso
     case do_prepare(Prepare, false) of
       {ok, Bool} when is_boolean(Bool) ->
         Bool;

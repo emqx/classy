@@ -9,7 +9,8 @@ It is based on a concept of @emph{run levels} and @emph{barriers}.
 @emph{Run level} is an integer in range @code{?classy_rl_stopped .. ?classy_rl_ready}
 (where @code{classy_rl_stopped = 0} and @code{classy_rl_ready = 300}),
 corresponding to the ``readiness state'' of the system.
-So, there are 300 run levels in total.
+Run levels 0..9 are reserved for classy,
+which leaves business applications with 290 usable run levels.
 
 Unless the whole BEAM VM or classy application is abruptly stopped,
 the run level is stepped in an increasing or decreasing arithmetic progression.
@@ -37,23 +38,22 @@ which can be problematic when the system has to stop or restart before fully rea
 The run levels are split into several ranges:
 
 @enumerate
-@item @b{stopped} @code{0..9}.
-These are reserved for classy's own initialization logic.
-Business applications must not use them.
+  @item @b{stopped} @code{0..9}.
+  These are reserved for classy's own initialization logic.
+  Business applications must not use them.
 
-@item @b{single} @code{?classy_rl_single..99} where @code{?classy_rl_single = 10}.
-These run levels correspond to initialization of a singleton node.
+  @item @b{single} @code{?classy_rl_single..99} where @code{?classy_rl_single = 10}.
+  These run levels correspond to initialization of a singleton node.
 
-@item @b{cluster} @code{?classy_rl_cluster..199} where @code{?classy_rl_cluster = 100}.
-Boot sequence progresses to this stage when the number of known peers (up or down) is @code{>= @ref{n_sites}}.
+  @item @b{cluster} @code{?classy_rl_cluster..199} where @code{?classy_rl_cluster = 100}.
+  Boot sequence progresses to this stage when the number of known peers (up or down) is @code{>= @ref{n_sites}}.
 
-@item @b{quorum} @code{?classy_rl_quorum..299} where @code{?classy_rl_quorum = 200}.
-Boot sequence progresses to this stage when the number of known @emph{connected} peers is @code{>= @ref{quorum}}.
+  @item @b{quorum} @code{?classy_rl_quorum..299} where @code{?classy_rl_quorum = 200}.
+  Boot sequence progresses to this stage when the number of known @emph{connected} peers is @code{>= @ref{quorum}}.
 
-@item @b{ready} @code{?classy_rl_ready = 300}.
-Final run level.
-The system is fully operational.
-
+  @item @b{ready} @code{?classy_rl_ready = 300}.
+  Final run level.
+  The system is fully operational.
 @end enumerate
 
 WARNING: classy @b{doesn't check} that the boot dependency graph is acyclic and that mapping to run levels is valid,
@@ -66,7 +66,7 @@ The developer can use @erlfn{ref,erlref,classy_boot,diagnostics,1} function to t
 -behavior(gen_server).
 
 %% API:
--export([at_lower_level/2, get/1, set_barrier/3, rm_barrier/1, classify/1, diagnostics/1]).
+-export([at_lower_level/2, run_level/1, set_barrier/3, rm_barrier/1, classify/1, diagnostics/1]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -76,14 +76,13 @@ The developer can use @erlfn{ref,erlref,classy_boot,diagnostics,1} function to t
 
 -include("classy_internal.hrl").
 
--compile({no_auto_import, [get/1]}).
-
 %%================================================================================
 %% Type declarations
 %%================================================================================
 
 -define(ctr_c, 1).
--define(ctr_s, 2).
+-define(ctr_n, 2).
+-define(ctr_t, 3).
 
 -define(SERVER, ?MODULE).
 
@@ -201,13 +200,32 @@ rm_barrier(LockId) ->
     #call_rm_barrier{id = LockId},
     infinity).
 
--doc false.
--spec get(current | set) -> classy:run_level().
-get(K) ->
+-doc """
+Get run level.
+
+@itemize
+@item @code{target} Target run level in accordance with all barriers.
+It the system keeps running and new barriers are not set,
+the system will eventually reach it.
+
+@item @code{current} Current run level.
+If the system is in the middle of transition
+and @erlfn{ref,erlref,classy,on_run_level,2} hooks are running,
+then this value is equal to the previous run level.
+
+@item @code{next} Next run level.
+If system is stable and no transition hooks are running,
+its value is equal to the current one.
+
+@end itemize
+""".
+-spec run_level(current | next | target) -> classy:run_level().
+run_level(K) ->
   try
     Cntr = persistent_term:get(?pterm),
     Idx = case K of
-            set     -> ?ctr_s;
+            target  -> ?ctr_t;
+            next    -> ?ctr_n;
             current -> ?ctr_c
           end,
     atomics:get(Cntr, Idx)
@@ -281,9 +299,9 @@ ensure_started() ->
 -record(s,
         { started = false :: boolean()
           %% Maximum run level that the system naturally gravitates to.
-        , max = 0
+        , max = 0 :: classy:run_level()
           %% Run leavel that has been currently reached:
-        , current = 0 :: classy:run_level() | -1
+        , current = 0 :: classy:run_level()
           %% Information about currently running transition hooks
         , running :: #running{} | undefined
         , counter :: atomics:atomics_ref()
@@ -292,7 +310,7 @@ ensure_started() ->
 -doc false.
 init(_) ->
   process_flag(trap_exit, true),
-  Ctr = atomics:new(2, []),
+  Ctr = atomics:new(3, []),
   persistent_term:put(?pterm, Ctr),
   ets:new(?tab, [protected, ordered_set, named_table, {keypos, #barrier.k}]),
   {ok, #s{counter = Ctr}}.
@@ -364,16 +382,10 @@ enter_level(Level, Reason, S0) ->
   S = S0#s{ running = undefined
           , current = Level
           },
+  update_counter(?ctr_c, Level),
   finish_set_barriers(Level),
-  case Reason of
-    normal ->
-      ok;
-    _ ->
-      ?tp(error, ?classy_boot_worker_crash, #{reason => Reason, to => Level}),
-      %% There is a chance that the worker crashed before updating the
-      %% counter. Do it by ourselves:
-      update_counter(?ctr_c, Level)
-  end,
+  Reason =:= normal orelse
+    ?tp(error, ?classy_boot_worker_crash, #{reason => Reason, to => Level}),
   maybe_transition(S).
 
 finish_set_barriers(Level) ->
@@ -517,14 +529,15 @@ maybe_transition(#s{running = undefined, current = From} = S) ->
             To =:= From ->
              From
          end,
+  update_counter(?ctr_n, Next),
   if Next =:= From ->
       S;
      true ->
-      Running = run_hooks(From, Next, []),
+      Running = run_hooks(From, Next),
       S#s{running = Running}
   end.
 
-run_hooks(From, Next, _Actions) ->
+run_hooks(From, Next) ->
   Worker = spawn_link(
              fun() ->
                  %% Run hooks:
@@ -534,9 +547,7 @@ run_hooks(From, Next, _Actions) ->
                      classy_hook:foreach_rev(?on_change_run_level, [leave, From]);
                     true ->
                      ok
-                 end,
-                 %% All hooks RL changing have completed. Update the current run level:
-                 update_counter(?ctr_c, Next)
+                 end
              end),
   #running{ next = Next
           , pid = Worker
@@ -544,14 +555,15 @@ run_hooks(From, Next, _Actions) ->
 
 target(#s{max = Max}) ->
   Target = calc_target(Max),
-  update_counter(?ctr_s, Target),
+  update_counter(?ctr_t, Target),
   Target.
 
 calc_target(Max) ->
-  case ets:first(?tab) of
-    '$end_of_table' -> Max;
-    {Level, _}      -> min(Max, Level)
-  end.
+  max(0,
+      case ets:first(?tab) of
+        '$end_of_table' -> Max;
+        {Level, _}      -> min(Max, Level)
+      end).
 
 update_counter(Idx, Val) ->
   atomics:put(persistent_term:get(?pterm), Idx, Val).

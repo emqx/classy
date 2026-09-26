@@ -90,19 +90,28 @@ on_run_level(Action, Level) when (Action =:= enter orelse Action =:= leave),
      true ->
       ok
   end,
-  %% Verify that run level observed by `classy:run_level' API doesn't
-  %% change until all hooks are complete:
+  %% Verify run levels observed by `classy:run_level' API. `current'
+  %% level shouldn't change until all hooks are complete, while the
+  %% `next' should be updated:
   case Action of
     enter ->
       ?defer_assert(?assertEqual(
                        max(0, Level - 1),
                        classy:run_level(),
-                       "Current level when entering"));
+                       "Current level when entering")),
+      ?defer_assert(?assertEqual(
+                       max(0, Level),
+                       classy_boot:run_level(next),
+                       "Next level when entering"));
     leave ->
       ?defer_assert(?assertEqual(
                        Level,
                        classy:run_level(),
-                       "Current level when leaving"))
+                       "Current level when leaving")),
+      ?defer_assert(?assertEqual(
+                       max(0, Level - 1),
+                       classy_boot:run_level(next),
+                       "Next level when leaving"))
   end;
 on_run_level(Action, Level) ->
   ?defer_assert(error({invalid_run_level, Action, Level})).

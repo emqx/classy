@@ -501,7 +501,7 @@ NOTE: the value is updated after all @erlfn{link,erlref,classy,on_run_level,2} h
 """.
 -spec run_level() -> run_level().
 run_level() ->
-  classy_boot:get(current).
+  classy_boot:run_level(current).
 
 -doc """
 Get ID of the local site.
