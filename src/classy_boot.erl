@@ -74,6 +74,8 @@ The developer can use @erlfn{ref,erlref,classy_boot,diagnostics,1} function to t
 %% internal exports:
 -export([start_link/0, ensure_started/0, stop_system/0, enrich_site_info/1, do_at_lower_level/3]).
 
+-export_type([barrier_id/0, description/0]).
+
 -include("classy_internal.hrl").
 
 %%================================================================================
@@ -116,6 +118,11 @@ since it can be logged and seen by the operator.
 """.
 -type barrier_id() :: term().
 
+-doc """
+Human-friendly description of the barrier that helps the operator to understand what blocks the boot sequence.
+""".
+-type description() :: binary() | undefined.
+
 -define(tab, classy_rl_barriers).
 
 %%================================================================================
@@ -156,7 +163,7 @@ If @code{async} option is present,
 the function returns immediately without waiting for the level to be adjusted.
 
 If @code{monitor} option is present,
-the barrier is automatically removed when the process that called this function terminates.
+the barrier is automatically removed when the process that set it terminates.
 
 @code{@{hint, Hint@}} option allows to attach an arbitrary term
 serving as a hint to the operator explaining what the boot is waiting for.
@@ -164,11 +171,11 @@ serving as a hint to the operator explaining what the boot is waiting for.
 If the barrier with the same ID already existed,
 its level and description are updated.
 
-WARNING: With exception of @code{monitor} option,
+WARNING: with an exception of @code{monitor} option,
 business logic is entirely responsible for removing the barriers.
 """.
 -spec set_barrier(barrier_id(), classy:run_level(), [Option]) -> ok | {error, deleted | badarg}
-          when Option :: monitor | async | {hint, term()}.
+          when Option :: monitor | async | {hint, description()}.
 set_barrier(LockId, RunLevel, Options) when ?valid_run_level(RunLevel) ->
   MaybePid = case lists:member(monitor, Options) of
                true  -> self();
@@ -245,7 +252,7 @@ do_at_lower_level(Parent, Level, Fun) ->
   %% FIXME: description should be present
   try
     ok = set_barrier(LockId, Level, [monitor]),
-    Ret = Fun(),
+    Ret = Fun,(jg),
     proc_lib:init_ack(Parent, {ok, Ret})
   catch
     EC:Err:Stack ->
@@ -263,8 +270,7 @@ classify(N) when is_integer(N), N >= 0 ->
 
 -spec diagnostics(_) -> ok.
 diagnostics(_) ->
-  %% FIXME
-  ok.
+  logger:notice("", [blockers()]).
 
 %%================================================================================
 %% Internal exports
@@ -567,3 +573,7 @@ calc_target(Max) ->
 
 update_counter(Idx, Val) ->
   atomics:put(persistent_term:get(?pterm), Idx, Val).
+
+-spec blockers() -> {classy:run_level(), [{barrier_id(), term()}]}.
+blockers() ->
+  {0, []}.

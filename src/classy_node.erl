@@ -734,8 +734,8 @@ adjust_run_level(S) ->
     false ->
       classy_boot:set_barrier(
         ClusterBarrier,
-        ?classy_rl_cluster,
-        [async, {hint, <<"Waiting for the sufficient number of known peers">>}])
+        ?classy_rl_cluster - 1,
+        [async, {hint, <<"Waiting for a sufficient number of known peers">>}])
   end,
   %% Manage quorum barrier:
   QuorumBarrier = quorum,
@@ -746,8 +746,8 @@ adjust_run_level(S) ->
     false ->
       classy_boot:set_barrier(
         QuorumBarrier,
-        ?classy_rl_quorum,
-        [async, {hint, <<"Waiting for the sufficient number of connected peers">>}])
+        ?classy_rl_quorum - 1,
+        [async, {hint, <<"Waiting for a sufficient number of connected peers">>}])
   end,
   classy_boot:ensure_started(),
   S.
