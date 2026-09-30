@@ -82,6 +82,8 @@ The developer can use @erlfn{ref,erlref,classy_boot,diagnostics,1} function to t
 %% Type declarations
 %%================================================================================
 
+-define(barrier_key(LEVEL, ID), {LEVEL, {ID}}).
+
 -define(ctr_c, 1).
 -define(ctr_n, 2).
 -define(ctr_t, 3).
@@ -425,20 +427,16 @@ enter_level(Level, Reason, S0) ->
   maybe_transition(S).
 
 finish_set_barriers(Level) ->
-  MS = { #barrier{k = {Level, {'$1'}}, reply_to = '$2', _ = '_'}
-       , [{'=/=', '$2', undefined}]
-       , [{{'$1', '$2'}}]
+  MS = { #barrier{k = ?barrier_key(Level, '_'), reply_to = '$1', _ = '_'}
+       , [{'=/=', '$1', undefined}]
+       , ['$_']
        },
   finish_set_barriers(Level, ets:select(?tab, [MS], ?fold_batch_size)).
 
 finish_set_barriers(_Level, '$end_of_table') ->
   ok;
 finish_set_barriers(Level, {Batch, Cont}) ->
-  _ = [begin
-         gen_server:reply(From, ok),
-         ets:update_element(?tab, {Level, Id}, {#barrier.reply_to, undefined})
-       end
-       || {Id, From} <- Batch],
+  _ = [maybe_reply_setter(I, ok) || I <- Batch],
   finish_set_barriers(Level, ets:select(Cont)).
 
 -spec maybe_reply_setter(#barrier{}, term()) -> ok.
@@ -507,7 +505,7 @@ do_add_barrier(Sync, From, Id, Level, MaybeMonitor, MaybeDescription, #s{current
                true ->
                 From
             end,
-  Barrier = #barrier{ k           = {Level, {Id}}
+  Barrier = #barrier{ k           = ?barrier_key(Level, Id)
                     , mref        = MaybeMRef
                     , description = MaybeDescription
                     , reply_to    = ReplyTo
@@ -527,7 +525,7 @@ do_rm_barrier(How, Del) ->
   %% TODO: this is inefficient, but we don't expect to have many
   %% barriers.
   ets:foldl(
-    fun(#barrier{k = {_Level, {Id}} = Key, mref = MRef} = I, Acc) ->
+    fun(#barrier{k = ?barrier_key(_Level, Id) = Key, mref = MRef} = I, Acc) ->
         Keep = if How =:= by_mref, MRef =:= Del ->
                    maybe_reply_setter(I, {error, deleted}),
                    false;
@@ -622,7 +620,7 @@ update_counter(Idx, Val) ->
 %% List barriers at the lowest `NLevels' run levels.
 -spec blockers(pos_integer()) -> [{classy:run_level(), barrier_id(), term()}].
 blockers(NLevels) ->
-  MS = { #barrier{ k           = {'$1', {'$2'}}
+  MS = { #barrier{ k           = ?barrier_key('$1', '$2')
                  , description = '$3'
                  , _           = '_'
                  }
