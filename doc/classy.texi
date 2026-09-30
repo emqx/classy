@@ -328,7 +328,7 @@ The document was typeset with
       Maximum interval of time that can pass between the membership CRDT server receiving an update
       and the moment it propagates it to the peers.
 
-    @defen{n_sites, @code{pos_integer()}, 1}
+    @defen{n_sites, @code{non_neg_integer()}, 1}
 
       Minimum number of known peers necessary to advance the run level from @code{single} to @code{cluster}.
 
@@ -342,7 +342,7 @@ The document was typeset with
       List of node set names used to additionally restrict when the node is considered having a quorum.
       Sets from the lists are combined using set intersection operation.
 
-    @defen{quorum, @code{pos_integer() | auto}, 1}
+    @defen{quorum, @code{non_neg_integer() | auto}, 1}
 
       Minimum number of known peers necessary to make quorum decisions and to advance the run level from @code{cluster} to @code{quorum}.
 
