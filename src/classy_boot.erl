@@ -99,7 +99,7 @@ The developer can use @erlfn{ref,erlref,classy_boot,diagnostics,1} function to t
         , sync :: boolean()
         , level :: classy:run_level()
         , monitor :: pid() | undefined
-        , description :: term() | undefined
+        , description :: description()
         }).
 
 -record(call_rm_barrier,
@@ -115,7 +115,6 @@ The developer can use @erlfn{ref,erlref,classy_boot,diagnostics,1} function to t
 
 -define(pterm, classy_run_level_ctr).
 
-
 -doc """
 Identifier of the run level barrier.
 It should be legible,
@@ -126,7 +125,7 @@ since it can be logged and seen by the operator.
 -doc """
 Human-friendly description of the barrier that helps the operator to understand what blocks the boot sequence.
 """.
--type description() :: binary() | undefined.
+-type description() :: binary().
 
 -doc """
 Summary of the node's boot state.
@@ -140,6 +139,9 @@ Summary of the node's boot state.
          }.
 
 -define(tab, classy_rl_barriers).
+
+-define(stopped_barrier, stopped).
+-define(stopped_barrier_descr, ~"System shutdown").
 
 %%================================================================================
 %% API functions
@@ -192,17 +194,21 @@ business logic is entirely responsible for removing the barriers.
 """.
 -spec set_barrier(barrier_id(), classy:run_level(), [Option]) -> ok | {error, deleted | badarg}
           when Option :: monitor | async | {hint, description()}.
-set_barrier(LockId, RunLevel, Options) when ?valid_run_level(RunLevel) ->
+set_barrier(LockId, RunLevel, Options) when ?valid_run_level(RunLevel),
+                                            RunLevel =/= ?classy_rl_stopped;
+                                            LockId =/= ?stopped_barrier ->
+  %% NOTE: RunLevel = 0 is special for this server, as it purges the
+  %% barriers. Business logic must not use it.
   MaybePid = case lists:member(monitor, Options) of
                true  -> self();
                false -> undefined
              end,
   Sync = not lists:member(async, Options),
   case lists:keyfind(hint, 1, Options) of
-    {hint, Hint} ->
+    {hint, Hint} when is_binary(Hint) ->
       ok;
     false ->
-      Hint = undefined
+      Hint = <<>>
   end,
   gen_server:call(
     ?SERVER,
@@ -329,11 +335,8 @@ ensure_started() ->
         }).
 
 -record(s,
-        { started = false :: boolean()
-          %% Maximum run level that the system naturally gravitates to.
-        , max = 0 :: classy:run_level()
-          %% Run leavel that has been currently reached:
-        , current = 0 :: classy:run_level()
+        { %% Run leavel that has been currently reached:
+          current = 0 :: classy:run_level()
           %% Information about currently running transition hooks
         , running :: #running{} | undefined
         , counter :: atomics:atomics_ref()
@@ -346,19 +349,42 @@ init(_) ->
   persistent_term:put(?pterm, Ctr),
   ets:new(?tab, [protected, ordered_set, named_table, {keypos, #barrier.k}]),
   set_diag_timer(),
-  {ok, #s{counter = Ctr}}.
+  S0 = #s{counter = Ctr},
+  %% System is started by removing this barrier:
+  S = do_add_barrier(
+        false,
+        undefined,
+        ?stopped_barrier,
+        0,
+        undefined,
+        ?stopped_barrier_descr,
+        S0),
+  {ok, S}.
 
 -doc false.
-handle_call(#call_start{}, _From, #s{started = Started} = S0) ->
-  S = case Started of
-        true  -> S0;
-        false -> maybe_transition(S0#s{started = true, max = ?classy_rl_ready})
-      end,
+handle_call(#call_start{}, _From, S0) ->
+  S = rm_barrier(by_id, ?stopped_barrier, S0),
   {reply, ok, S};
-handle_call(#call_stop{}, _From, S) ->
-  {reply, ok, do_stop_system(S)};
-handle_call(#call_set_barrier{} = Call, From, S) ->
-  {noreply, handle_set_barrier(Call, From, S)};
+handle_call(#call_stop{}, From, S0) ->
+  S = handle_set_barrier(
+        ?stopped_barrier,
+        true,
+        ?classy_rl_stopped,
+        undefined,
+        ?stopped_barrier_descr,
+        From,
+        S0),
+  {noreply, S};
+handle_call(#call_set_barrier{id = Id, sync = Sync, level = Level, monitor = Monitor, description = Descr}, From, S0) ->
+  S = handle_set_barrier(
+        Id,
+        Sync,
+        Level,
+        Monitor,
+        Descr,
+        From,
+        S0),
+  {noreply, S};
 handle_call(#call_rm_barrier{id = Id}, _From, S0) ->
   S = rm_barrier(by_id, Id, S0),
   {reply, ok, S};
@@ -424,7 +450,11 @@ enter_level(Level, Reason, S0) ->
   finish_set_barriers(Level),
   Reason =:= normal orelse
     ?tp(error, ?classy_boot_worker_crash, #{reason => Reason, to => Level}),
-  maybe_transition(S).
+  %% Purge barriers at level 0:
+  case Level of
+    ?classy_rl_stopped -> do_stop_system(S);
+    _                  -> maybe_transition(S)
+  end.
 
 finish_set_barriers(Level) ->
   MS = { #barrier{k = ?barrier_key(Level, '_'), reply_to = '$1', _ = '_'}
@@ -454,21 +484,23 @@ maybe_demonitor(#barrier{mref = Ref}) when is_reference(Ref) ->
 maybe_demonitor(_) ->
   ok.
 
--spec handle_set_barrier(#call_set_barrier{}, gen_server:from(), #s{}) -> #s{}.
-handle_set_barrier(Call, From, S0) ->
-  #call_set_barrier{ id          = Id
-                   , sync        = Sync
-                   , level       = Level
-                   , monitor     = MaybeMonitor
-                   , description = MaybeDescription
-                   } = Call,
+-spec handle_set_barrier(
+        barrier_id(),
+        boolean(),
+        classy:run_level(),
+        pid() | undefined,
+        binary(),
+        gen_server:from(),
+        #s{}
+       ) -> #s{}.
+handle_set_barrier(Id, Sync, Level, MaybeMonitor, Description, From, S0) ->
   maybe
     true ?= Id =/= undefined,
     true ?= ?valid_run_level(Level),
     true ?= is_pid(MaybeMonitor) orelse MaybeMonitor =:= undefined,
     PrevTarget = target(S0),
     do_rm_barrier(by_id, Id),
-    S = maybe_transition(do_add_barrier(Sync, From, Id, Level, MaybeMonitor, MaybeDescription, S0)),
+    S = maybe_transition(do_add_barrier(Sync, From, Id, Level, MaybeMonitor, Description, S0)),
     NewTarget = target(S),
     case NewTarget < PrevTarget of
       true ->
@@ -476,7 +508,7 @@ handle_set_barrier(Call, From, S0) ->
           #{ msg => target_run_level_dropped
            , new => NewTarget
            , id => Id
-           , reason => MaybeDescription
+           , reason => Description
            });
       false ->
         ok
@@ -488,7 +520,7 @@ handle_set_barrier(Call, From, S0) ->
       S0
   end.
 
--spec do_add_barrier(boolean(), gen_server:from(), barrier_id(), classy:run_level(), pid() | undefined, binary() | undefined, #s{}) -> #s{}.
+-spec do_add_barrier(boolean(), gen_server:from() | undefined, barrier_id(), classy:run_level(), pid() | undefined, binary() | undefined, #s{}) -> #s{}.
 do_add_barrier(Sync, From, Id, Level, MaybeMonitor, MaybeDescription, S) ->
   #s{current = Current0, running = Running} = S,
   %% Monitor the process that sets the barrior if needed:
@@ -501,12 +533,15 @@ do_add_barrier(Sync, From, Id, Level, MaybeMonitor, MaybeDescription, S) ->
               undefined             -> Current0;
               #running{next = Next} -> max(Current0, Next)
             end,
-  ReplyTo = if not Sync; Current =< Level ->
+  ReplyTo = case From of
+              undefined ->
+                undefined;
+              _ when not Sync; Current =< Level ->
                 %% Either an async call or already at a low enough
                 %% level. Reply to the caller immediately:
                 gen_server:reply(From, ok),
                 undefined;
-               true ->
+              _ ->
                 From
             end,
   Barrier = #barrier{ k           = ?barrier_key(Level, Id)
@@ -546,28 +581,22 @@ do_rm_barrier(How, Del) ->
     ok,
     ?tab).
 
-do_stop_system(#s{started = Started} = S0) ->
-  S1 = S0#s{max = 0, started = false},
-  S = case Started of
-        true  -> terminate_loop(maybe_transition(S1));
-        false -> S1
-      end,
-  ets:foldl(fun(I, ok) ->
-                maybe_reply_setter(I, {error, deleted}),
-                maybe_demonitor(I)
+do_stop_system(#s{} = S) ->
+  ets:foldl(fun(I = #barrier{k = Key}, _) ->
+                case Key of
+                  ?barrier_key(_, ?stopped_barrier) ->
+                    ok;
+                  _ ->
+                    maybe_reply_setter(I, {error, deleted}),
+                    maybe_demonitor(I),
+                    ets:delete(?tab, Key)
+                end;
+               (_, _) ->
+                ok
             end,
             ok,
             ?tab),
-  ets:match_delete(?tab, '_'),
   S.
-
-terminate_loop(#s{current = 0, running = undefined} = S) ->
-  S;
-terminate_loop(#s{running = #running{next = Next, pid = Pid}} = S) ->
-  receive
-    {'EXIT', Pid, Reason} ->
-      terminate_loop(enter_level(Next, Reason, S))
-  end.
 
 -spec maybe_transition(#s{}) -> #s{}.
 maybe_transition(#s{running = #running{}} = S) ->
@@ -608,8 +637,8 @@ run_hooks(From, Next) ->
           , pid = Worker
           }.
 
-target(#s{max = Max}) ->
-  Target = calc_target(Max),
+target(#s{}) ->
+  Target = calc_target(?classy_rl_ready),
   update_counter(?ctr_t, Target),
   Target.
 

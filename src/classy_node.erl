@@ -387,7 +387,7 @@ terminate(Reason, _S) ->
          }),
   classy_table:flush(?tab),
   classy_table:flush(?site_info),
-  to_stopped(shutdown, infinity),
+  to_stopped(shutdown),
   persistent_term:erase(?pt_node_sets),
   persistent_term:erase(?pt_site_sets),
   persistent_term:erase(?pt_site),
@@ -630,7 +630,7 @@ on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
         update_site_info(false, Peer, undefined, S)
     end),
   %% Sync with the business apps:
-  to_stopped(leave, infinity),
+  to_stopped(leave),
   {ok, _} = classy_table:atomically(
               ?tab,
               [ {d, ?the_cluster}
@@ -764,7 +764,7 @@ start_old_clusters(Site) ->
     end,
     classy_membership:known_clusters(Site)).
 
-to_stopped(Reason, _Timeout) -> % FIXME
+to_stopped(Reason) ->
   prep_stop(Reason),
   classy_boot:stop_system().
 
@@ -830,7 +830,7 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
 
 -spec on_remote_restart(#s{}) -> {ok, #s{}}.
 on_remote_restart(S) ->
-  to_stopped(remote_restart, 120_000),
+  to_stopped(remote_restart),
   {ok, adjust_run_level(S)}.
 
 -spec import_deltas(boolean(), #{classy:site() => classy_membership:update()}, #s{}) ->

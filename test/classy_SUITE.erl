@@ -588,8 +588,8 @@ t_061_run_level_timeouts(_) ->
        %% Set barrier (cleaned automatically via monitor):
        ?ON(S1,
            begin
-             ok = classy_boot:set_barrier(Lock, ?classy_rl_stopped, [monitor]),
-             ?assertMatch(?classy_rl_stopped, classy:run_level())
+             ok = classy_boot:set_barrier(Lock, ?classy_rl_single, [monitor]),
+             ?assertMatch(?classy_rl_single, classy:run_level())
            end),
        %% Verify events:
        {_, Events1} = snabbkaffe:receive_events(Sub1),
@@ -597,8 +597,6 @@ t_061_run_level_timeouts(_) ->
           [ #{leave := ready}
           , #{leave := quorum}
           , #{leave := cluster}
-          , #{leave := single}
-          , #{enter := single}
           , #{enter := cluster}
           , #{enter := quorum}
           , #{enter := ready}
