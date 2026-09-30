@@ -310,6 +310,15 @@ The document was typeset with
       Note that new cluster IDs are created every time a node leaves a cluster,
       so the number of unique random IDs is not limited to the number of sites.
 
+    @defen{boot_diagnostic_interval, @code{pos_integer()}, 15_000}
+
+      @emph{Unit}: ms
+
+       @erlmodref{ref,classy_boot} module can print boot state of the node to help diagnose problems.
+       This parameter specifies how often the diagnostics are printed.
+
+       NOTE: the message is suppressed when the node is fully booted.
+
   @section Peer
 
     @defen{sync_timeout, @code{non_neg_integer()}, 1000}

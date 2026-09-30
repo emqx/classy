@@ -46,7 +46,7 @@ They are meant for the situations where some keys are frequently updated,
 but these updates can be lost.
 
 There is no automatic flushing of dirty operations,
-the business code must call @code{@erlfn{ref,erlicall,classy_table,flush,1}(Table)} function explicitly.
+the business code must call @code{@erlfn{ref,erllcall,classy_table,flush,1}(Table)} function explicitly.
 
 If it fails to do so,
 all work for persisting the data will be done on terminate or after a durable mutation,

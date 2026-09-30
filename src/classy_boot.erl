@@ -87,6 +87,7 @@ The developer can use @erlfn{ref,erlref,classy_boot,diagnostics,1} function to t
 -define(ctr_t, 3).
 
 -define(SERVER, ?MODULE).
+-define(hook_runner, classy_boot_hook_worker).
 
 -record(call_start, {}).
 -record(call_stop, {}).
@@ -102,6 +103,8 @@ The developer can use @erlfn{ref,erlref,classy_boot,diagnostics,1} function to t
 -record(call_rm_barrier,
         { id :: barrier_id()
         }).
+
+-define(diagnostic_timeout, diagnostic_timeout).
 
 -record(running,
         { next :: classy:run_level()
@@ -122,6 +125,17 @@ since it can be logged and seen by the operator.
 Human-friendly description of the barrier that helps the operator to understand what blocks the boot sequence.
 """.
 -type description() :: binary() | undefined.
+
+-doc """
+Summary of the node's boot state.
+""".
+-type boot_info() ::
+        #{ run_level := #{ current := classy:run_level()
+                         , target  := classy:run_level()
+                         }
+         , blockers := [{classy:run_level(), barrier_id(), description()}]
+         , running_hook := false | list()
+         }.
 
 -define(tab, classy_rl_barriers).
 
@@ -209,10 +223,11 @@ rm_barrier(LockId) ->
 
 -doc """
 Get run level.
+Argument:
 
 @itemize
 @item @code{target} Target run level in accordance with all barriers.
-It the system keeps running and new barriers are not set,
+If the system keeps running and new barriers are not set,
 the system will eventually reach it.
 
 @item @code{current} Current run level.
@@ -252,7 +267,7 @@ do_at_lower_level(Parent, Level, Fun) ->
   %% FIXME: description should be present
   try
     ok = set_barrier(LockId, Level, [monitor]),
-    Ret = Fun,(jg),
+    Ret = Fun(),
     proc_lib:init_ack(Parent, {ok, Ret})
   catch
     EC:Err:Stack ->
@@ -268,9 +283,18 @@ classify(N) when is_integer(N), N >= 0 ->
      true                   -> ready
   end.
 
--spec diagnostics(_) -> ok.
-diagnostics(_) ->
-  logger:notice("", [blockers()]).
+-doc """
+Return summary of information related to the node's boot state.
+""".
+-spec diagnostics(#{blocker_levels => pos_integer()}) -> boot_info().
+diagnostics(Options) ->
+  BlockerLevels = maps:get(blocker_levels, Options, 1),
+  #{ run_level => #{ current => run_level(current)
+                   , target  => run_level(target)
+                   }
+   , blockers => blockers(BlockerLevels)
+   , running_hook => running_hook_info()
+   }.
 
 %%================================================================================
 %% Internal exports
@@ -296,9 +320,9 @@ ensure_started() ->
 %%================================================================================
 
 -record(barrier,
-        { k :: {classy:run_level(), barrier_id()}
+        { k :: {classy:run_level() | atom(), {barrier_id()}}
         , mref :: reference() | atom()
-        , description :: binary() | atom()
+        , description :: description() | atom()
         , reply_to :: gen_server:from() | atom()
         }).
 
@@ -319,6 +343,7 @@ init(_) ->
   Ctr = atomics:new(3, []),
   persistent_term:put(?pterm, Ctr),
   ets:new(?tab, [protected, ordered_set, named_table, {keypos, #barrier.k}]),
+  set_diag_timer(),
   {ok, #s{counter = Ctr}}.
 
 -doc false.
@@ -359,7 +384,12 @@ handle_info({'EXIT', Pid, Reason}, #s{running = #running{pid = Pid, next = Next}
   S = enter_level(Next, Reason, S0),
   {noreply, S};
 handle_info({'DOWN', MRef, process, _, _}, S0) ->
-   S = rm_barrier(by_mref, MRef, S0),
+  S = rm_barrier(by_mref, MRef, S0),
+  {noreply, S};
+handle_info(?diagnostic_timeout, #s{} = S0) ->
+  maybe_format_diagnostics(),
+  set_diag_timer(),
+  S = S0#s{},
   {noreply, S};
 handle_info(Info, S) ->
   ?tp(warning, ?classy_unknown_event,
@@ -370,7 +400,7 @@ handle_info(Info, S) ->
   {noreply, S}.
 
 -doc false.
-terminate(Reason, S) ->
+terminate(Reason, S = #s{}) ->
   classy_lib:is_normal_exit(Reason) orelse
     ?tp(warning, ?classy_abnormal_exit,
         #{ server => ?MODULE
@@ -427,7 +457,7 @@ maybe_demonitor(_) ->
   ok.
 
 -spec handle_set_barrier(#call_set_barrier{}, gen_server:from(), #s{}) -> #s{}.
-handle_set_barrier(Call, From, S) ->
+handle_set_barrier(Call, From, S0) ->
   #call_set_barrier{ id          = Id
                    , sync        = Sync
                    , level       = Level
@@ -438,12 +468,26 @@ handle_set_barrier(Call, From, S) ->
     true ?= Id =/= undefined,
     true ?= ?valid_run_level(Level),
     true ?= is_pid(MaybeMonitor) orelse MaybeMonitor =:= undefined,
+    PrevTarget = target(S0),
     do_rm_barrier(by_id, Id),
-    maybe_transition(do_add_barrier(Sync, From, Id, Level, MaybeMonitor, MaybeDescription, S))
+    S = maybe_transition(do_add_barrier(Sync, From, Id, Level, MaybeMonitor, MaybeDescription, S0)),
+    NewTarget = target(S),
+    case NewTarget < PrevTarget of
+      true ->
+        logger:warning(
+          #{ msg => target_run_level_dropped
+           , new => NewTarget
+           , id => Id
+           , reason => MaybeDescription
+           });
+      false ->
+        ok
+    end,
+    S
   else
     _ ->
       gen_server:reply(From, {error, badarg}),
-      S
+      S0
   end.
 
 -spec do_add_barrier(boolean(), gen_server:from(), barrier_id(), classy:run_level(), pid() | undefined, binary() | undefined, #s{}) -> #s{}.
@@ -546,6 +590,7 @@ maybe_transition(#s{running = undefined, current = From} = S) ->
 run_hooks(From, Next) ->
   Worker = spawn_link(
              fun() ->
+                 erlang:register(?hook_runner, self()),
                  %% Run hooks:
                  if Next > From ->
                      classy_hook:foreach(?on_change_run_level, [enter, Next]);
@@ -574,6 +619,63 @@ calc_target(Max) ->
 update_counter(Idx, Val) ->
   atomics:put(persistent_term:get(?pterm), Idx, Val).
 
--spec blockers() -> {classy:run_level(), [{barrier_id(), term()}]}.
-blockers() ->
-  {0, []}.
+%% List barriers at the lowest `NLevels' run levels.
+-spec blockers(pos_integer()) -> [{classy:run_level(), barrier_id(), term()}].
+blockers(NLevels) ->
+  MS = { #barrier{ k           = {'$1', {'$2'}}
+                 , description = '$3'
+                 , _           = '_'
+                 }
+       , []
+       , [{{'$1', '$2', '$3'}}]
+       },
+  case ets:select(?tab, [MS], ?fold_batch_size) of
+    '$end_of_table' ->
+      [];
+    {[{Level, _, _} | _] = L, Cont} ->
+      do_fold_blockers(Level, NLevels, L, Cont)
+  end.
+
+do_fold_blockers(Level, NLevels, [], Cont0) ->
+  case ets:select(Cont0) of
+    '$end_of_table' -> [];
+    {L, Cont}       -> do_fold_blockers(Level, NLevels, L, Cont)
+  end;
+do_fold_blockers(Level, NLevels, [{Level, _, _} = Elem | L], Cont) ->
+  [Elem | do_fold_blockers(Level, NLevels, L, Cont)];
+do_fold_blockers(_Level0, NLevels, [{Level, _, _} = Elem | L], Cont) when NLevels > 1 ->
+  [Elem | do_fold_blockers(Level, NLevels - 1, L, Cont)];
+do_fold_blockers(_, _, _, _) ->
+  [].
+
+maybe_format_diagnostics() ->
+  #{ run_level := RL
+   , blockers := Blockers
+   , running_hook := HookState
+   } = Info = diagnostics(#{}),
+  case RL of
+    #{current := ?classy_rl_ready} when HookState =:= false,
+                                        Blockers =:= [] ->
+      %% System is running normally. Nothing to report.
+      ok;
+    _ ->
+      logger:notice(Info#{msg => 'system_boot_state'})
+  end.
+
+set_diag_timer() ->
+  erlang:send_after(
+    application:get_env(classy, boot_diagnostic_interval, 15_000),
+    self(),
+    ?diagnostic_timeout).
+
+-spec running_hook_info() -> list() | false.
+running_hook_info() ->
+  maybe
+    Pid = whereis(?hook_runner),
+    true ?= is_pid(Pid),
+    [{current_stacktrace, Stack}] ?= process_info(Pid, [current_stacktrace]),
+    Stack
+  else
+    _ ->
+      false
+  end.
