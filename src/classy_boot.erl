@@ -489,14 +489,18 @@ handle_set_barrier(Call, From, S0) ->
   end.
 
 -spec do_add_barrier(boolean(), gen_server:from(), barrier_id(), classy:run_level(), pid() | undefined, binary() | undefined, #s{}) -> #s{}.
-do_add_barrier(Sync, From, Id, Level, MaybeMonitor, MaybeDescription, #s{current = Current} = S) ->
+do_add_barrier(Sync, From, Id, Level, MaybeMonitor, MaybeDescription, S) ->
+  #s{current = Current0, running = Running} = S,
   %% Monitor the process that sets the barrior if needed:
   MaybeMRef = case is_pid(MaybeMonitor) of
-                true ->
-                  monitor(process, MaybeMonitor);
-                false ->
-                  undefined
+                true  -> monitor(process, MaybeMonitor);
+                false -> undefined
               end,
+  %% Should we reply now?
+  Current = case Running of
+              undefined             -> Current0;
+              #running{next = Next} -> max(Current0, Next)
+            end,
   ReplyTo = if not Sync; Current =< Level ->
                 %% Either an async call or already at a low enough
                 %% level. Reply to the caller immediately:
