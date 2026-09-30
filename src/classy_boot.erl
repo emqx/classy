@@ -260,7 +260,7 @@ run_level(K) ->
 -doc false.
 -spec enrich_site_info(classy:site_metadata()) -> classy:site_metadata().
 enrich_site_info(Info) ->
-  Info#{rl => get(current)}.
+  Info#{rl => run_level(current)}.
 
 -doc false.
 -spec do_at_lower_level(pid(), classy:run_level(), fun(() -> any())) -> ok.
