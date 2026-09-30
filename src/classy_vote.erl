@@ -233,10 +233,11 @@ Common vote options.
          }.
 
 -type vote_info() ::
-        #{ tag  := tag()
-         , id   := id()
-         , role := coordinator | participant
-         , _    => _
+        #{ tag       := tag()
+         , id        := id()
+         , role      := coordinator | participant
+         , run_level := classy:run_level()
+         , _         => _
          }.
 
 %%================================================================================

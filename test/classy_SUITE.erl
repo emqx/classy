@@ -419,12 +419,11 @@ t_042_node_monitoring(_) ->
             %% Total number of nodeup/nodedown events should be equal
             %% to the sum of expected numbers of events at all stages:
             {Trace, _} = ?split_trace_at(#{?snk_kind := test_end}, Trace0),
-            ?assertMatch(
-               [ _, _
-               , _, _
-               , _, _, _, _
-               ],
-               ?of_kind(test_node_event, Trace))
+            Events = ?of_kind(test_node_event, Trace),
+            ?assertEqual(
+               2 + 2 + 4,
+               length(Events),
+               Events)
         end}
      ]).
 
@@ -537,6 +536,9 @@ t_060_at_lower_level(_) ->
         fun(Trace) ->
             E = ?classy_enter_run_level,
             L = ?classy_leave_run_level,
+            Filtered = [{Kind, Level} || #{?snk_kind := Kind, n := N, level := Level} <- Trace,
+                                         Kind =:= E orelse Kind =:= L,
+                                         ?predefined_run_level(N)],
             ?assertEqual(
                [ {E, single}, {E, cluster}, {E, quorum}, {E, ready}
                  %% 1.
@@ -545,7 +547,7 @@ t_060_at_lower_level(_) ->
                  %% 2.
                , {L, ready}, {E, ready}
                ],
-               ?projection([?snk_kind, level], ?of_kind([E, L], Trace)))
+               Filtered)
         end}
      , fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
@@ -1499,7 +1501,7 @@ t_403_vote_coord_restart(_) ->
      | classy_vote:trace_props()
      ]).
 
-%% Verify that restart of the participant during vote leads to abort
+%% Verify that restart of a participant during vote leads to abort
 t_404_vote_part_restart(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
@@ -2359,25 +2361,30 @@ validate_site_event(undefined,
                     #{?snk_kind := classy_create_new_site} = E) ->
   E;
 validate_site_event(#{?snk_kind := classy_create_new_site},
-                    #{?snk_kind := ?classy_enter_run_level, level := single} = E) ->
+                    #{?snk_kind := ?classy_enter_run_level, n := 1} = E) ->
   E;
 validate_site_event(#{?snk_kind := classy_create_new_site},
                     #{?snk_kind := classy_create_new_cluster} = E) ->
   E;
 %%    Run level change:
-validate_site_event(#{?snk_kind := K0, level := L0},
-                    #{?snk_kind := K1, level := L1} = E) when
+validate_site_event(#{?snk_kind := K0, n := L0},
+                    #{?snk_kind := K1, n := L1} = E) when
     (K0 =:= ?classy_leave_run_level orelse K0 =:= ?classy_enter_run_level),
     (K1 =:= ?classy_leave_run_level orelse K1 =:= ?classy_enter_run_level) ->
-  case lists:sort([L0, L1]) of
-    [cluster, single]     -> ok;
-    [cluster, quorum]     -> ok;
-    [quorum, ready]       -> ok;
-    [X, X] when K0 =/= K1 -> ok
+  case {K0, K1} of
+    {?classy_enter_run_level, ?classy_enter_run_level} when L1 =:= L0 + 1 ->
+      ok;
+    {?classy_leave_run_level, ?classy_leave_run_level} when L1 =:= L0 - 1 ->
+      ok;
+    _ when L1 =:= L0, K0 =/= K1 ->
+      %% Leave followed by enter or vice versa:
+      ok;
+    _ ->
+      error({unexpected_run_level_change, K0, L0, K1, L1})
   end,
   E;
 %%   Change of the cluster:
-validate_site_event(#{?snk_kind := ?classy_leave_run_level, level := single},
+validate_site_event(#{?snk_kind := ?classy_leave_run_level, n := 1},
                     #{?snk_kind := classy_kicked_from_cluster} = E) ->
   E;
 validate_site_event(#{?snk_kind := classy_kicked_from_cluster},
@@ -2387,17 +2394,17 @@ validate_site_event(#{?snk_kind := classy_kicked_from_cluster},
                     #{?snk_kind := classy_create_new_cluster} = E) ->
   E;
 validate_site_event(#{?snk_kind := classy_joined_cluster},
-                    #{?snk_kind := ?classy_enter_run_level, level := single} = E) ->
+                    #{?snk_kind := ?classy_enter_run_level, n := 1} = E) ->
   E;
 validate_site_event(#{?snk_kind := classy_create_new_cluster},
-                    #{?snk_kind := ?classy_enter_run_level, level := single} = E) ->
+                    #{?snk_kind := ?classy_enter_run_level, n := 1} = E) ->
   E;
 %%   Abrupt stop:
 validate_site_event(_,
                     #{?snk_kind := familiar_peer_stop} = E) ->
   E;
 validate_site_event(#{?snk_kind := familiar_peer_stop},
-                    #{?snk_kind := ?classy_enter_run_level, level := single} = E) ->
+                    #{?snk_kind := ?classy_enter_run_level, n := 1} = E) ->
   E.
 
 site_of_event(#{?snk_kind := Kind, local := Site}) when
@@ -2592,7 +2599,7 @@ fuzz_node_name(Site) ->
   familiar:last_node({classy_test_fuzzer:familiar_cluster(), Site}).
 
 join(Site, Target) ->
-  join(Site, Target, 5_000, join, ready).
+  join(Site, Target, 5_000, join, ?classy_rl_ready).
 
 join(Site, Target, Timeout, Intent, RunLevel) ->
   TargetNode = familiar:which_node({get_cluster(), Target}),
@@ -2609,7 +2616,7 @@ join(Site, Target, Timeout, Intent, RunLevel) ->
           end || I <- Peers],
   {ok, RLSub} = snabbkaffe:subscribe(
                   ?match_event(#{ ?snk_kind := classy_enter_run_level
-                                , level := RunLevel
+                                , n := RunLevel
                                 , local := Site
                                 }),
                   Timeout),

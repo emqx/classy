@@ -108,10 +108,10 @@ on_peer_connection_change(Site, Node, false) ->
 
 -doc false.
 -spec on_run_level(enter | leave, classy:run_level()) -> ok.
-on_run_level(enter, ?classy_rl_single) ->
+on_run_level(enter, 1) ->
   classy_node:increase_n_restarts(),
   set_my_liveness_info(true);
-on_run_level(leave, ?classy_rl_single) ->
+on_run_level(leave, 1) ->
   set_my_liveness_info(false);
 on_run_level(enter, ?classy_rl_quorum) ->
   classy_sup:ensure_liveness_server(),

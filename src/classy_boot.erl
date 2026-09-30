@@ -66,7 +66,7 @@ The developer can use @erlfn{ref,erlref,classy_boot,diagnostics,1} function to t
 -behavior(gen_server).
 
 %% API:
--export([at_lower_level/2, run_level/1, set_barrier/3, rm_barrier/1, classify/1, diagnostics/1]).
+-export([at_lower_level/2, run_level/1, set_barrier/3, rm_barrier/1, classify/1, diagnostics/1, with_ready/2]).
 
 %% behavior callbacks:
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -247,9 +247,14 @@ then this value is equal to the previous run level.
 If system is stable and no transition hooks are running,
 its value is equal to the current one.
 
+@item @code{ready} Minimum of next and current.
+
 @end itemize
 """.
--spec run_level(current | next | target) -> classy:run_level().
+-spec run_level(current | next | ready | target) -> classy:run_level().
+run_level(ready) ->
+  %% NOTE: this is currently prone to race conditions if called during run level step
+  min(run_level(current), run_level(next));
 run_level(K) ->
   try
     Cntr = persistent_term:get(?pterm),
@@ -303,6 +308,21 @@ diagnostics(Options) ->
    , blockers => blockers(BlockerLevels)
    , running_hook => running_hook_info()
    }.
+
+-doc """
+Helper function that run the callback if the current @code{ready} run level is at least @code{MinLevel}.
+
+NOTE: currently it doesn't protect against race conditions
+when the level is changing during execution of the callback.
+""".
+-spec with_ready(classy:run_level(), fun(() -> A)) -> {ok, A} | {error, not_ready}.
+with_ready(MinLevel, Fun) ->
+  case run_level(ready) - 1 of
+    L when L >= MinLevel ->
+      Fun();
+    _ ->
+      {error, not_ready}
+  end.
 
 %%================================================================================
 %% Internal exports

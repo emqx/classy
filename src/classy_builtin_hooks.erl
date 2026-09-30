@@ -95,18 +95,20 @@ log_membership_change(Cluster, Local, Remote, Member) ->
        , remote => Remote
        }).
 
-log_run_level(enter, To) when ?predefined_run_level(To) ->
-  ?tp(info, ?classy_enter_run_level,
+log_run_level(Action, To) ->
+  Severity = case ?predefined_run_level(To) of
+               true  -> info;
+               false -> debug
+             end,
+  Kind = case Action of
+           enter -> ?classy_enter_run_level;
+           leave -> ?classy_leave_run_level
+         end,
+  ?tp(Severity, Kind,
       #{ level => classy_boot:classify(To)
+       , n     => To
        , local => classy_node:maybe_site()
-       });
-log_run_level(leave, To) when ?predefined_run_level(To) ->
-  ?tp(info, ?classy_leave_run_level,
-      #{ level => classy_boot:classify(To)
-       , local => classy_node:maybe_site()
-       });
-log_run_level(_, _) ->
-  ok.
+       }).
 
 log_peer_connection_change(Site, Node, ConnStatus) ->
   Kind = case ConnStatus of

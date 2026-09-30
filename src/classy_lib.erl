@@ -40,6 +40,7 @@ Misc. utility functions.
         , is_normal_exit/1
 
         , map_deep_insert/3
+        , wait_multiple_downs/2
         ]).
 
 -export_type([ mfargs/0
@@ -50,6 +51,7 @@ Misc. utility functions.
              , multicall_result/1
              , multicall_error/0
              , wrapped_exception/0
+             , ets_selector/0
              ]).
 
 %%================================================================================
@@ -79,6 +81,9 @@ Misc. utility functions.
 -type unix_time_s() :: integer().
 
 -type wakeup_timer() :: undefined | {integer(), reference()}.
+
+-doc false.
+-type ets_selector() :: '_' | '$1' | '$2' | '$3'.
 
 %%================================================================================
 %% API functions
@@ -437,6 +442,25 @@ map_deep_insert([K | Rest], Val, Outer) ->
     #{} ->
       Outer#{K => map_deep_insert(Rest, Val, #{})}
   end.
+
+-doc false.
+-spec wait_multiple_downs([reference()], timeout()) -> ok.
+wait_multiple_downs(Refs, Timeout) when is_integer(Timeout);
+                                        Timeout =:= infinity ->
+  T = erlang:monotonic_time(millisecond),
+  lists:foreach(
+    fun(MRef) ->
+        After = case Timeout of
+                  infinity -> infinity;
+                  _        -> max(0, T + Timeout - erlang:monotonic_time())
+                end,
+        receive
+          {'DOWN', MRef, process, _Pid, _Reason} -> ok
+        after After ->
+            demonitor(MRef)
+        end
+    end,
+    Refs).
 
 -spec split_node_name(node()) -> {ok, binary(), binary()} | {error, _}.
 split_node_name(Name) ->

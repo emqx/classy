@@ -35,7 +35,7 @@ The document was typeset with
   @itemize
   @item @emph{Cluster management}:
   sites can join together to form clusters or be removed from the cluster.
-  Peer information is propagated using gossip protocol.
+  Peer information is propagated between the peers using gossip protocol.
 
   @item @emph{Persistent node identities}:
   nodes are assigned persistent identities that survive host name changes.
@@ -55,6 +55,10 @@ The document was typeset with
 
   @item @emph{Two-Phase Commit}:
   @erlmodref{ref,classy_vote}
+
+  @item @emph{Boot management}:
+  classy can orchestrate startup and shutdown of business applications.
+
   @end itemize
 
 @node Introduction
