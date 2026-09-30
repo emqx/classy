@@ -567,6 +567,8 @@ terminate_loop(#s{running = #running{next = Next, pid = Pid}} = S) ->
 
 -spec maybe_transition(#s{}) -> #s{}.
 maybe_transition(#s{running = #running{}} = S) ->
+  %% Update global counter even when there's nothing to do now:
+  _ = target(S),
   S;
 maybe_transition(#s{running = undefined, current = From} = S) ->
   To = target(S),
