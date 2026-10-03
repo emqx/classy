@@ -73,7 +73,7 @@ init() ->
   classy:on_peer_connection_change(fun classy_liveness:on_peer_connection_change/3, ?max_hook_prio),
   %% Cluster-global variables:
   classy:enrich_site_info(fun classy_builtin_hooks:enrich_site_info/1, ?min_hook_prio),
-  classy:enrich_site_info(fun classy_rl_changer:enrich_site_info/1, ?min_hook_prio),
+  classy:enrich_site_info(fun classy_boot:enrich_site_info/1, ?min_hook_prio),
   %% Info logging:
   classy:on_create_site(fun classy_builtin_hooks:log_create_site/1, ?max_hook_prio),
   classy:on_create_cluster(fun classy_builtin_hooks:log_create_cluster/2, ?max_hook_prio),
@@ -92,7 +92,7 @@ init() ->
   classy_discovery_k8s:install_dispatch_hook(),
   classy_discovery_etcd:install_dispatch_hook(),
   %% Restore aborted votes at the end of transition to the `cluster' RL:
-  classy:on_run_level(fun classy_vote:on_run_level/2, ?min_hook_prio + 1),
+  classy:on_run_level(fun classy_vote:on_run_level/2, #{prio => ?min_hook_prio + 1, timeout => infinity}),
   %% Fallback:
   classy:on_node_classify(fun classy_builtin_hooks:on_node_classify/1, ?max_hook_prio),
   %% User initialization:

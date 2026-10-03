@@ -207,8 +207,8 @@ start_site(Site, S) ->
   Subs = [begin
             {ok, Sub} = snabbkaffe:subscribe(Filter, 1, ?sync_timeout),
             Sub
-          end || Filter <- [ ?match_event(#{ ?snk_kind := classy_change_run_level
-                                           , to        := single
+          end || Filter <- [ ?match_event(#{ ?snk_kind := ?classy_enter_run_level
+                                           , level     := single
                                            , local     := Site
                                            })
                            | [?match_event(#{ ?snk_kind      := classy_membership_sync_in
@@ -332,14 +332,18 @@ diagnostic(SelectedSites, #{sites := Sites}) ->
     fun(Site, #{running := R}) ->
         case R of
           true ->
-            catch call(
-                    Site,
-                    fun() ->
-                        #{ members => classy_membership:dump()
-                         , node => catch ets:tab2list(classy_node)
-                         }
-                    end,
-                    5_000);
+            try
+              call(
+                Site,
+                fun() ->
+                    #{ members => classy_membership:dump()
+                     , node => ets:tab2list(classy_node)
+                     }
+                end,
+                5_000)
+            catch
+              _:_ -> ok
+            end;
           false ->
             stopped
         end

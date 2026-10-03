@@ -342,11 +342,14 @@ t_042_node_monitoring(_) ->
                                 5_000),
                   Sub
               end,
+  ClassifyEvents = fun(Events) ->
+                       maps:groups_from_list(
+                         fun(#{local := L}) -> L end,
+                         Events)
+                   end,
   Receive = fun(Sub) ->
                 {ok, Events} = snabbkaffe:receive_events(Sub),
-                maps:groups_from_list(
-                  fun(#{local := L}) -> L end,
-                  Events)
+                ClassifyEvents(Events)
             end,
   ?check_trace(
      #{timetrap => ?timetrap},
@@ -409,20 +412,21 @@ t_042_node_monitoring(_) ->
            , N2 := [#{remote := N1, up := false}]
            , N3 := [#{remote := N1, up := true}]
            },
-          Receive(Sub3))
+          Receive(Sub3)),
+       ?tp(test_end, #{})
      end,
      [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      , {"no unexpected nodeup/nodedown events",
-        fun(Trace) ->
+        fun(Trace0) ->
             %% Total number of nodeup/nodedown events should be equal
             %% to the sum of expected numbers of events at all stages:
-            ?assertMatch(
-               [ _, _
-               , _, _
-               , _, _, _, _
-               ],
-               ?of_kind(test_node_event, Trace))
+            {Trace, _} = ?split_trace_at(#{?snk_kind := test_end}, Trace0),
+            Events = ?of_kind(test_node_event, Trace),
+            ?assertEqual(
+               2 + 2 + 4,
+               length(Events),
+               ClassifyEvents(Events))
         end}
      ]).
 
@@ -499,26 +503,54 @@ t_060_at_lower_level(_) ->
      begin
        %% Prepare the system:
        _N1 = create_start_site(S1, #{}),
-       ct:sleep(1000),
-       ?assertEqual(quorum, ?ON(S1, classy:run_level())),
-       ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
-       ok = ?ON(S1,
-                classy:at_lower_level(
-                  single,
+       ?block_until(#{?snk_kind := ?classy_enter_run_level, level := ready}),
+       ct:sleep(100),
+       ?assertEqual(?classy_rl_ready, ?ON(S1, classy:run_level())),
+       %% 1. Normal flow
+       {ok, Sub1} = snabbkaffe:subscribe(?match_event(#{?snk_kind := ?classy_enter_run_level}), 3, 5_000),
+       ?assertMatch(
+          hello,
+          ?ON(S1,
+                classy_boot:at_lower_level(
+                  ?classy_rl_single,
                   fun() ->
-                      ?defer_assert(?assertEqual(single, classy:run_level()))
-                  end)),
-       ct:sleep(1000),
-       ?assertEqual(quorum, ?ON(S1, classy:run_level()))
+                      ?defer_assert(?assertEqual(?classy_rl_single, classy:run_level())),
+                      hello
+                  end))),
+       %% System automatically returns to "ready" state when temporary lowering is done:
+       {ok, _} = snabbkaffe:receive_events(Sub1),
+       ct:sleep(100),
+       ?assertEqual(?classy_rl_ready, ?ON(S1, classy:run_level())),
+       %% 2. Lowering function throws an exception. It should be re-thrown and run level must raise again:
+       {ok, Sub2} = snabbkaffe:subscribe(?match_event(#{?snk_kind := ?classy_enter_run_level}), 1, 5_000),
+       ?assertException(
+          error, _,
+          ?ON(S1,
+                classy_boot:at_lower_level(
+                  ?classy_rl_quorum,
+                  fun() ->
+                      error(mymy)
+                  end))),
+       {ok, _} = snabbkaffe:receive_events(Sub2),
+       ct:sleep(100),
+       ?assertEqual(?classy_rl_ready, ?ON(S1, classy:run_level()))
      end,
      [ {"run level transitions",
         fun(Trace) ->
+            E = ?classy_enter_run_level,
+            L = ?classy_leave_run_level,
+            Filtered = [{Kind, Level} || #{?snk_kind := Kind, n := N, level := Level} <- Trace,
+                                         Kind =:= E orelse Kind =:= L,
+                                         ?predefined_run_level(N)],
             ?assertEqual(
-               [ single, cluster, quorum
-               , cluster, single
-               , cluster, quorum
+               [ {E, single}, {E, cluster}, {E, quorum}, {E, ready}
+                 %% 1.
+               , {L, ready}, {L, quorum}, {L, cluster}
+               , {E, cluster}, {E, quorum}, {E, ready}
+                 %% 2.
+               , {L, ready}, {E, ready}
                ],
-               ?projection(to, ?of_kind(classy_change_run_level, Trace)))
+               Filtered)
         end}
      , fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
@@ -528,21 +560,25 @@ t_060_at_lower_level(_) ->
 t_061_run_level_timeouts(_) ->
   ct:pal(asciiart:visible($., "Error messages are expected", [])),
   S1 = <<"s1">>,
+  Lock = test_lock,
   ?check_trace(
      #{timetrap => ?timetrap},
      begin
        %% Setup:
        _N1 = create_start_site(S1, #{}),
-       ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
+       ?block_until(#{?snk_kind := ?classy_enter_run_level, level := ready}),
        Pred = ?match_event(#{?snk_kind := K} when K =:= rl_change;
                                                   K =:= ?classy_hook_failure;
                                                   K =:= ?classy_run_level_change_error),
        ?ON(S1,
            begin
              classy:on_run_level(
-               fun(From, To) ->
-                   ?tp(rl_change, #{f => From, t => To}),
-                   timer:sleep(100)
+               fun(Action, Level) ->
+                   ?predefined_run_level(Level) andalso
+                     begin
+                       ?tp(rl_change, #{Action => classy_boot:classify(Level)}),
+                       timer:sleep(100)
+                     end
                end,
                0)
            end),
@@ -554,107 +590,50 @@ t_061_run_level_timeouts(_) ->
        ?tp(test_stage1, #{}),
        ?ON(S1, application:set_env(classy, hook_timeout, 1000)),
        {ok, Sub1} = snabbkaffe:subscribe(Pred, 100, 3000, 0),
-       %% Issue a few conflicting commands in rapid succession:
-       ?ON(S1, classy_rl_changer:set(?stopped)),
-       ?ON(S1, classy_rl_changer:set(?quorum)),
-       ?ON(S1, classy_rl_changer:set(?stopped)),
-       %% System should follow the last command:
-       {_, Events1} = snabbkaffe:receive_events(Sub1),
-       ?assertMatch(
-          [ #{f := ?quorum, t := ?cluster}
-          , #{f := ?cluster, t := ?single}
-          , #{f := ?single, t := ?stopped}
-          ],
-          Events1),
-       %% 2. Same logic applies when the system is stopped:
-       %%    Prepare; go to the single state
-       ?tp(test_stage2, #{}),
-       ?ON(S1,
-           classy_rl_changer:set_sync(?single, 5_000)),
-       %%    Request transition to quorum, and simultaneously stop
-       %%    application (simulated by a supervisor request):
-       {ok, Sub2} = snabbkaffe:subscribe(Pred, 100, 3000, 0),
+       %% Set barrier (cleaned automatically via monitor):
        ?ON(S1,
            begin
-             classy_rl_changer:set(?quorum),
-             ok = supervisor:terminate_child(classy_sup, run_level_mgr)
+             ok = classy_boot:set_barrier(Lock, ?classy_rl_single, [monitor]),
+             ?assertMatch(?classy_rl_single, classy:run_level())
            end),
-       {_, Events2} = snabbkaffe:receive_events(Sub2),
+       %% Verify events:
+       {_, Events1} = snabbkaffe:receive_events(Sub1),
        ?assertMatch(
-          [ #{f := ?single, t := ?cluster}
-          , #{f := ?cluster, t := ?single}
-          , #{f := ?single, t := ?stopped}
+          [ #{leave := ready}
+          , #{leave := quorum}
+          , #{leave := cluster}
+          , #{enter := cluster}
+          , #{enter := quorum}
+          , #{enter := ready}
           ],
-          Events2),
-       %%   3. Verify that timeouts are handled normally:
+          Events1),
+       %%   2. Verify that timeouts are handled normally:
        ?tp(test_stage3, #{}),
        ?ON(S1,
            begin
-             {ok, _} = supervisor:restart_child(classy_sup, run_level_mgr),
              application:set_env(classy, hook_timeout, 90)
            end),
        {ok, Sub3} = snabbkaffe:subscribe(Pred, 100, 3000, 0),
        ?ON(S1,
            begin
-             classy_rl_changer:set_sync(?quorum, 5_000),
-             classy_rl_changer:set_sync(?stopped, 5_000)
+             ok = classy_boot:set_barrier(Lock, ?classy_rl_cluster, [monitor]),
+             ?assertMatch(?classy_rl_cluster, classy:run_level())
            end),
        {_, Events3} = snabbkaffe:receive_events(Sub3),
        ?assertMatch(
-          [ %% Advance:
-            #{f := ?stopped, t := ?single}
+          [ #{leave := ready}
           , #{?snk_kind := ?classy_hook_failure, reason := {error, {timeout, _}}}
-          , #{f := ?single, t := ?cluster}
+          , #{leave := quorum}
           , #{?snk_kind := ?classy_hook_failure, reason := {error, {timeout, _}}}
-          , #{f := ?cluster, t := ?quorum}
+          , #{enter := quorum}
           , #{?snk_kind := ?classy_hook_failure, reason := {error, {timeout, _}}}
-            %% Retard:
-          , #{f := ?quorum, t := ?cluster}
-          , #{?snk_kind := ?classy_hook_failure, reason := {error, {timeout, _}}}
-          , #{f := ?cluster, t := ?single}
-          , #{?snk_kind := ?classy_hook_failure, reason := {error, {timeout, _}}}
-          , #{f := ?single, t := ?stopped}
+          , #{enter := ready}
           , #{?snk_kind := ?classy_hook_failure, reason := {error, {timeout, _}}}
           ],
           Events3)
      end,
      [ fun events_on_all_sites/1
      ]).
-
-%% This testcase verifies order of run level change hooks.
-t_062_run_level_hook_order(_) ->
-  S1 = <<"s1">>,
-  ?check_trace(
-     #{timetrap => ?timetrap},
-     begin
-       %% Setup:
-       _N1 = create_start_site(S1, #{}),
-       ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
-       ?ON(S1,
-           begin
-             classy:on_run_level(
-               fun(From, To) ->
-                   ?tp(test_rl, #{f => From, t => To, p => 1})
-               end,
-               1),
-             classy:on_run_level(
-               fun(From, To) ->
-                   ?tp(test_rl, #{f => From, t => To, p => 0})
-               end,
-               0)
-           end),
-       ?ON(S1, classy:at_lower_level(cluster, fun() -> ok end)),
-       ct:sleep(1000)
-     end,
-     fun(Trace) ->
-         ?assertMatch(
-            [ #{p := 0, f := quorum, t := cluster}
-            , #{p := 1, f := quorum, t := cluster}
-            , #{p := 1, f := cluster, t := quorum}
-            , #{p := 0, f := cluster, t := quorum}
-            ],
-            ?of_kind(test_rl, Trace))
-     end).
 
 %% Verify custom timeouts
 t_063_custom_timeouts(_) ->
@@ -897,6 +876,7 @@ t_090_info(_) ->
        %% Prepare system:
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
+       [?block_until(#{?snk_kind := ?classy_enter_run_level, level := ready, local := I}) || I <- Sites],
        [?ON(I, classy:enrich_site_info(EnrichInfo, 0))
         || I <- Sites],
        %% Verify functions in singleton clusters:
@@ -1524,7 +1504,7 @@ t_403_vote_coord_restart(_) ->
      | classy_vote:trace_props()
      ]).
 
-%% Verify that restart of the participant during vote leads to abort
+%% Verify that restart of a participant during vote leads to abort
 t_404_vote_part_restart(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
@@ -1832,7 +1812,7 @@ t_413_fold_votes(_) ->
      #{timetrap => ?timetrap},
      begin
        _N1 = create_start_site(S1, #{peer => #{shutdown => halt}}),
-       ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
+       ?block_until(#{?snk_kind := ?classy_enter_run_level, level := ready}),
        %% Make sure votes hang long enough for us to inspect them:
        ?force_ordering(
           #{?snk_kind := test_go},
@@ -1917,7 +1897,7 @@ t_413_force_rm(_) ->
      #{timetrap => ?timetrap},
      begin
        _N1 = create_start_site(S1, #{peer => #{shutdown => halt}}),
-       ?block_until(#{?snk_kind := classy_change_run_level, to := quorum}),
+       ?block_until(#{?snk_kind := ?classy_enter_run_level, level := quorum}),
        %% Make sure votes hang long enough for us to inspect them:
        ?force_ordering(
           #{?snk_kind := test_go},
@@ -2000,7 +1980,7 @@ t_500_metadata_crud(_) ->
      #{timetrap => ?timetrap},
      begin
        %% 0. Check that run_level returns `stopped' when classy is stopped (it's not running on the ct node):
-       ?assertEqual(stopped, classy:run_level()),
+       ?assertEqual(?classy_rl_stopped, classy:run_level()),
        %% Setup:
        N1 = create_start_site(S1, #{}),
        N2 = create_start_site(S2, #{}),
@@ -2215,7 +2195,7 @@ t_600_fallback(_) ->
        stop_site(S1),
        restart_site(S1),
        [?ON(I, classy_site_metadata:c_set(via_fallback, false)) || I <- [S1, S2]],
-       ct:sleep(1000),
+       ct:sleep(2000),
        [?assertMatch(
            #{{Cluster, I} :=
                #{ S1 := #{mem := true, host := N1, info := #{via_fallback := false}}
@@ -2384,32 +2364,30 @@ validate_site_event(undefined,
                     #{?snk_kind := classy_create_new_site} = E) ->
   E;
 validate_site_event(#{?snk_kind := classy_create_new_site},
-                    #{?snk_kind := classy_change_run_level, to := single} = E) ->
+                    #{?snk_kind := ?classy_enter_run_level, n := 1} = E) ->
   E;
 validate_site_event(#{?snk_kind := classy_create_new_site},
                     #{?snk_kind := classy_create_new_cluster} = E) ->
   E;
-%%    Run level changes:
-validate_site_event(#{?snk_kind := classy_change_run_level, to := stopped},
-                    #{?snk_kind := classy_change_run_level, to := single} = E) ->
-  E;
-validate_site_event(#{?snk_kind := classy_change_run_level, to := single},
-                    #{?snk_kind := classy_change_run_level, to := cluster} = E) ->
-  E;
-validate_site_event(#{?snk_kind := classy_change_run_level, to := cluster},
-                    #{?snk_kind := classy_change_run_level, to := quorum} = E) ->
-  E;
-validate_site_event(#{?snk_kind := classy_change_run_level, to := quorum},
-                    #{?snk_kind := classy_change_run_level, to := cluster} = E) ->
-  E;
-validate_site_event(#{?snk_kind := classy_change_run_level, to := cluster},
-                    #{?snk_kind := classy_change_run_level, to := single} = E) ->
-  E;
-validate_site_event(#{?snk_kind := classy_change_run_level, to := single},
-                    #{?snk_kind := classy_change_run_level, to := stopped} = E) ->
+%%    Run level change:
+validate_site_event(#{?snk_kind := K0, n := L0},
+                    #{?snk_kind := K1, n := L1} = E) when
+    (K0 =:= ?classy_leave_run_level orelse K0 =:= ?classy_enter_run_level),
+    (K1 =:= ?classy_leave_run_level orelse K1 =:= ?classy_enter_run_level) ->
+  case {K0, K1} of
+    {?classy_enter_run_level, ?classy_enter_run_level} when L1 =:= L0 + 1 ->
+      ok;
+    {?classy_leave_run_level, ?classy_leave_run_level} when L1 =:= L0 - 1 ->
+      ok;
+    _ when L1 =:= L0, K0 =/= K1 ->
+      %% Leave followed by enter or vice versa:
+      ok;
+    _ ->
+      error({unexpected_run_level_change, K0, L0, K1, L1})
+  end,
   E;
 %%   Change of the cluster:
-validate_site_event(#{?snk_kind := classy_change_run_level, to := stopped},
+validate_site_event(#{?snk_kind := ?classy_leave_run_level, n := 1},
                     #{?snk_kind := classy_kicked_from_cluster} = E) ->
   E;
 validate_site_event(#{?snk_kind := classy_kicked_from_cluster},
@@ -2419,17 +2397,17 @@ validate_site_event(#{?snk_kind := classy_kicked_from_cluster},
                     #{?snk_kind := classy_create_new_cluster} = E) ->
   E;
 validate_site_event(#{?snk_kind := classy_joined_cluster},
-                    #{?snk_kind := classy_change_run_level, to := single} = E) ->
+                    #{?snk_kind := ?classy_enter_run_level, n := 1} = E) ->
   E;
 validate_site_event(#{?snk_kind := classy_create_new_cluster},
-                    #{?snk_kind := classy_change_run_level, to := single} = E) ->
+                    #{?snk_kind := ?classy_enter_run_level, n := 1} = E) ->
   E;
 %%   Abrupt stop:
 validate_site_event(_,
                     #{?snk_kind := familiar_peer_stop} = E) ->
   E;
 validate_site_event(#{?snk_kind := familiar_peer_stop},
-                    #{?snk_kind := classy_change_run_level, to := single} = E) ->
+                    #{?snk_kind := ?classy_enter_run_level, n := 1} = E) ->
   E.
 
 site_of_event(#{?snk_kind := Kind, local := Site}) when
@@ -2439,7 +2417,8 @@ site_of_event(#{?snk_kind := Kind, local := Site}) when
     Kind =:= classy_member_leave;
     Kind =:= classy_joined_cluster;
     Kind =:= classy_kicked_from_cluster;
-    Kind =:= classy_change_run_level;
+    Kind =:= ?classy_enter_run_level;
+    Kind =:= ?classy_leave_run_level;
     Kind =:= classy_init_clustering ->
   Site;
 site_of_event(#{?snk_kind := Kind, ?snk_meta := #{local := Site}}) when
@@ -2623,7 +2602,7 @@ fuzz_node_name(Site) ->
   familiar:last_node({classy_test_fuzzer:familiar_cluster(), Site}).
 
 join(Site, Target) ->
-  join(Site, Target, 5_000, join, ?quorum).
+  join(Site, Target, 5_000, join, ?classy_rl_ready).
 
 join(Site, Target, Timeout, Intent, RunLevel) ->
   TargetNode = familiar:which_node({get_cluster(), Target}),
@@ -2639,8 +2618,8 @@ join(Site, Target, Timeout, Intent, RunLevel) ->
             Sub
           end || I <- Peers],
   {ok, RLSub} = snabbkaffe:subscribe(
-                  ?match_event(#{ ?snk_kind := classy_change_run_level
-                                , to := RunLevel
+                  ?match_event(#{ ?snk_kind := classy_enter_run_level
+                                , n := RunLevel
                                 , local := Site
                                 }),
                   Timeout),

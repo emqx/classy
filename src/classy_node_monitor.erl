@@ -77,12 +77,14 @@ monitor_nodes(Enable) when is_boolean(Enable) ->
         , subs = #{} :: #{pid() => reference()}
         }).
 
+-doc false.
 init(_) ->
   process_flag(trap_exit, true),
   Hook = classy:on_peer_connection_change(fun ?MODULE:on_peer_connection_change/3, 0),
   S = #s{hook = Hook},
   {ok, S}.
 
+-doc false.
 handle_call(#call_monitor{pid = Pid, enable = Enable}, _From, S = #s{subs = Subs0}) ->
   case Subs0 of
     #{Pid := MRef} ->
@@ -128,6 +130,7 @@ handle_call(Call, From, S) ->
        }),
   {reply, {error, unknown_call}, S}.
 
+-doc false.
 handle_cast(Cast, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ cast   => Cast
@@ -135,6 +138,7 @@ handle_cast(Cast, S) ->
        }),
   {noreply, S}.
 
+-doc false.
 handle_info({'DOWN', _MRef, process, Pid, _}, S = #s{subs = Subs}) ->
   {noreply, S#s{subs = maps:remove(Pid, Subs)}};
 handle_info(Info, S) ->
@@ -144,6 +148,7 @@ handle_info(Info, S) ->
        }),
   {noreply, S}.
 
+-doc false.
 terminate(_Reason, #s{hook = Hook}) ->
   classy_hook:unhook(Hook),
   ok.
@@ -152,10 +157,12 @@ terminate(_Reason, #s{hook = Hook}) ->
 %% Internal exports
 %%================================================================================
 
+-doc false.
 -spec start_link() -> {ok, pid()}.
 start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
+-doc false.
 -spec on_peer_connection_change(classy:site(), node(), boolean()) -> ok.
 on_peer_connection_change(Site, Node, IsConn) ->
   gen_server:call(

@@ -28,6 +28,7 @@ Misc. utility functions.
         , discovery_complete_sets/0
         , table_dir/0
         , n_sites/0
+        , n_quorum/0
         , time_s/0
         , adjust_time_s_skew/2
 
@@ -39,6 +40,7 @@ Misc. utility functions.
         , is_normal_exit/1
 
         , map_deep_insert/3
+        , wait_multiple_downs/2
         ]).
 
 -export_type([ mfargs/0
@@ -49,11 +51,16 @@ Misc. utility functions.
              , multicall_result/1
              , multicall_error/0
              , wrapped_exception/0
+             , ets_selector/0
              ]).
+
+-include("classy_internal.hrl").
 
 %%================================================================================
 %% Type declarations
 %%================================================================================
+
+-define(async_worker_pid, classy_async_worker_pid).
 
 -type mfargs() :: {module(), atom(), list()}.
 
@@ -78,6 +85,9 @@ Misc. utility functions.
 -type unix_time_s() :: integer().
 
 -type wakeup_timer() :: undefined | {integer(), reference()}.
+
+-doc false.
+-type ets_selector() :: '_' | '$1' | '$2' | '$3'.
 
 %%================================================================================
 %% API functions
@@ -109,6 +119,8 @@ safe_apply(Module, Function, Args) ->
 
 -doc """
 Apply a function in a separate process with a timeout.
+
+WARNING: aborting the calling process while running this function may leave the child process running.
 """.
 -spec safe_apply_with_timeout(callback(), timeout()) ->
         {ok, term()} |
@@ -120,13 +132,16 @@ safe_apply_with_timeout(Callback, Timeout) ->
                   fun() ->
                       exit(safe_apply(Callback))
                   end),
+  put(?dict_worker_pid, Pid),
   receive
     {'DOWN', MRef, process, Pid, Reason} ->
+      erase(?dict_worker_pid),
       Reason
   after Timeout ->
       Info = process_info(Pid, [current_stacktrace]),
       demonitor(MRef, [flush]),
       exit(Pid, kill),
+      erase(?dict_worker_pid),
       {error, {timeout, Info}}
   end.
 
@@ -317,8 +332,26 @@ table_dir() ->
   application:get_env(classy, table_dir, ".").
 
 -doc "Return value of @ref{n_sites} environment variable (with default)".
+-spec n_sites() -> non_neg_integer().
 n_sites() ->
-  application:get_env(classy, n_sites, 1).
+  case application:get_env(classy, n_sites) of
+    {ok, Int} when is_integer(Int), Int >= 0 ->
+      Int;
+    _ ->
+      1
+  end.
+
+-doc "Return value of @ref{quorum} environement variable (with default).".
+-spec n_quorum() -> non_neg_integer() | auto.
+n_quorum() ->
+  case application:get_env(classy, quorum) of
+    {ok, auto} ->
+      auto;
+    {ok, Int} when is_integer(Int), Int >= 0 ->
+      Int;
+    _ ->
+      1
+  end.
 
 -doc """
 Adjust a local timestamp @code{Val} to the remote nodes's clock,
@@ -418,6 +451,26 @@ map_deep_insert([K | Rest], Val, Outer) ->
     #{} ->
       Outer#{K => map_deep_insert(Rest, Val, #{})}
   end.
+
+-doc false.
+-spec wait_multiple_downs([{pid(), reference()}], timeout()) -> ok.
+wait_multiple_downs(Refs, Timeout) when is_integer(Timeout);
+                                        Timeout =:= infinity ->
+  T = erlang:monotonic_time(millisecond),
+  lists:foreach(
+    fun({Pid, MRef}) ->
+        After = case Timeout of
+                  infinity -> infinity;
+                  _        -> max(0, T + Timeout - erlang:monotonic_time(millisecond))
+                end,
+        receive
+          {'DOWN', MRef, process, _Pid, _Reason} -> ok
+        after After ->
+            demonitor(MRef),
+            exit(Pid, kill)
+        end
+    end,
+    Refs).
 
 -spec split_node_name(node()) -> {ok, binary(), binary()} | {error, _}.
 split_node_name(Name) ->

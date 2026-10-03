@@ -29,7 +29,7 @@ jobs:
     - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
       with:
         repository: 'k32/anvl'
-        ref: '0.1.0'
+        ref: '8cc605e2cc2aaa29536a662077284948ea6e55e4'
         path: 'anvl'
 
     - name: ANVL bootstrap

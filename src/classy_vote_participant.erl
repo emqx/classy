@@ -8,6 +8,8 @@
 
 %% API:
 -export([restore/1, start_link/1, fold_ongoing/3, rm/2]).
+%% Internal exports
+-export([on_leave_level/2]).
 
 %% Behavior callbacks:
 -export([callback_mode/0, init/1, terminate/3, handle_event/4]).
@@ -78,7 +80,7 @@ start_link(Prepare = #prepare{id = ID}) ->
     [Prepare],
     []).
 
--spec restore(classy_rl_changer:run_level_int()) -> ok.
+-spec restore(classy:run_level()) -> ok.
 restore(RunLevel) ->
   MS = { #classy_kv{k = #pk_pd{_ = '_'}, v = '$1', _ = '_'}
        , []
@@ -87,17 +89,16 @@ restore(RunLevel) ->
   lists:foreach(
     fun(Prep = #prepare{run_level = RL}) ->
         RL =:= RunLevel andalso
-          vote(Prep)
+          start_vote_no_guard(Prep)
     end,
     ets:select(?ptab, [MS])).
 
 -spec fold_ongoing(fun((classy_vote:vote_info(), Acc) -> Acc), Acc, _TagPattern) -> Acc.
 fold_ongoing(Fun, Acc0, TagPattern) ->
-  MS = { #classy_kv{k = #pk_pd{tag = TagPattern, _ = '_'}, _ = '_'}
-       , []
-       , ['$_']
-       },
-  do_fold_ongoing(Fun, Acc0, ets:select(?ptab, [MS], ?fold_batch_size)).
+  do_fold_ongoing(
+    Fun,
+    Acc0,
+    ets:select(?ptab, filter_by_tag(TagPattern), ?fold_batch_size)).
 
 -doc false.
 -spec rm(classy_vote:tag(), classy_vote:id()) -> ok | {error, _}.
@@ -110,6 +111,27 @@ rm(Tag, Id) ->
   end,
   db_teardown(Tag, Id).
 
+-doc false.
+-spec on_leave_level(classy:run_level(), timeout()) -> ok.
+on_leave_level(RunLevel, Timeout) ->
+  %% Broadcast exit signals:
+  Fun = fun(#{id := Id, run_level := RL}, Acc) ->
+            true = RL >= RunLevel, % assert
+            case gproc:where(?participant(Id)) of
+              undefined ->
+                Acc;
+              Pid when is_pid(Pid) ->
+                exit(Pid, exit_run_level),
+                [{Pid, monitor(process, Pid)} | Acc]
+            end
+        end,
+  PendingDown = do_fold_ongoing(
+                  Fun,
+                  [],
+                  ets:select(?ptab, filter_by_run_level(RunLevel), ?fold_batch_size)),
+  %% Wait for termination:
+  classy_lib:wait_multiple_downs(PendingDown, Timeout).
+
 %%================================================================================
 %% Internal exports
 %%================================================================================
@@ -117,7 +139,11 @@ rm(Tag, Id) ->
 %% @private Coordinator -> Participant
 -spec pre_vote(#prepare{}) -> boolean().
 pre_vote(Prepare = #prepare{run_level = RL}) ->
-  classy_rl_changer:get_int(current) >= RL andalso
+  %% NOTE: this method of getting minimal safe run level is prone to
+  %% race conditions. However, keep in mind that this is merely a
+  %% pre-check. At worst, we enter a heavier persistent path and vote
+  %% NO there.
+  classy_boot:run_level(ready) >= RL andalso
     case do_prepare(Prepare, false) of
       {ok, Bool} when is_boolean(Bool) ->
         Bool;
@@ -127,14 +153,14 @@ pre_vote(Prepare = #prepare{run_level = RL}) ->
 
 %% @private Coordinator -> Participant
 -spec vote(#prepare{}) -> ok | {error, _}.
-vote(Prepare = #prepare{tag = Tag, id = ID, run_level = RunLevel}) ->
-  ?tp(debug, ?classy_vote_part_recv, #{id => ID, tag => Tag}),
-  case classy_sup:ensure_vote_participant(RunLevel, [Prepare]) of
-    {ok, _Pid} ->
-      ok;
-    Err ->
-      Err
-  end.
+vote(Prepare = #prepare{run_level = RunLevel}) ->
+  %% TODO: this is not a foolproof method of avoiding premature start
+  %% of the process. Accepting this for now.
+  classy_boot:with_ready(
+    RunLevel,
+    fun() ->
+        start_vote_no_guard(Prepare)
+    end).
 
 %% @private Coordinator -> Participant
 -spec receive_outcome(classy_vote:outcome()) -> ack.
@@ -191,6 +217,8 @@ handle_event(state_timeout, ?state_timeout, ?s_prepare, D) ->
   do_real_vote(D);
 handle_event({call, From}, #c_outcome{} = Outcome, ?s_wait_outcome, D) ->
   do_receive_outcome(From, Outcome, D);
+handle_event(info, {'EXIT', _, exit_run_level}, _, _) ->
+  {stop, normal};
 handle_event(ET, Event, State, _Data) ->
   %% TODO: put ID and MFAs into error messages
   ?tp(warning, ?classy_unknown_event,
@@ -214,6 +242,16 @@ terminate(Reason, State, _Data) ->
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+-spec start_vote_no_guard(#prepare{}) -> ok | {error, _}.
+start_vote_no_guard(Prepare = #prepare{tag = Tag, id = ID, run_level = RunLevel}) ->
+  ?tp(debug, ?classy_vote_part_recv, #{id => ID, tag => Tag}),
+  case classy_sup:ensure_vote_participant([Prepare]) of
+    {ok, _Pid} ->
+      ok;
+    Err ->
+      Err
+  end.
 
 do_receive_outcome(From, #c_outcome{result = Result}, D0 = #d{vote = MyVote, prep = Prep}) ->
   {ok, Self} = classy:the_site(),
@@ -426,16 +464,18 @@ get_prepare(Tag, Id) ->
       undefined
   end.
 
+
 do_fold_ongoing(_Fun, Acc, '$end_of_table') ->
   Acc;
 do_fold_ongoing(Fun, Acc0, {Batch, Cont}) ->
   Acc = lists:foldl(
           fun(#classy_kv{k = #pk_pd{tag = Tag, id = Id}, v = Prepare}, Acc1) ->
-              #prepare{coordinator = Coord} = Prepare,
+              #prepare{coordinator = Coord, run_level = RunLevel} = Prepare,
               Fun(
-                #{ tag => Tag
-                 , id => Id
-                 , role => participant
+                #{ tag         => Tag
+                 , id          => Id
+                 , role        => participant
+                 , run_level   => RunLevel
                  , coordinator => Coord
                  },
                 Acc1)
@@ -443,6 +483,21 @@ do_fold_ongoing(Fun, Acc0, {Batch, Cont}) ->
           Acc0,
           Batch),
   do_fold_ongoing(Fun, Acc, ets:select(Cont)).
+
+filter_by_tag(TagPattern) ->
+  [{ #classy_kv{k = #pk_pd{tag = TagPattern, _ = '_'}, _ = '_'}
+   , []
+   , ['$_']
+   }].
+
+filter_by_run_level(RunLevel) ->
+  [{ #classy_kv{ k = #pk_pd{_ = '_'}
+               , v = #prepare{run_level = '$1', _ = '_'}
+               , _ = '_'
+               }
+   , [{'>=', '$1', RunLevel}]
+   , ['$_']
+   }].
 
 nthtail(NComplete, Actions) ->
   lists:nthtail(

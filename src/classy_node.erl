@@ -387,7 +387,7 @@ terminate(Reason, _S) ->
          }),
   classy_table:flush(?tab),
   classy_table:flush(?site_info),
-  to_stopped(shutdown, infinity),
+  to_stopped(shutdown),
   persistent_term:erase(?pt_node_sets),
   persistent_term:erase(?pt_site_sets),
   persistent_term:erase(?pt_site),
@@ -630,7 +630,7 @@ on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
         update_site_info(false, Peer, undefined, S)
     end),
   %% Sync with the business apps:
-  to_stopped(leave, infinity),
+  to_stopped(leave),
   {ok, _} = classy_table:atomically(
               ?tab,
               [ {d, ?the_cluster}
@@ -722,20 +722,34 @@ ensure_the_id(Key, OnCreateHook, HookArgs, Default) ->
       }
   end.
 
+%% NOTE: must be called after `classify':
 -spec adjust_run_level(#s{}) -> #s{}.
 adjust_run_level(S) ->
-  %% NOTE: must be called after `classify':
+  %% Manage cluster barrier:
+  ClusterBarrier = cluster,
   NKnown = length(intersection(classy_lib:to_cluster_sets())),
+  case NKnown >= classy_lib:n_sites() of
+    true  ->
+      classy_boot:rm_barrier(ClusterBarrier);
+    false ->
+      classy_boot:set_barrier(
+        ClusterBarrier,
+        ?classy_rl_cluster - 1,
+        [async, {hint, <<"Waiting for a sufficient number of known peers">>}])
+  end,
+  %% Manage quorum barrier:
+  QuorumBarrier = quorum,
   NConnected = length(intersection(classy_lib:quorum_sets())),
-  RunLevel = case NKnown >= classy_lib:n_sites() of
-               true  ->
-                 case NConnected >= classy:quorum(config) of
-                   true  -> ?quorum;
-                   false -> ?cluster
-                 end;
-               false -> ?single
-             end,
-  set_run_level(RunLevel),
+  case NConnected >= classy:quorum(config) of
+    true  ->
+      classy_boot:rm_barrier(QuorumBarrier);
+    false ->
+      classy_boot:set_barrier(
+        QuorumBarrier,
+        ?classy_rl_quorum - 1,
+        [async, {hint, <<"Waiting for a sufficient number of connected peers">>}])
+  end,
+  classy_boot:ensure_started(),
   S.
 
 %% Start membership processes for all known former clusters, in order
@@ -750,9 +764,9 @@ start_old_clusters(Site) ->
     end,
     classy_membership:known_clusters(Site)).
 
-to_stopped(Reason, Timeout) ->
+to_stopped(Reason) ->
   prep_stop(Reason),
-  classy_rl_changer:set_sync(?stopped, Timeout).
+  classy_boot:stop_system().
 
 -spec the_cluster() -> {ok, classy:cluster_id()} | undefined.
 the_cluster() ->
@@ -816,7 +830,7 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
 
 -spec on_remote_restart(#s{}) -> {ok, #s{}}.
 on_remote_restart(S) ->
-  to_stopped(remote_restart, 120_000),
+  to_stopped(remote_restart),
   {ok, adjust_run_level(S)}.
 
 -spec import_deltas(boolean(), #{classy:site() => classy_membership:update()}, #s{}) ->
@@ -1026,14 +1040,3 @@ foreach_site_info(Fun) ->
         [],
         ?site_info),
   ok.
-
--ifndef(TEST).
-%% In real live we change levels async-ly:
-set_run_level(Level) ->
-  classy_rl_changer:set(Level).
--else.
-%% In the tests we want to sequence the events.
-set_run_level(Level) ->
-  ok = classy_rl_changer:set_sync(Level, 5_000),
-  ok.
--endif.

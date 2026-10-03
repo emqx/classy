@@ -18,9 +18,7 @@
 -export([callback_mode/0, init/1, terminate/3, handle_event/4]).
 
 %% internal exports:
--export([ start_link/2
-        , receive_vote/1
-        ]).
+-export([start_link/2, receive_vote/1, on_leave_level/2]).
 
 -include_lib("snabbkaffe/include/trace.hrl").
 -include("classy.hrl").
@@ -73,12 +71,12 @@
 
 %% This data is stored persistently:
 -record(opts,
-        { strategy   :: classy_vote:strategy()
-        , actions    :: #{classy:site() => #act{}}
-        , post_vote  :: [classy_lib:mfargs()]
-        , on_fail    :: [classy_lib:mfargs()]
-        , start_time :: integer()
-        , run_level  :: classy_rl_changer:run_level_int()
+        { strategy   :: classy_vote:strategy()     | classy_lib:ets_selector()
+        , actions    :: #{classy:site() => #act{}} | classy_lib:ets_selector()
+        , post_vote  :: [classy_lib:mfargs()]      | classy_lib:ets_selector()
+        , on_fail    :: [classy_lib:mfargs()]      | classy_lib:ets_selector()
+        , start_time :: integer()                  | classy_lib:ets_selector()
+        , run_level  :: classy:run_level()         | classy_lib:ets_selector()
         , reserved = []
         }).
 -record(d,
@@ -95,7 +93,13 @@
 -spec new(classy_vote:id(), classy_vote:cooked_options()) -> {ok, pid()} | {error, _}.
 new(ID, Options = #{tag := Tag, run_level := RunLevel}) ->
   ?tp(debug, ?classy_vote_flow_start, #{id => ID, tag => Tag}),
-  classy_sup:ensure_vote_coordinator(RunLevel, [true, {ID, Options}]).
+  %% TODO: this is not a foolproof method of avoiding premature start
+  %% of the process. Accepting this for now.
+  classy_boot:with_ready(
+    RunLevel,
+    fun() ->
+        classy_sup:ensure_vote_coordinator([true, {ID, Options}])
+    end).
 
 -doc false.
 -spec rm(classy_vote:tag(), classy_vote:id()) -> ok | {error, _}.
@@ -135,7 +139,7 @@ receive_vote(#c_vote{id = ID} = Vote) ->
     Vote).
 
 %% Restore votes that were ongoing before the node shut down
--spec restore(classy_rl_changer:run_level_int()) -> ok.
+-spec restore(classy:run_level()) -> ok.
 restore(RunLevel) ->
   MS = { #classy_kv{k = #pk_cd{tag = '$1', id = '$2'}, v = '$3'}
        , []
@@ -145,17 +149,37 @@ restore(RunLevel) ->
   lists:foreach(
     fun({_, _, #opts{run_level = RL}} = StartArgs) ->
         RL =:= RunLevel andalso
-          classy_sup:ensure_vote_coordinator(RunLevel, [false, StartArgs])
+          classy_sup:ensure_vote_coordinator([false, StartArgs])
     end,
     Ongoing).
 
 -spec fold_ongoing(fun((classy_vote:vote_info(), Acc) -> Acc), Acc, _TagPattern) -> Acc.
 fold_ongoing(Fun, Acc0, TagPattern) ->
-  MS = { #classy_kv{k = #pk_cd{tag = TagPattern, _ = '_'}, _ = '_'}
-       , []
-       , ['$_']
-       },
-  do_fold_ongoing(Fun, Acc0, ets:select(?ptab, [MS], ?fold_batch_size)).
+  do_fold_ongoing(
+    Fun,
+    Acc0,
+    ets:select(?ptab, filter_by_tag(TagPattern), ?fold_batch_size)).
+
+-doc false.
+-spec on_leave_level(classy:run_level(), pos_integer()) -> ok.
+on_leave_level(RunLevel, Timeout) ->
+  %% Broadcast exit signals:
+  Fun = fun(#{id := Id, run_level := RL}, Acc) ->
+            true = RL >= RunLevel, % assert
+            case gproc:where(?coordinator(Id)) of
+              undefined ->
+                Acc;
+              Pid when is_pid(Pid) ->
+                exit(Pid, exit_run_level),
+                [{Pid, monitor(process, Pid)} | Acc]
+            end
+        end,
+  PendingDown = do_fold_ongoing(
+                  Fun,
+                  [],
+                  ets:select(?ptab, filter_by_run_level(RunLevel), ?fold_batch_size)),
+  %% Wait for termination:
+  classy_lib:wait_multiple_downs(PendingDown, Timeout).
 
 %%================================================================================
 %% behavior callbacks
@@ -178,6 +202,8 @@ handle_event({call, ReplyTo}, VoteData = #c_vote{}, Stage, D) ->
 handle_event(state_timeout, ?state_timeout, Stage, D) ->
   handle_state_timeout(Stage, D);
 %% Common:
+handle_event(info, {'EXIT', _, exit_run_level}, _Stage, _D) ->
+  {stop, normal};
 handle_event(ET, Event, State, _Data) ->
   %% TODO: put ID and MFAs into error messages
   ?tp(warning, ?classy_unknown_event,
@@ -491,12 +517,13 @@ do_fold_ongoing(_Fun, Acc, '$end_of_table') ->
 do_fold_ongoing(Fun, Acc0, {Batch, Cont}) ->
   Acc = lists:foldl(
           fun(#classy_kv{k = #pk_cd{tag = Tag, id = Id}, v = Opts}, Acc1) ->
-              #opts{start_time = StartTime, actions = Acts} = Opts,
+              #opts{start_time = StartTime, actions = Acts, run_level = RunLevel} = Opts,
               Fun(
-                #{ tag => Tag
-                 , id => Id
-                 , start_time => StartTime
-                 , role => coordinator
+                #{ tag          => Tag
+                 , id           => Id
+                 , start_time   => StartTime
+                 , role         => coordinator
+                 , run_level    => RunLevel
                  , participants => maps:keys(Acts)
                  },
                 Acc1)
@@ -504,6 +531,21 @@ do_fold_ongoing(Fun, Acc0, {Batch, Cont}) ->
           Acc0,
           Batch),
   do_fold_ongoing(Fun, Acc, ets:select(Cont)).
+
+filter_by_tag(TagPattern) ->
+  [{ #classy_kv{k = #pk_cd{tag = TagPattern, _ = '_'}, _ = '_'}
+   , []
+   , ['$_']
+   }].
+
+filter_by_run_level(RunLevel) ->
+  [{ #classy_kv{ k = #pk_cd{_ = '_'}
+               , v = #opts{run_level = '$1', _ = '_'}
+               , _ = '_'
+               }
+   , [{'>=', '$1', RunLevel}]
+   , ['$_']
+   }].
 
 %%--------------------------------------------------------------------------------
 %% Database access
