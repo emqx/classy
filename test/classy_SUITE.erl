@@ -342,11 +342,14 @@ t_042_node_monitoring(_) ->
                                 5_000),
                   Sub
               end,
+  ClassifyEvents = fun(Events) ->
+                       maps:groups_from_list(
+                         fun(#{local := L}) -> L end,
+                         Events)
+                   end,
   Receive = fun(Sub) ->
                 {ok, Events} = snabbkaffe:receive_events(Sub),
-                maps:groups_from_list(
-                  fun(#{local := L}) -> L end,
-                  Events)
+                ClassifyEvents(Events)
             end,
   ?check_trace(
      #{timetrap => ?timetrap},
@@ -423,7 +426,7 @@ t_042_node_monitoring(_) ->
             ?assertEqual(
                2 + 2 + 4,
                length(Events),
-               Events)
+               ClassifyEvents(Events))
         end}
      ]).
 

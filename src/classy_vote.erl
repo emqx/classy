@@ -383,14 +383,13 @@ on_fail(FailInfo, Funs) ->
 
 -doc false.
 -spec on_run_level(enter | leave, classy:run_level()) -> ok.
-on_run_level(enter, To) when To > 0,
-                             ?predefined_run_level(To) ->
-  classy_sup:ensure_vote_sup(To);
-on_run_level(leave, From) when From > 0,
-                               ?predefined_run_level(From) ->
-  classy_sup:terminate_vote_sup(From);
-on_run_level(_, _) ->
-  ok.
+on_run_level(enter, Level) ->
+  classy_vote_coordinator:restore(Level),
+  classy_vote_participant:restore(Level);
+on_run_level(leave, Level) ->
+  Timeout = 5_000,
+  classy_vote_participant:on_leave_level(Level, Timeout),
+  classy_vote_coordinator:on_leave_level(Level, Timeout).
 
 %%================================================================================
 %% Internal functions

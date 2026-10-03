@@ -113,4 +113,6 @@
                                       LEVEL =:= ?classy_rl_quorum orelse
                                       LEVEL =:= ?classy_rl_ready)).
 
+-define(dict_worker_pid, classy_worker_pid).
+
 -endif.

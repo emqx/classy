@@ -98,7 +98,7 @@ new(ID, Options = #{tag := Tag, run_level := RunLevel}) ->
   classy_boot:with_ready(
     RunLevel,
     fun() ->
-        classy_sup:ensure_vote_coordinator(RunLevel, [true, {ID, Options}])
+        classy_sup:ensure_vote_coordinator([true, {ID, Options}])
     end).
 
 -doc false.
@@ -149,7 +149,7 @@ restore(RunLevel) ->
   lists:foreach(
     fun({_, _, #opts{run_level = RL}} = StartArgs) ->
         RL =:= RunLevel andalso
-          classy_sup:ensure_vote_coordinator(RunLevel, [false, StartArgs])
+          classy_sup:ensure_vote_coordinator([false, StartArgs])
     end,
     Ongoing).
 
@@ -202,6 +202,8 @@ handle_event({call, ReplyTo}, VoteData = #c_vote{}, Stage, D) ->
 handle_event(state_timeout, ?state_timeout, Stage, D) ->
   handle_state_timeout(Stage, D);
 %% Common:
+handle_event(info, {'EXIT', _, exit_run_level}, _Stage, _D) ->
+  {stop, normal};
 handle_event(ET, Event, State, _Data) ->
   %% TODO: put ID and MFAs into error messages
   ?tp(warning, ?classy_unknown_event,

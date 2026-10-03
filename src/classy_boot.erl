@@ -726,8 +726,16 @@ running_hook_info() ->
   maybe
     Pid = whereis(?hook_runner),
     true ?= is_pid(Pid),
-    [{current_stacktrace, Stack}] ?= process_info(Pid, [current_stacktrace]),
-    Stack
+    [ {current_stacktrace, OrigStack}
+    , {dictionary, Dict}
+    ] ?= process_info(Pid, [current_stacktrace, dictionary]),
+    case lists:keyfind(?dict_worker_pid, 1, Dict) of
+      {_, RealPid} ->
+        [{_, Stack}] = process_info(RealPid, [current_stacktrace]),
+        Stack;
+      _ ->
+        OrigStack
+    end
   else
     _ ->
       false

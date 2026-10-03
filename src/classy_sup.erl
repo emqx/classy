@@ -13,12 +13,10 @@
         , stop/1
         , start_table/2
         , ensure_membership/2
-        , ensure_vote_coordinator/2
-        , ensure_vote_participant/2
+        , ensure_vote_coordinator/1
+        , ensure_vote_participant/1
         , ensure_liveness_server/0
         , terminate_liveness_server/0
-        , ensure_vote_sup/1
-        , terminate_vote_sup/1
         , stop_system/0
         ]).
 
@@ -29,9 +27,9 @@
 -export([ start_link_top/0
         , start_link_table_sup/0
         , start_link_membership_sup/0
-        , start_link_vote_sup/0
-        , start_link_vote_coordinator_sup/1
-        , start_link_vote_participant_sup/1
+        , start_link_dynamic_sup/0
+        , start_link_vote_coordinator_sup/0
+        , start_link_vote_participant_sup/0
         ]).
 
 -export_type([]).
@@ -57,18 +55,8 @@
 %% run level changes:
 -define(DYNAMIC_SUP, classy_rl_dependent_sup).
 %% Vote supervisors:
-%%   Single:
--define(VOTE_COORDINATOR_SUP_1, classy_vote_coordinator_sup1).
--define(VOTE_PARTICIPANT_SUP_1, classy_vote_participant_sup1).
-%%   Cluster:
--define(VOTE_COORDINATOR_SUP_2, classy_vote_coordinator_sup2).
--define(VOTE_PARTICIPANT_SUP_2, classy_vote_participant_sup2).
-%%   Quorum:
--define(VOTE_COORDINATOR_SUP_3, classy_vote_coordinator_sup3).
--define(VOTE_PARTICIPANT_SUP_3, classy_vote_participant_sup3).
-%%   Ready:
--define(VOTE_COORDINATOR_SUP_4, classy_vote_coordinator_sup4).
--define(VOTE_PARTICIPANT_SUP_4, classy_vote_participant_sup4).
+-define(VOTE_COORDINATOR_SUP, classy_vote_coordinator_sup).
+-define(VOTE_PARTICIPANT_SUP, classy_vote_participant_sup).
 
 %%================================================================================
 %% API functions
@@ -120,13 +108,13 @@ ensure_membership(Cluster, Site) ->
       Err
   end.
 
--spec ensure_vote_coordinator(classy:run_level(), list()) -> {ok, pid()} | {error, _}.
-ensure_vote_coordinator(RunLevel, Args) ->
-  simple_one_for_one_ensure_child(vote_coord_sup(RunLevel), Args).
+-spec ensure_vote_coordinator(list()) -> {ok, pid()} | {error, _}.
+ensure_vote_coordinator(Args) ->
+  simple_one_for_one_ensure_child(?VOTE_COORDINATOR_SUP, Args).
 
--spec ensure_vote_participant(classy:run_level(), list()) -> {ok, pid()} | {error, _}.
-ensure_vote_participant(RunLevel, Args) ->
-  simple_one_for_one_ensure_child(vote_participant_sup(RunLevel), Args).
+-spec ensure_vote_participant(list()) -> {ok, pid()} | {error, _}.
+ensure_vote_participant(Args) ->
+  simple_one_for_one_ensure_child(?VOTE_PARTICIPANT_SUP, Args).
 
 -spec ensure_liveness_server() -> ok.
 ensure_liveness_server() ->
@@ -143,31 +131,6 @@ ensure_liveness_server() ->
 -spec terminate_liveness_server() -> ok.
 terminate_liveness_server() ->
   terminate_child(?DYNAMIC_SUP, liveness).
-
--spec ensure_vote_sup(classy:run_level()) -> ok.
-ensure_vote_sup(RunLevel) ->
-  ensure_child(
-    ?DYNAMIC_SUP,
-    #{ id => vote_coord_sup(RunLevel)
-     , start => {?MODULE, start_link_vote_coordinator_sup, [RunLevel]}
-     , shutdown => infinity
-     , restart => permanent
-     , type => supervisor
-     }),
-  ensure_child(
-    ?DYNAMIC_SUP,
-    #{ id => vote_participant_sup(RunLevel)
-     , start => {?MODULE, start_link_vote_participant_sup, [RunLevel]}
-     , shutdown => infinity
-     , restart => permanent
-     , type => supervisor
-     }),
-  ok.
-
--spec terminate_vote_sup(classy:run_level()) -> ok.
-terminate_vote_sup(RunLevel) ->
-  terminate_child(?DYNAMIC_SUP, vote_coord_sup(RunLevel)),
-  terminate_child(?DYNAMIC_SUP, vote_participant_sup(RunLevel)).
 
 -spec stop_system() -> ok | {error, _}.
 stop_system() ->
@@ -194,27 +157,17 @@ start_link_table_sup() ->
 start_link_membership_sup() ->
   supervisor:start_link({local, ?MEMBERSHIP_SUP}, ?MODULE, #membership_sup{}).
 
--spec start_link_vote_sup() -> supervisor:startlink_ret().
-start_link_vote_sup() ->
+-spec start_link_dynamic_sup() -> supervisor:startlink_ret().
+start_link_dynamic_sup() ->
   supervisor:start_link({local, ?DYNAMIC_SUP}, ?MODULE, #dynamic_sup{}).
 
--spec start_link_vote_coordinator_sup(classy:predefined_run_level()) -> supervisor:startlink_ret().
-start_link_vote_coordinator_sup(RunLevel) ->
-  Name = vote_coord_sup(RunLevel),
-  maybe
-    {ok, Pid} ?= supervisor:start_link({local, Name}, ?MODULE, #vote_sup{type = coordinators}),
-    ok ?= classy_vote_coordinator:restore(RunLevel),
-    {ok, Pid}
-  end.
+-spec start_link_vote_coordinator_sup() -> supervisor:startlink_ret().
+start_link_vote_coordinator_sup() ->
+  supervisor:start_link({local, ?VOTE_COORDINATOR_SUP}, ?MODULE, #vote_sup{type = coordinators}).
 
--spec start_link_vote_participant_sup(classy:predefined_run_level()) -> supervisor:startlink_ret().
-start_link_vote_participant_sup(RunLevel) ->
-  Name = vote_participant_sup(RunLevel),
-  maybe
-    {ok, Pid} ?= supervisor:start_link({local, Name}, ?MODULE, #vote_sup{type = participants}),
-    ok ?= classy_vote_participant:restore(RunLevel),
-    {ok, Pid}
-  end.
+-spec start_link_vote_participant_sup() -> supervisor:startlink_ret().
+start_link_vote_participant_sup() ->
+  supervisor:start_link({local, ?VOTE_PARTICIPANT_SUP}, ?MODULE, #vote_sup{type = participants}).
 
 %%================================================================================
 %% behavior callbacks
@@ -254,7 +207,9 @@ init(#top{}) ->
                  },
   Children = [ sup_spec(#{id => ?TABLE_SUP, start => {?MODULE, start_link_table_sup, []}})
              , sup_spec(#{id => ?MEMBERSHIP_SUP, start => {?MODULE, start_link_membership_sup, []}})
-             , sup_spec(#{id => ?DYNAMIC_SUP, start => {?MODULE, start_link_vote_sup, []}})
+             , sup_spec(#{id => ?DYNAMIC_SUP, start => {?MODULE, start_link_dynamic_sup, []}})
+             , sup_spec(#{id => ?VOTE_COORDINATOR_SUP, start => {?MODULE, start_link_vote_coordinator_sup, []}})
+             , sup_spec(#{id => ?VOTE_PARTICIPANT_SUP, start => {?MODULE, start_link_vote_participant_sup, []}})
              , RLChanger
              , Node
              , Autocluster
@@ -385,23 +340,3 @@ terminate_child(Sup, Id) ->
     Other ->
       Other
   end.
-
--spec vote_coord_sup(classy:predefined_run_level()) -> atom().
-vote_coord_sup(?classy_rl_single) ->
-  ?VOTE_COORDINATOR_SUP_1;
-vote_coord_sup(?classy_rl_cluster) ->
-  ?VOTE_COORDINATOR_SUP_2;
-vote_coord_sup(?classy_rl_quorum) ->
-  ?VOTE_COORDINATOR_SUP_3;
-vote_coord_sup(?classy_rl_ready) ->
-  ?VOTE_COORDINATOR_SUP_4.
-
--spec vote_participant_sup(classy:predefined_run_level()) -> atom().
-vote_participant_sup(?classy_rl_single) ->
-  ?VOTE_PARTICIPANT_SUP_1;
-vote_participant_sup(?classy_rl_cluster) ->
-  ?VOTE_PARTICIPANT_SUP_2;
-vote_participant_sup(?classy_rl_quorum) ->
-  ?VOTE_PARTICIPANT_SUP_3;
-vote_participant_sup(?classy_rl_ready) ->
-  ?VOTE_PARTICIPANT_SUP_4.

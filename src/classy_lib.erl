@@ -54,9 +54,13 @@ Misc. utility functions.
              , ets_selector/0
              ]).
 
+-include("classy_internal.hrl").
+
 %%================================================================================
 %% Type declarations
 %%================================================================================
+
+-define(async_worker_pid, classy_async_worker_pid).
 
 -type mfargs() :: {module(), atom(), list()}.
 
@@ -115,6 +119,8 @@ safe_apply(Module, Function, Args) ->
 
 -doc """
 Apply a function in a separate process with a timeout.
+
+WARNING: aborting the calling process while running this function may leave the child process running.
 """.
 -spec safe_apply_with_timeout(callback(), timeout()) ->
         {ok, term()} |
@@ -126,13 +132,16 @@ safe_apply_with_timeout(Callback, Timeout) ->
                   fun() ->
                       exit(safe_apply(Callback))
                   end),
+  put(?dict_worker_pid, Pid),
   receive
     {'DOWN', MRef, process, Pid, Reason} ->
+      erase(?dict_worker_pid),
       Reason
   after Timeout ->
       Info = process_info(Pid, [current_stacktrace]),
       demonitor(MRef, [flush]),
       exit(Pid, kill),
+      erase(?dict_worker_pid),
       {error, {timeout, Info}}
   end.
 
@@ -452,7 +461,7 @@ wait_multiple_downs(Refs, Timeout) when is_integer(Timeout);
     fun(MRef) ->
         After = case Timeout of
                   infinity -> infinity;
-                  _        -> max(0, T + Timeout - erlang:monotonic_time())
+                  _        -> max(0, T + Timeout - erlang:monotonic_time(millisecond))
                 end,
         receive
           {'DOWN', MRef, process, _Pid, _Reason} -> ok

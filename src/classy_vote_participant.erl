@@ -217,6 +217,8 @@ handle_event(state_timeout, ?state_timeout, ?s_prepare, D) ->
   do_real_vote(D);
 handle_event({call, From}, #c_outcome{} = Outcome, ?s_wait_outcome, D) ->
   do_receive_outcome(From, Outcome, D);
+handle_event(info, {'EXIT', _, exit_run_level}, _, _) ->
+  {stop, normal};
 handle_event(ET, Event, State, _Data) ->
   %% TODO: put ID and MFAs into error messages
   ?tp(warning, ?classy_unknown_event,
@@ -244,7 +246,7 @@ terminate(Reason, State, _Data) ->
 -spec start_vote_no_guard(#prepare{}) -> ok | {error, _}.
 start_vote_no_guard(Prepare = #prepare{tag = Tag, id = ID, run_level = RunLevel}) ->
   ?tp(debug, ?classy_vote_part_recv, #{id => ID, tag => Tag}),
-  case classy_sup:ensure_vote_participant(RunLevel, [Prepare]) of
+  case classy_sup:ensure_vote_participant([Prepare]) of
     {ok, _Pid} ->
       ok;
     Err ->
