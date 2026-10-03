@@ -195,7 +195,7 @@ business logic is entirely responsible for removing the barriers.
 -spec set_barrier(barrier_id(), classy:run_level(), [Option]) -> ok | {error, deleted | badarg}
           when Option :: monitor | async | {hint, description()}.
 set_barrier(LockId, RunLevel, Options) when ?valid_run_level(RunLevel),
-                                            RunLevel =/= ?classy_rl_stopped;
+                                            RunLevel =/= ?classy_rl_stopped,
                                             LockId =/= ?stopped_barrier ->
   %% NOTE: RunLevel = 0 is special for this server, as it purges the
   %% barriers. Business logic must not use it.
@@ -315,9 +315,9 @@ Helper function that run the callback if the current @code{ready} run level is a
 NOTE: currently it doesn't protect against race conditions
 when the level is changing during execution of the callback.
 """.
--spec with_ready(classy:run_level(), fun(() -> A)) -> {ok, A} | {error, not_ready}.
+-spec with_ready(classy:run_level(), fun(() -> A)) -> A | {error, not_ready}.
 with_ready(MinLevel, Fun) ->
-  case run_level(ready) - 1 of
+  case run_level(ready) of
     L when L >= MinLevel ->
       Fun();
     _ ->
@@ -731,8 +731,12 @@ running_hook_info() ->
     ] ?= process_info(Pid, [current_stacktrace, dictionary]),
     case lists:keyfind(?dict_worker_pid, 1, Dict) of
       {_, RealPid} ->
-        [{_, Stack}] = process_info(RealPid, [current_stacktrace]),
-        Stack;
+        case process_info(RealPid, [current_stacktrace]) of
+          [{_, Stack}] ->
+            Stack;
+          undefined ->
+            OrigStack
+        end;
       _ ->
         OrigStack
     end
