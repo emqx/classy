@@ -187,12 +187,12 @@ init(#app{}) ->
 init(#top{}) ->
   %% Top business logic supervisor which launches the system. When it
   %% launches, classy starts executing hooks.
-  RLChanger = #{ id       => run_level_mgr
-               , start    => {classy_boot, start_link, []}
-               , shutdown => infinity
-               , restart  => permanent
-               , type     => worker
-               },
+  Boot = #{ id       => run_level_mgr
+          , start    => {classy_boot, start_link, []}
+          , shutdown => infinity
+          , restart  => permanent
+          , type     => worker
+          },
   Node = #{ id       => node
           , start    => {classy_node, start_link, []}
           , shutdown => infinity
@@ -210,7 +210,7 @@ init(#top{}) ->
              , sup_spec(#{id => ?DYNAMIC_SUP, start => {?MODULE, start_link_dynamic_sup, []}})
              , sup_spec(#{id => ?VOTE_COORDINATOR_SUP, start => {?MODULE, start_link_vote_coordinator_sup, []}})
              , sup_spec(#{id => ?VOTE_PARTICIPANT_SUP, start => {?MODULE, start_link_vote_participant_sup, []}})
-             , RLChanger
+             , Boot
              , Node
              , Autocluster
              ],
