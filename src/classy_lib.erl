@@ -453,12 +453,12 @@ map_deep_insert([K | Rest], Val, Outer) ->
   end.
 
 -doc false.
--spec wait_multiple_downs([reference()], timeout()) -> ok.
+-spec wait_multiple_downs([{pid(), reference()}], timeout()) -> ok.
 wait_multiple_downs(Refs, Timeout) when is_integer(Timeout);
                                         Timeout =:= infinity ->
   T = erlang:monotonic_time(millisecond),
   lists:foreach(
-    fun(MRef) ->
+    fun({Pid, MRef}) ->
         After = case Timeout of
                   infinity -> infinity;
                   _        -> max(0, T + Timeout - erlang:monotonic_time(millisecond))
@@ -466,7 +466,8 @@ wait_multiple_downs(Refs, Timeout) when is_integer(Timeout);
         receive
           {'DOWN', MRef, process, _Pid, _Reason} -> ok
         after After ->
-            demonitor(MRef)
+            demonitor(MRef),
+            exit(Pid, kill)
         end
     end,
     Refs).

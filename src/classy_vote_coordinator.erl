@@ -171,7 +171,7 @@ on_leave_level(RunLevel, Timeout) ->
                 Acc;
               Pid when is_pid(Pid) ->
                 exit(Pid, exit_run_level),
-                [monitor(process, Pid) | Acc]
+                [{Pid, monitor(process, Pid)} | Acc]
             end
         end,
   PendingDown = do_fold_ongoing(
