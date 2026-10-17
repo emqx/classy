@@ -353,6 +353,15 @@ The document was typeset with
       If set to @code{auto},
       then the value is calculated as majority @code{@ref{n_sites}}.
 
+    @defen{join_lock_autoclean, @code{pos_integer()}, 15s}
+
+      @emph{Unit}: ms
+
+      When the node A joins to B, it prevents B from joining other nodes until the procedure is complete.
+      This mechanism is mostly used so the initial cluster formation (when multiple nodes join to each other) happens in an orderly fashion.
+      However, if the node A becomes unresponsive while holding the lock, the lock will automatically expire after set time.
+      Tuning this value may be necessary if the join procedure may take a very long time,
+      e.g. due to heavy work done in the hooks.
 
   @section Two-phase commit
     @defen{vote_retry_interval, @code{pos_integer()}, 5000}

@@ -35,6 +35,8 @@ Management of the local site and node.
 -export([ hello/0
         , on_ptab_update/2
         , notify_mem_deltas/2
+        , lock_join/2
+        , unlock_join/2
         ]).
 
 -include_lib("snabbkaffe/include/trace.hrl").
@@ -70,6 +72,16 @@ Management of the local site and node.
 -record(cast_mem_deltas,
         { cluster :: classy:cluster_id()
         , data :: #{classy:site() => classy_membership:update()}
+        }).
+-record(call_lock_join,
+        { pid :: pid()
+        , autoclean :: pos_integer()
+        }).
+-record(call_unlock_join,
+        { pid :: pid()
+        }).
+-record(to_auto_release_join_lock,
+        { pid :: pid()
         }).
 
 %% Value returned by hello method:
@@ -305,9 +317,16 @@ get_meta(Site) ->
 %% behavior callbacks
 %%================================================================================
 
+-record(jl,
+        { pid :: pid()
+        , mref :: reference()
+        , tref :: reference()
+        }).
+
 -record(s,
         { cluster :: classy:cluster_id() | undefined
         , site :: classy:site()
+        , join_locks = [] :: [#jl{}]
         }).
 
 -doc false.
@@ -347,6 +366,14 @@ handle_call(#call_kick{site = Target, intent = Intent}, _From, S0) ->
     {error, _} = Err ->
       {reply, Err, S0}
   end;
+handle_call(#call_lock_join{pid = Pid, autoclean = Timeout}, _From, S) ->
+  if is_pid(Pid), is_integer(Timeout), Timeout > 0 ->
+      {reply, true, do_lock_join(Pid, Timeout, S)};
+     true ->
+      {reply, {error, badarg}, S}
+  end;
+handle_call(#call_unlock_join{pid = Pid}, _From, S) ->
+  {reply, ok, do_unlock_join(Pid, S)};
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => call
@@ -370,6 +397,20 @@ handle_info(#cast_mem_deltas{} = Cast, S) ->
   handle_membership_change_event(Cast, S);
 handle_info({NodeUpOrDown, _Node, _}, S) when NodeUpOrDown =:= nodeup; NodeUpOrDown =:= nodedown ->
   {noreply, update_runtime(S)};
+handle_info(#to_auto_release_join_lock{pid = Pid}, S) ->
+  {noreply, do_unlock_join(Pid, S)};
+handle_info({'DOWN', MRef, process, _, _} = Info, S = #s{join_locks = JLs}) ->
+  case lists:keyfind(MRef, #jl.mref, JLs) of
+    #jl{pid = Pid} ->
+      {noreply, do_unlock_join(Pid, S)};
+    false ->
+      ?tp(warning, ?classy_unknown_event,
+          #{ kind => info
+           , content => Info
+           , server => ?MODULE
+           }),
+      {noreply, S}
+  end;
 handle_info(Info, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => info
@@ -451,6 +492,46 @@ notify_mem_deltas(Cluster, Deltas) ->
 -doc false.
 prep_stop(Reason) ->
   classy_hook:foreach(?on_prep_stop, [Reason]).
+
+-doc false.
+%% Prevent remote node from joining other nodes. This lock is used by
+%% peer processes when they join to us.
+%%
+%% It's safe to call this function multiple times, only the first lock
+%% will be kept for the caller process.
+-spec lock_join(node(), pos_integer()) -> boolean().
+lock_join(Node, AutoCleanAfter) ->
+  try
+    gen_server:call(
+      {?SERVER, Node},
+      #call_lock_join{pid = self(), autoclean = AutoCleanAfter},
+      classy_lib:rpc_timeout())
+  catch
+    exit:{noproc, _} ->
+      %% Node is not running or it's not classy-aware. Proceed without
+      %% the lock.
+      false;
+    exit:{timeout, _} ->
+      %% Uncertain. Try to release the lock later anyway:
+      true
+  end.
+
+-doc false.
+-spec unlock_join(node(), pid()) -> ok | {error, timeout}.
+unlock_join(Node, Pid) ->
+  Timeout = classy_lib:rpc_timeout(),
+  try
+    gen_server:call(
+      {?SERVER, Node},
+      #call_unlock_join{pid = Pid},
+      Timeout)
+  catch
+    exit:{noproc, _} ->
+      %% Nothing to unlock:
+      ok;
+    exit:{timeout, _} ->
+      {error, timeout}
+  end.
 
 %%================================================================================
 %% Internal functions
@@ -565,6 +646,8 @@ handle_kick(Target, Intent, S = #s{site = Local}) when is_binary(Local) ->
     {error, _} = Err -> Err
   end.
 
+handle_join(#s{join_locks = [_|_]}, _) ->
+  {error, retry_later};
 handle_join(S, Call) ->
   #call_join{ node    = Node
             , cluster = ExpectedCluster
@@ -604,12 +687,14 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
       %% Already in the same cluster with `Node'. Set our membership
       %% status and trigger re-sync (do we need to re-run hooks?):
       classy_membership:call_sync(Cluster, Local, MemData),
+      unlock_join(Node, self()),
       {ok, Clock} = classy_membership:set_member(Cluster, Local, Local, true),
       classy_membership:flush(Cluster, Local),
       ok = classy_table:write(?tab, ?joined_at, Clock),
       {ok, update_runtime(S0)};
     {ok, OldCluster} when OldCluster =/= Cluster ->
       %% Site is currently in a different cluster. Leave it first:
+      _ = lock_join(Node, join_lock_autoclean()),
       LeaveIntent = {join, #{node => Node, cluster => Cluster, join_intent => JoinIntent}},
       case handle_kick(Local, LeaveIntent, S0) of
         {ok, S} ->
@@ -619,6 +704,7 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
       end;
     undefined ->
       %% Site is not in any cluster:
+      _ = lock_join(Node, join_lock_autoclean()),
       {ok, S} = join_cluster(Cluster, Node, Local, Remote, JoinIntent, S0),
       do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S)
   end.
@@ -1040,3 +1126,30 @@ foreach_site_info(Fun) ->
         [],
         ?site_info),
   ok.
+
+-spec do_lock_join(pid(), pos_integer(), #s{}) -> #s{}.
+do_lock_join(Pid, Timeout, S = #s{join_locks = JLs0}) ->
+  case lists:keyfind(Pid, #jl.pid, JLs0) of
+    false ->
+      MRef = monitor(process, Pid),
+      TRef = erlang:send_after(Timeout, self(), #to_auto_release_join_lock{pid = Pid}),
+      JLs = [#jl{pid = Pid, mref = MRef, tref = TRef} | JLs0],
+      S#s{join_locks = JLs};
+    #jl{} ->
+      S
+  end.
+
+-spec do_unlock_join(pid(), #s{}) -> #s{}.
+do_unlock_join(Pid, S = #s{join_locks = JLs0}) ->
+  case lists:keytake(Pid, #jl.pid, JLs0) of
+    {value, #jl{mref = MRef, tref = TRef}, JLs} ->
+      demonitor(MRef, [flush]),
+      erlang:cancel_timer(TRef),
+      S#s{join_locks = JLs};
+    false ->
+      S
+  end.
+
+-spec join_lock_autoclean() -> pos_integer().
+join_lock_autoclean() ->
+  application:get_env(classy, join_lock_autoclean, 15_000).
