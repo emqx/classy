@@ -646,29 +646,39 @@ handle_kick(Target, Intent, S = #s{site = Local}) when is_binary(Local) ->
     {error, _} = Err -> Err
   end.
 
-handle_join(#s{join_locks = [_|_]}, _) ->
-  {error, retry_later};
 handle_join(S, Call) ->
   #call_join{ node    = Node
             , cluster = ExpectedCluster
             , intent  = Intent
             } = Call,
-  case hello(Node) of
-    #{ site := Remote
-     , cluster := Cluster
-     , mem_data := MemData
-     } when Cluster =:= ExpectedCluster;
-            ExpectedCluster =:= any ->
-      case classy_hook:all(?on_pre_join, [Cluster, Remote, Node, Intent]) of
-        ok ->
-          do_join_node(Node, Cluster, Remote, MemData, Intent, S);
-        {error, _} = Err ->
-          Err
-      end;
-    #{cluster := Cluster} ->
-      {error, {cluster_changed, #{ExpectedCluster => Cluster}}};
-    {error, _} = Err ->
-      Err
+  maybe
+    ok ?= check_join_locks(Intent, S),
+    case hello(Node) of
+      #{ site := Remote
+       , cluster := Cluster
+       , mem_data := MemData
+       } when Cluster =:= ExpectedCluster;
+              ExpectedCluster =:= any ->
+        case classy_hook:all(?on_pre_join, [Cluster, Remote, Node, Intent]) of
+          ok ->
+            do_join_node(Node, Cluster, Remote, MemData, Intent, S);
+          {error, _} = Err ->
+            Err
+        end;
+      #{cluster := Cluster} ->
+        {error, {cluster_changed, #{ExpectedCluster => Cluster}}};
+      {error, _} = Err ->
+        Err
+    end
+  end.
+
+-spec check_join_locks(classy:join_intent(), #s{}) -> ok | {error, _}.
+check_join_locks(_Intent, #s{join_locks = []}) ->
+  ok;
+check_join_locks(Intent, #s{join_locks = [_|_]}) ->
+  case lists:member(Intent, application:get_env(classy, force_intents, [])) of
+    true -> ok;
+    false -> {error, retry_later}
   end.
 
 -spec do_join_node(
