@@ -661,6 +661,7 @@ handle_kick(Target, Intent, S = #s{site = Local}) when is_binary(Local) ->
     {error, _} = Err -> Err
   end.
 
+-spec handle_join(#s{}, #call_join{}) -> {ok, #s{}} | {error, _}.
 handle_join(S, Call) ->
   #call_join{ node    = Node
             , cluster = ExpectedCluster
@@ -669,23 +670,26 @@ handle_join(S, Call) ->
   maybe
     ok ?= check_join_locks(Intent, S),
     _ = lock_join(Node),
-    case hello(Node) of
-      #{ site := Remote
-       , cluster := Cluster
-       , mem_data := MemData
-       } when Cluster =:= ExpectedCluster;
-              ExpectedCluster =:= any ->
-        case classy_hook:all(?on_pre_join, [Cluster, Remote, Node, Intent]) of
-          ok ->
-            do_join_node(Node, Cluster, Remote, MemData, Intent, S);
-          {error, _} = Err ->
-            Err
-        end;
-      #{cluster := Cluster} ->
-        {error, {cluster_changed, #{ExpectedCluster => Cluster}}};
-      {error, _} = Err ->
-        Err
-    end
+    Result =
+      case hello(Node) of
+        #{ site := Remote
+         , cluster := Cluster
+         , mem_data := MemData
+         } when Cluster =:= ExpectedCluster;
+                ExpectedCluster =:= any ->
+          case classy_hook:all(?on_pre_join, [Cluster, Remote, Node, Intent]) of
+            ok ->
+              do_join_node(Node, Cluster, Remote, MemData, Intent, S);
+            {error, _} = Err ->
+              Err
+          end;
+        #{cluster := Cluster} ->
+          {error, {cluster_changed, #{ExpectedCluster => Cluster}}};
+        {error, _} = Err ->
+          Err
+      end,
+    unlock_join(Node, self()),
+    Result
   end.
 
 -spec check_join_locks(classy:join_intent(), #s{}) -> ok | {error, _}.
@@ -713,25 +717,21 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
       %% Already in the same cluster with `Node'. Set our membership
       %% status and trigger re-sync (do we need to re-run hooks?):
       classy_membership:call_sync(Cluster, Local, MemData),
-      unlock_join(Node, self()),
       {ok, Clock} = classy_membership:set_member(Cluster, Local, Local, true),
       classy_membership:flush(Cluster, Local),
       ok = classy_table:write(?tab, ?joined_at, Clock),
       {ok, update_runtime(S0)};
     {ok, OldCluster} when OldCluster =/= Cluster ->
       %% Site is currently in a different cluster. Leave it first:
-      _ = lock_join(Node),
       LeaveIntent = {join, #{node => Node, cluster => Cluster, join_intent => JoinIntent}},
       case handle_kick(Local, LeaveIntent, S0) of
         {ok, S} ->
           do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S);
         Err ->
-          unlock_join(Node, self()),
           Err
       end;
      undefined ->
       %% Site is not in any cluster:
-      _ = lock_join(Node),
       {ok, S} = join_cluster(Cluster, Node, Local, Remote, JoinIntent, S0),
       do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S)
   end.
