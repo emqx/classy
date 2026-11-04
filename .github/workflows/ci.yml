@@ -15,9 +15,8 @@ jobs:
     strategy:
       matrix:
         otp: ['27']
-        os: ['ubuntu-latest']
         rebar3: ['3.24.0']
-    runs-on: ${{matrix.os}}
+    runs-on: "ubuntu-24.04"
 
     steps:
     - uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24.0

@@ -35,6 +35,8 @@ Management of the local site and node.
 -export([ hello/0
         , on_ptab_update/2
         , notify_mem_deltas/2
+        , lock_join/1
+        , unlock_join/2
         ]).
 
 -include_lib("snabbkaffe/include/trace.hrl").
@@ -65,11 +67,28 @@ Management of the local site and node.
         { node :: node()
         , intent :: term()
         , cluster :: classy:cluster_id() | any
+        , reserved
         }).
--record(call_kick, {site :: classy:site(), intent :: term()}).
+-record(call_kick,
+        { site :: classy:site()
+        , intent :: term()
+        , reserved
+        }).
 -record(cast_mem_deltas,
         { cluster :: classy:cluster_id()
         , data :: #{classy:site() => classy_membership:update()}
+        , reserved
+        }).
+-record(call_lock_join,
+        { pid :: pid()
+        , reserved
+        }).
+-record(call_unlock_join,
+        { pid :: pid()
+        , reserved
+        }).
+-record(to_auto_release_join_lock,
+        { pid :: pid()
         }).
 
 %% Value returned by hello method:
@@ -305,9 +324,16 @@ get_meta(Site) ->
 %% behavior callbacks
 %%================================================================================
 
+-record(jl,
+        { pid :: pid()
+        , mref :: reference()
+        , tref :: reference()
+        }).
+
 -record(s,
         { cluster :: classy:cluster_id() | undefined
         , site :: classy:site()
+        , join_locks = [] :: [#jl{}]
         }).
 
 -doc false.
@@ -347,6 +373,16 @@ handle_call(#call_kick{site = Target, intent = Intent}, _From, S0) ->
     {error, _} = Err ->
       {reply, Err, S0}
   end;
+handle_call(#call_lock_join{pid = Pid}, _From, S0) ->
+  Timeout = join_lock_autoclean(),
+  if is_pid(Pid) ->
+      {Reply, S} = do_lock_join(Pid, Timeout, S0),
+      {reply, Reply, S};
+     true ->
+      {reply, {error, badarg}, S0}
+  end;
+handle_call(#call_unlock_join{pid = Pid}, _From, S) ->
+  {reply, ok, do_unlock_join(Pid, S)};
 handle_call(Call, From, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => call
@@ -370,6 +406,20 @@ handle_info(#cast_mem_deltas{} = Cast, S) ->
   handle_membership_change_event(Cast, S);
 handle_info({NodeUpOrDown, _Node, _}, S) when NodeUpOrDown =:= nodeup; NodeUpOrDown =:= nodedown ->
   {noreply, update_runtime(S)};
+handle_info(#to_auto_release_join_lock{pid = Pid}, S) ->
+  {noreply, do_unlock_join(Pid, S)};
+handle_info({'DOWN', MRef, process, _, _} = Info, S = #s{join_locks = JLs}) ->
+  case lists:keyfind(MRef, #jl.mref, JLs) of
+    #jl{pid = Pid} ->
+      {noreply, do_unlock_join(Pid, S)};
+    false ->
+      ?tp(warning, ?classy_unknown_event,
+          #{ kind => info
+           , content => Info
+           , server => ?MODULE
+           }),
+      {noreply, S}
+  end;
 handle_info(Info, S) ->
   ?tp(warning, ?classy_unknown_event,
       #{ kind => info
@@ -451,6 +501,52 @@ notify_mem_deltas(Cluster, Deltas) ->
 -doc false.
 prep_stop(Reason) ->
   classy_hook:foreach(?on_prep_stop, [Reason]).
+
+-doc false.
+%% Prevent remote node from joining other nodes. This lock is used by
+%% peer processes when they join to us.
+%%
+%% It's safe to call this function multiple times, only the first lock
+%% will be kept for the caller process.
+-spec lock_join(node()) -> {ok, boolean()} | {error, _}.
+lock_join(Node) when Node =:= node() ->
+  {error, locking_self};
+lock_join(Node) ->
+  try
+    gen_server:call(
+      {?SERVER, Node},
+      #call_lock_join{pid = self()},
+      classy_lib:rpc_timeout())
+  catch
+    exit:{noproc, _} ->
+      %% Node is not running or it's not classy-aware. Proceed without
+      %% the lock.
+      {ok, false};
+    exit:{timeout, _} ->
+      %% Uncertain. Try to release the lock later anyway:
+      {ok, true};
+    _EC:Err ->
+      {error, Err}
+  end.
+
+-doc false.
+-spec unlock_join(node(), pid()) -> ok | {error, _}.
+unlock_join(Node, Pid) ->
+  Timeout = classy_lib:rpc_timeout(),
+  try
+    gen_server:call(
+      {?SERVER, Node},
+      #call_unlock_join{pid = Pid},
+      Timeout)
+  catch
+    exit:{noproc, _} ->
+      %% Nothing to unlock:
+      ok;
+    exit:{timeout, _} ->
+      {error, timeout};
+    _EC:Err ->
+      {error, Err}
+  end.
 
 %%================================================================================
 %% Internal functions
@@ -565,27 +661,44 @@ handle_kick(Target, Intent, S = #s{site = Local}) when is_binary(Local) ->
     {error, _} = Err -> Err
   end.
 
+-spec handle_join(#s{}, #call_join{}) -> {ok, #s{}} | {error, _}.
 handle_join(S, Call) ->
   #call_join{ node    = Node
             , cluster = ExpectedCluster
             , intent  = Intent
             } = Call,
-  case hello(Node) of
-    #{ site := Remote
-     , cluster := Cluster
-     , mem_data := MemData
-     } when Cluster =:= ExpectedCluster;
-            ExpectedCluster =:= any ->
-      case classy_hook:all(?on_pre_join, [Cluster, Remote, Node, Intent]) of
-        ok ->
-          do_join_node(Node, Cluster, Remote, MemData, Intent, S);
+  maybe
+    ok ?= check_join_locks(Intent, S),
+    _ = lock_join(Node),
+    Result =
+      case hello(Node) of
+        #{ site := Remote
+         , cluster := Cluster
+         , mem_data := MemData
+         } when Cluster =:= ExpectedCluster;
+                ExpectedCluster =:= any ->
+          case classy_hook:all(?on_pre_join, [Cluster, Remote, Node, Intent]) of
+            ok ->
+              do_join_node(Node, Cluster, Remote, MemData, Intent, S);
+            {error, _} = Err ->
+              Err
+          end;
+        #{cluster := Cluster} ->
+          {error, {cluster_changed, #{ExpectedCluster => Cluster}}};
         {error, _} = Err ->
           Err
-      end;
-    #{cluster := Cluster} ->
-      {error, {cluster_changed, #{ExpectedCluster => Cluster}}};
-    {error, _} = Err ->
-      Err
+      end,
+    unlock_join(Node, self()),
+    Result
+  end.
+
+-spec check_join_locks(classy:join_intent(), #s{}) -> ok | {error, _}.
+check_join_locks(_Intent, #s{join_locks = []}) ->
+  ok;
+check_join_locks(Intent, #s{join_locks = [_|_]}) ->
+  case lists:member(Intent, application:get_env(classy, force_intents, [])) of
+    true  -> ok;
+    false -> {error, retry_later}
   end.
 
 -spec do_join_node(
@@ -617,7 +730,7 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
         Err ->
           Err
       end;
-    undefined ->
+     undefined ->
       %% Site is not in any cluster:
       {ok, S} = join_cluster(Cluster, Node, Local, Remote, JoinIntent, S0),
       do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S)
@@ -728,26 +841,38 @@ adjust_run_level(S) ->
   %% Manage cluster barrier:
   ClusterBarrier = cluster,
   NKnown = length(intersection(classy_lib:to_cluster_sets())),
-  case NKnown >= classy_lib:n_sites() of
+  NSites = classy_lib:n_sites(),
+  case NKnown >= NSites of
     true  ->
       classy_boot:rm_barrier(ClusterBarrier);
     false ->
       classy_boot:set_barrier(
         ClusterBarrier,
         ?classy_rl_cluster - 1,
-        [async, {hint, <<"Waiting for a sufficient number of known peers">>}])
+        [async, {hint, << "Waiting for "
+                        , (integer_to_binary(NKnown))/binary
+                        , "/"
+                        , (integer_to_binary(NSites))/binary
+                        , " known sites"
+                       >>}])
   end,
   %% Manage quorum barrier:
   QuorumBarrier = quorum,
   NConnected = length(intersection(classy_lib:quorum_sets())),
-  case NConnected >= classy:quorum(config) of
+  Quorum = classy:quorum(config),
+  case NConnected >= Quorum of
     true  ->
       classy_boot:rm_barrier(QuorumBarrier);
     false ->
       classy_boot:set_barrier(
         QuorumBarrier,
         ?classy_rl_quorum - 1,
-        [async, {hint, <<"Waiting for a sufficient number of connected peers">>}])
+        [async, {hint, << "Waiting for "
+                        , (integer_to_binary(NConnected))/binary
+                        , "/"
+                        , (integer_to_binary(Quorum))/binary
+                        , " running quorum nodes"
+                       >>}])
   end,
   classy_boot:ensure_started(),
   S.
@@ -1040,3 +1165,32 @@ foreach_site_info(Fun) ->
         [],
         ?site_info),
   ok.
+
+-spec do_lock_join(pid(), pos_integer(), #s{}) -> {{ok, boolean()}, #s{}}.
+do_lock_join(Pid, Timeout, S = #s{join_locks = JLs0}) ->
+  case lists:keyfind(Pid, #jl.pid, JLs0) of
+    false ->
+      MRef = monitor(process, Pid),
+      TRef = erlang:send_after(Timeout, self(), #to_auto_release_join_lock{pid = Pid}),
+      JLs = [#jl{pid = Pid, mref = MRef, tref = TRef} | JLs0],
+      Reply = {ok, true},
+      {Reply, S#s{join_locks = JLs}};
+    #jl{} ->
+      Reply = {ok, false},
+      {Reply, S}
+  end.
+
+-spec do_unlock_join(pid(), #s{}) -> #s{}.
+do_unlock_join(Pid, S = #s{join_locks = JLs0}) ->
+  case lists:keytake(Pid, #jl.pid, JLs0) of
+    {value, #jl{mref = MRef, tref = TRef}, JLs} ->
+      demonitor(MRef, [flush]),
+      erlang:cancel_timer(TRef),
+      S#s{join_locks = JLs};
+    false ->
+      S
+  end.
+
+-spec join_lock_autoclean() -> pos_integer().
+join_lock_autoclean() ->
+  application:get_env(classy, join_lock_autoclean, 15_000).

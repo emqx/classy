@@ -244,7 +244,7 @@ terminate(Reason, State, _Data) ->
 %%================================================================================
 
 -spec start_vote_no_guard(#prepare{}) -> ok | {error, _}.
-start_vote_no_guard(Prepare = #prepare{tag = Tag, id = ID, run_level = RunLevel}) ->
+start_vote_no_guard(Prepare = #prepare{tag = Tag, id = ID}) ->
   ?tp(debug, ?classy_vote_part_recv, #{id => ID, tag => Tag}),
   case classy_sup:ensure_vote_participant([Prepare]) of
     {ok, _Pid} ->

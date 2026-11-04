@@ -31,6 +31,7 @@ create_start_site(Cluster, Site, CustomConf) ->
                            , vote_retry_interval => 100
                            , rpc_timeout => 100
                            , discovery_interval => 100
+                           , boot_diagnostic_interval => 1000
                            }
                  }},
   StartSysFixture = {classy_start_system_fixture, #{}},
