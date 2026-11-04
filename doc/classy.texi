@@ -365,10 +365,10 @@ The document was typeset with
 
     @defen{force_intents, @code{list()}, []}
 
-     List of @erltp{ref,erlref,classy,join_intent,0} atoms that allow to override join locks.
-     When join command is issued with an intent that belongs in the list,
-     the local node @emph{A} will proceed to join another node @emph{B}
-     even if the third node @emph{C} is trying to join @emph{A}.
+      List of @erltp{ref,erlref,classy,join_intent,0} atoms that allow to override join locks.
+      When join command is issued with an intent that belongs in the list,
+      the local node @emph{A} will proceed to join another node @emph{B}
+      even if the third node @emph{C} is trying to join @emph{A}.
 
   @section Two-phase commit
     @defen{vote_retry_interval, @code{pos_integer()}, 5000}

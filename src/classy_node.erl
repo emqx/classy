@@ -35,7 +35,7 @@ Management of the local site and node.
 -export([ hello/0
         , on_ptab_update/2
         , notify_mem_deltas/2
-        , lock_join/2
+        , lock_join/1
         , unlock_join/2
         ]).
 
@@ -67,18 +67,25 @@ Management of the local site and node.
         { node :: node()
         , intent :: term()
         , cluster :: classy:cluster_id() | any
+        , reserved
         }).
--record(call_kick, {site :: classy:site(), intent :: term()}).
+-record(call_kick,
+        { site :: classy:site()
+        , intent :: term()
+        , reserved
+        }).
 -record(cast_mem_deltas,
         { cluster :: classy:cluster_id()
         , data :: #{classy:site() => classy_membership:update()}
+        , reserved
         }).
 -record(call_lock_join,
         { pid :: pid()
-        , autoclean :: pos_integer()
+        , reserved
         }).
 -record(call_unlock_join,
         { pid :: pid()
+        , reserved
         }).
 -record(to_auto_release_join_lock,
         { pid :: pid()
@@ -366,11 +373,13 @@ handle_call(#call_kick{site = Target, intent = Intent}, _From, S0) ->
     {error, _} = Err ->
       {reply, Err, S0}
   end;
-handle_call(#call_lock_join{pid = Pid, autoclean = Timeout}, _From, S) ->
-  if is_pid(Pid), is_integer(Timeout), Timeout > 0 ->
-      {reply, true, do_lock_join(Pid, Timeout, S)};
+handle_call(#call_lock_join{pid = Pid}, _From, S0) ->
+  Timeout = join_lock_autoclean(),
+  if is_pid(Pid) ->
+      {Reply, S} = do_lock_join(Pid, Timeout, S0),
+      {reply, Reply, S};
      true ->
-      {reply, {error, badarg}, S}
+      {reply, {error, badarg}, S0}
   end;
 handle_call(#call_unlock_join{pid = Pid}, _From, S) ->
   {reply, ok, do_unlock_join(Pid, S)};
@@ -499,25 +508,27 @@ prep_stop(Reason) ->
 %%
 %% It's safe to call this function multiple times, only the first lock
 %% will be kept for the caller process.
--spec lock_join(node(), pos_integer()) -> boolean().
-lock_join(Node, AutoCleanAfter) ->
+-spec lock_join(node()) -> {ok, boolean()} | {error, _}.
+lock_join(Node) ->
   try
     gen_server:call(
       {?SERVER, Node},
-      #call_lock_join{pid = self(), autoclean = AutoCleanAfter},
+      #call_lock_join{pid = self()},
       classy_lib:rpc_timeout())
   catch
     exit:{noproc, _} ->
       %% Node is not running or it's not classy-aware. Proceed without
       %% the lock.
-      false;
+      {ok, false};
     exit:{timeout, _} ->
       %% Uncertain. Try to release the lock later anyway:
-      true
+      {ok, true};
+    _EC:Err ->
+      {error, Err}
   end.
 
 -doc false.
--spec unlock_join(node(), pid()) -> ok | {error, timeout}.
+-spec unlock_join(node(), pid()) -> ok | {error, _}.
 unlock_join(Node, Pid) ->
   Timeout = classy_lib:rpc_timeout(),
   try
@@ -530,7 +541,9 @@ unlock_join(Node, Pid) ->
       %% Nothing to unlock:
       ok;
     exit:{timeout, _} ->
-      {error, timeout}
+      {error, timeout};
+    _EC:Err ->
+      {error, Err}
   end.
 
 %%================================================================================
@@ -653,6 +666,7 @@ handle_join(S, Call) ->
             } = Call,
   maybe
     ok ?= check_join_locks(Intent, S),
+    _ = lock_join(Node),
     case hello(Node) of
       #{ site := Remote
        , cluster := Cluster
@@ -677,7 +691,7 @@ check_join_locks(_Intent, #s{join_locks = []}) ->
   ok;
 check_join_locks(Intent, #s{join_locks = [_|_]}) ->
   case lists:member(Intent, application:get_env(classy, force_intents, [])) of
-    true -> ok;
+    true  -> ok;
     false -> {error, retry_later}
   end.
 
@@ -704,17 +718,18 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
       {ok, update_runtime(S0)};
     {ok, OldCluster} when OldCluster =/= Cluster ->
       %% Site is currently in a different cluster. Leave it first:
-      _ = lock_join(Node, join_lock_autoclean()),
+      _ = lock_join(Node),
       LeaveIntent = {join, #{node => Node, cluster => Cluster, join_intent => JoinIntent}},
       case handle_kick(Local, LeaveIntent, S0) of
         {ok, S} ->
           do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S);
         Err ->
+          unlock_join(Node, self()),
           Err
       end;
-    undefined ->
+     undefined ->
       %% Site is not in any cluster:
-      _ = lock_join(Node, join_lock_autoclean()),
+      _ = lock_join(Node),
       {ok, S} = join_cluster(Cluster, Node, Local, Remote, JoinIntent, S0),
       do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S)
   end.
@@ -1137,16 +1152,18 @@ foreach_site_info(Fun) ->
         ?site_info),
   ok.
 
--spec do_lock_join(pid(), pos_integer(), #s{}) -> #s{}.
+-spec do_lock_join(pid(), pos_integer(), #s{}) -> {{ok, boolean()}, #s{}}.
 do_lock_join(Pid, Timeout, S = #s{join_locks = JLs0}) ->
   case lists:keyfind(Pid, #jl.pid, JLs0) of
     false ->
       MRef = monitor(process, Pid),
       TRef = erlang:send_after(Timeout, self(), #to_auto_release_join_lock{pid = Pid}),
       JLs = [#jl{pid = Pid, mref = MRef, tref = TRef} | JLs0],
-      S#s{join_locks = JLs};
+      Reply = {ok, true},
+      {Reply, S#s{join_locks = JLs}};
     #jl{} ->
-      S
+      Reply = {ok, false},
+      {Reply, S}
   end.
 
 -spec do_unlock_join(pid(), #s{}) -> #s{}.
