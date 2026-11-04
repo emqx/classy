@@ -509,6 +509,8 @@ prep_stop(Reason) ->
 %% It's safe to call this function multiple times, only the first lock
 %% will be kept for the caller process.
 -spec lock_join(node()) -> {ok, boolean()} | {error, _}.
+lock_join(Node) when Node =:= node() ->
+  {error, locking_self};
 lock_join(Node) ->
   try
     gen_server:call(
@@ -839,26 +841,38 @@ adjust_run_level(S) ->
   %% Manage cluster barrier:
   ClusterBarrier = cluster,
   NKnown = length(intersection(classy_lib:to_cluster_sets())),
-  case NKnown >= classy_lib:n_sites() of
+  NSites = classy_lib:n_sites(),
+  case NKnown >= NSites of
     true  ->
       classy_boot:rm_barrier(ClusterBarrier);
     false ->
       classy_boot:set_barrier(
         ClusterBarrier,
         ?classy_rl_cluster - 1,
-        [async, {hint, <<"Waiting for a sufficient number of known peers">>}])
+        [async, {hint, << "Waiting for "
+                        , (integer_to_binary(NKnown))/binary
+                        , "/"
+                        , (integer_to_binary(NSites))/binary
+                        , " known sites"
+                       >>}])
   end,
   %% Manage quorum barrier:
   QuorumBarrier = quorum,
   NConnected = length(intersection(classy_lib:quorum_sets())),
-  case NConnected >= classy:quorum(config) of
+  Quorum = classy:quorum(config),
+  case NConnected >= Quorum of
     true  ->
       classy_boot:rm_barrier(QuorumBarrier);
     false ->
       classy_boot:set_barrier(
         QuorumBarrier,
         ?classy_rl_quorum - 1,
-        [async, {hint, <<"Waiting for a sufficient number of connected peers">>}])
+        [async, {hint, << "Waiting for "
+                        , (integer_to_binary(NConnected))/binary
+                        , "/"
+                        , (integer_to_binary(Quorum))/binary
+                        , " running quorum nodes"
+                       >>}])
   end,
   classy_boot:ensure_started(),
   S.
