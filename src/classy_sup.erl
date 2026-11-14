@@ -16,6 +16,8 @@
         , ensure_vote_coordinator/1
         , ensure_vote_participant/1
         , ensure_liveness_server/0
+        , ensure_dynamic_child/1
+        , terminate_dynamic_child/1
         , terminate_liveness_server/0
         , stop_system/0
         ]).
@@ -127,6 +129,17 @@ ensure_liveness_server() ->
                , type     => worker
                }),
   ok.
+
+-spec ensure_dynamic_child(supervisor:child_spec()) -> {ok, pid()} | {error, _}.
+ensure_dynamic_child(Spec) ->
+  ensure_child(?DYNAMIC_SUP, Spec).
+
+-doc """
+Terminate and delete a child of the dynamic supervisor.
+""".
+-spec terminate_dynamic_child(term()) -> ok | {error, _}.
+terminate_dynamic_child(Id) ->
+  terminate_child(?DYNAMIC_SUP, Id).
 
 -spec terminate_liveness_server() -> ok.
 terminate_liveness_server() ->
@@ -334,7 +347,10 @@ ensure_child(Sup, Spec = #{id := Id}) ->
 terminate_child(Sup, Id) ->
   case supervisor:terminate_child(Sup, Id) of
     ok ->
-      supervisor:delete_child(Sup, Id);
+      %% Note: temporary children are deleted automatically, so
+      %% `delete_child' may return `not_found':
+      _ = supervisor:delete_child(Sup, Id),
+      ok;
     {error, not_found} ->
       ok;
     Other ->

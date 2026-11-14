@@ -424,6 +424,9 @@ This hook is executed after the target is successfully kicked.
 NOTE: the intent is not propagated across different sites.
 If the target site is not the same as the local site,
 then the target runs @erlfn{ref,erlref,classy,on_leave,2} with pre-defined intent @code{kicked}.
+
+NOTE: if the target site is in the process of joining the cluster,
+kick operation aborts the ongoing join.
 """.
 -spec kick_site(site(), kick_intent()) -> ok | {error, _}.
 kick_site(Site, Intent) ->
