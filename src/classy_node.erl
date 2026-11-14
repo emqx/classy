@@ -717,7 +717,6 @@ handle_join(S, From, Call) ->
             , intent  = Intent
             } = Call,
   maybe
-    ok ?= ensure_post_join_hooks_idle(S),
     ok ?= ensure_is_not_joining(S),
     ok ?= check_join_locks(Intent, S),
     %% Initial probe before taking the lock, to make sure the remote
@@ -866,11 +865,11 @@ run_post_join_hooks(Cluster, Local, JoinToNode, Intent) ->
   {ok, _} = classy_table:atomically(?tab, [{d, ?pending_on_join_hook}]),
   ok.
 
--spec ensure_post_join_hooks_idle(#s{}) -> ok | {error, retry_later}.
-ensure_post_join_hooks_idle(#s{post_join = undefined}) ->
-  ok;
-ensure_post_join_hooks_idle(#s{}) ->
-  {error, node_is_joining_other}.
+-spec ensure_is_not_joining(#s{}) -> ok | {error, node_is_joining_other}.
+ensure_is_not_joining(#s{post_join = #post_join{}}) ->
+  {error, node_is_joining_other};
+ensure_is_not_joining(#s{}) ->
+  ok.
 
 -spec abort_post_join_hooks(#s{}) -> #s{}.
 abort_post_join_hooks(S = #s{post_join = undefined}) ->
@@ -1408,12 +1407,6 @@ do_unlock_join(Pid, S = #s{join_locks = JLs0}) ->
     false ->
       S
   end.
-
--spec ensure_is_not_joining(#s{}) -> ok | {error, node_ensure_is_not_joining_other}.
-ensure_is_not_joining(#s{post_join = #post_join{}}) ->
-  {error, node_ensure_is_not_joining_other};
-ensure_is_not_joining(#s{}) ->
-  ok.
 
 -spec join_lock_autoclean() -> pos_integer().
 join_lock_autoclean() ->
