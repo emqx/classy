@@ -33,10 +33,12 @@ Management of the local site and node.
 
 %% internal exports:
 -export([ hello/0
+        , start_link_post_join/6
+        , post_join_child/6
         , on_ptab_update/2
         , notify_mem_deltas/2
-        , lock_join/1
-        , unlock_join/2
+        , lock_join_remote/1
+        , unlock_join_remote/2
         ]).
 
 -include_lib("snabbkaffe/include/trace.hrl").
@@ -62,6 +64,8 @@ Management of the local site and node.
 -define(parent_site, parent_site).
 -define(n_restarts, n_restarts).
 -define(joined_at, joined_at).
+-define(pending_on_join_hook, pending_on_join_hook).
+-define(post_join_child, post_join_child).
 
 -record(call_join,
         { node :: node()
@@ -330,10 +334,17 @@ get_meta(Site) ->
         , tref :: reference()
         }).
 
+-record(post_join,
+        { worker :: pid()
+        , node :: node()
+        , reply :: gen_server:from() | undefined
+        }).
+
 -record(s,
         { cluster :: classy:cluster_id() | undefined
         , site :: classy:site()
         , join_locks = [] :: [#jl{}]
+        , post_join = undefined :: #post_join{} | undefined
         }).
 
 -doc false.
@@ -351,35 +362,33 @@ init(_) ->
   classy_site_metadata:init(),
   classy_hook:foreach(?on_node_init, []),
   case init_cluster() of
-    {ok, _} = Ok ->
-      Ok;
+    {ok, S} ->
+      maybe_replay_pending_on_join_hook(S);
     {error, Reason} ->
       {stop, Reason, undefined}
   end.
 
 -doc false.
-handle_call(#call_join{} = Call, _From, S0) ->
-  case handle_join(S0, Call) of
+handle_call(#call_join{} = Call, From, S) ->
+  handle_join(S, From, Call);
+handle_call(#call_kick{site = Target, intent = Intent}, _From, S0) ->
+  case handle_kick(Target, Intent, S0) of
     {ok, S} ->
       {reply, ok, S};
-    Err ->
-      {reply, Err, S0}
-  end;
-handle_call(#call_kick{site = Target, intent = Intent}, _From, S0) ->
-  maybe
-    {ok, S} ?= handle_kick(Target, Intent, S0),
-    {reply, ok, S}
-  else
     {error, _} = Err ->
       {reply, Err, S0}
   end;
 handle_call(#call_lock_join{pid = Pid}, _From, S0) ->
-  Timeout = join_lock_autoclean(),
-  if is_pid(Pid) ->
-      {Reply, S} = do_lock_join(Pid, Timeout, S0),
-      {reply, Reply, S};
-     true ->
-      {reply, {error, badarg}, S0}
+  case ensure_is_not_joining(S0) of
+    ok ->
+      if is_pid(Pid) ->
+          {Reply, S} = do_lock_join(Pid, S0),
+          {reply, Reply, S};
+         true ->
+          {reply, {error, badarg}, S0}
+      end;
+    Err ->
+      {reply, Err, S0}
   end;
 handle_call(#call_unlock_join{pid = Pid}, _From, S) ->
   {reply, ok, do_unlock_join(Pid, S)};
@@ -406,6 +415,8 @@ handle_info(#cast_mem_deltas{} = Cast, S) ->
   handle_membership_change_event(Cast, S);
 handle_info({NodeUpOrDown, _Node, _}, S) when NodeUpOrDown =:= nodeup; NodeUpOrDown =:= nodedown ->
   {noreply, update_runtime(S)};
+handle_info({'EXIT', Pid, Reason}, S = #s{post_join = #post_join{worker = Pid}}) ->
+  {noreply, finalize_join(Reason, S)};
 handle_info(#to_auto_release_join_lock{pid = Pid}, S) ->
   {noreply, do_unlock_join(Pid, S)};
 handle_info({'DOWN', MRef, process, _, _} = Info, S = #s{join_locks = JLs}) ->
@@ -503,54 +514,91 @@ prep_stop(Reason) ->
   classy_hook:foreach(?on_prep_stop, [Reason]).
 
 -doc false.
-%% Prevent remote node from joining other nodes. This lock is used by
-%% peer processes when they join to us.
+%% Prevent the remote node from joining other nodes while the local is
+%% joining.
 %%
 %% It's safe to call this function multiple times, only the first lock
 %% will be kept for the caller process.
--spec lock_join(node()) -> {ok, boolean()} | {error, _}.
-lock_join(Node) when Node =:= node() ->
+%%
+%% Note: acquisition is mandatory: if the remote node cannot be locked
+%% (for example, it is busy processing a join of its own), it may be
+%% joining us or someone else at the moment, so the caller must abort
+%% and retry later.
+-spec lock_join_remote(node()) -> ok | {error, retry_later}.
+lock_join_remote(Node) when Node =:= node() ->
   {error, locking_self};
-lock_join(Node) ->
+lock_join_remote(Node) ->
   try
+    %% Try to lock the joinee:
     gen_server:call(
       {?SERVER, Node},
       #call_lock_join{pid = self()},
       classy_lib:rpc_timeout())
+  of
+    {ok, _} ->
+      ok;
+    {error, _} = Err ->
+      Err
   catch
     exit:{noproc, _} ->
-      %% Node is not running or it's not classy-aware. Proceed without
-      %% the lock.
-      {ok, false};
+      %% Node is not running or it's not classy-aware:
+      ok;
     exit:{timeout, _} ->
-      %% Uncertain. Try to release the lock later anyway:
-      {ok, true};
+      %% The remote node could be busy joining someone else, so the
+      %% lock state is uncertain. The caller must retry later:
+      {error, retry_later};
     _EC:Err ->
       {error, Err}
   end.
 
 -doc false.
--spec unlock_join(node(), pid()) -> ok | {error, _}.
-unlock_join(Node, Pid) ->
+-spec unlock_join_remote(node(), pid()) -> ok.
+unlock_join_remote(Node, Pid) ->
   Timeout = classy_lib:rpc_timeout(),
-  try
-    gen_server:call(
-      {?SERVER, Node},
-      #call_unlock_join{pid = Pid},
-      Timeout)
-  catch
-    exit:{noproc, _} ->
-      %% Nothing to unlock:
+  Result = try
+             gen_server:call(
+               {?SERVER, Node},
+               #call_unlock_join{pid = Pid},
+               Timeout)
+           catch
+             exit:{noproc, _} ->
+               %% Nothing to unlock:
+               ok;
+             exit:{timeout, _} ->
+               {error, timeout};
+             _EC:Err ->
+               {error, Err}
+           end,
+  case Result of
+    ok ->
       ok;
-    exit:{timeout, _} ->
-      {error, timeout};
-    _EC:Err ->
-      {error, Err}
-  end.
+    {error, Reason} ->
+      ?tp(warning, "Failed to release join lock",
+          #{ remote => Node
+           , reason => Reason
+           })
+  end,
+  ok.
 
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+-spec verify_hello(
+        node(),
+        classy:cluster_id() | any,
+        classy:join_intent()
+       ) -> bootstrap_info() | {error, _}.
+verify_hello(Node, ExpectedCluster, Intent) ->
+  maybe
+    Hello = hello(Node),
+    #{site := Remote, cluster := Cluster} ?= Hello,
+    true ?= ExpectedCluster =:= any orelse
+            Cluster =:= ExpectedCluster orelse
+            {error, {cluster_changed, #{ExpectedCluster => Cluster}}},
+    ok ?= classy_hook:all(?on_pre_join, [Cluster, Remote, Node, Intent]),
+    Hello
+  end.
 
 -spec hello(node()) -> bootstrap_info() | {error, _}.
 hello(Node) ->
@@ -661,35 +709,50 @@ handle_kick(Target, Intent, S = #s{site = Local}) when is_binary(Local) ->
     {error, _} = Err -> Err
   end.
 
--spec handle_join(#s{}, #call_join{}) -> {ok, #s{}} | {error, _}.
-handle_join(S, Call) ->
+-spec handle_join(#s{}, gen_server:from(), #call_join{}) -> {reply, {error, _}, #s{}} | {noreply, #s{}}.
+handle_join(S, From, Call) ->
   #call_join{ node    = Node
             , cluster = ExpectedCluster
             , intent  = Intent
             } = Call,
   maybe
+    ok ?= ensure_is_not_joining(S),
     ok ?= check_join_locks(Intent, S),
-    _ = lock_join(Node),
-    Result =
-      case hello(Node) of
-        #{ site := Remote
-         , cluster := Cluster
-         , mem_data := MemData
-         } when Cluster =:= ExpectedCluster;
-                ExpectedCluster =:= any ->
-          case classy_hook:all(?on_pre_join, [Cluster, Remote, Node, Intent]) of
-            ok ->
-              do_join_node(Node, Cluster, Remote, MemData, Intent, S);
-            {error, _} = Err ->
-              Err
-          end;
-        #{cluster := Cluster} ->
-          {error, {cluster_changed, #{ExpectedCluster => Cluster}}};
-        {error, _} = Err ->
-          Err
-      end,
-    unlock_join(Node, self()),
-    Result
+    %% Initial probe before taking the lock, to make sure the remote
+    %% is joinable:
+    #{} ?= verify_hello(Node, ExpectedCluster, Intent),
+    %% Try to take the join lock on remote:
+    ok ?= lock_join_remote(Node),
+    %% Proceed to the next stage, which has side effects:
+    handle_join1(S, From, Call)
+  else
+    {error, _} = Err ->
+      {reply, Err, S}
+  end.
+
+-spec handle_join1(#s{}, gen_server:from(), #call_join{}) -> {reply, {error, _}, #s{}} | {noreply, #s{}}.
+handle_join1(S0, From, Call) ->
+  #call_join{ node    = Node
+            , cluster = ExpectedCluster
+            , intent  = Intent
+            } = Call,
+  #s{site = Local} = S0,
+  maybe
+    %% Get second hello, now that the remote is locked:
+    Hello = verify_hello(Node, ExpectedCluster, Intent),
+    #{site := Remote, cluster := Cluster, mem_data := MemData} ?= Hello,
+    {ok, S1} ?= do_join_node(Node, Cluster, Remote, MemData, Intent, S0),
+    case launch_post_join_child(S1, From, Cluster, Local, Node, Intent) of
+      {ok, S} ->
+        {noreply, S};
+      {error, _} = Err ->
+        unlock_join_remote(Node, self()),
+        {reply, Err, S1}
+    end
+  else
+    {error, _} = Err1 ->
+      unlock_join_remote(Node, self()),
+      {reply, Err1, S0}
   end.
 
 -spec check_join_locks(classy:join_intent(), #s{}) -> ok | {error, _}.
@@ -736,7 +799,9 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
       do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S)
   end.
 
-on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
+on_leave(S0 = #s{cluster = Cluster, site = Local}, Intent) ->
+  %% Abort pending post_join
+  S = abort_post_join_hooks(S0),
   %% Trigger some of the events related to the old cluster:
   foreach_site_info(
     fun(Peer, _) ->
@@ -748,6 +813,7 @@ on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
               ?tab,
               [ {d, ?the_cluster}
               , {d, ?joined_at}
+              , {d, ?pending_on_join_hook}
               ]),
   classy_hook:foreach(?on_leave, [Cluster, Local, Intent]),
   classy_table:clear(?site_info),
@@ -755,8 +821,11 @@ on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
     {join, _} ->
       {ok, S#s{cluster = undefined}};
     _ ->
-      %% maybe_initialize_after_leave hook should've created cluster:
-      init_cluster()
+      %% maybe_initialize_after_leave hook should've created cluster.
+      %% Preserve the post-join bookkeeping in the new state, so that
+      %% the 'EXIT' message of an aborted hook child is still handled:
+      {ok, S1} = init_cluster(),
+      {ok, S1#s{post_join = S#s.post_join}}
   end.
 
 -spec join_cluster(classy:cluster_id(), node(), classy:site(), classy:site(), classy:join_intent(), #s{}) -> {ok, #s{}}.
@@ -772,11 +841,162 @@ join_cluster(Cluster, JoinToNode, Local, Remote, Intent, S = #s{}) ->
   %% 3. Restart membership from scratch:
   {ok, NewPid} = classy_sup:ensure_membership(Cluster, Local),
   true = OldPid =/= NewPid, % assert
-  classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode, Intent]),
+  %% Log the join synchronously, before the cluster id is committed
+  %% (the application hooks run asynchronously at a later point):
+  ?tp(notice, classy_joined_cluster,
+      #{ cluster        => Cluster
+       , local          => Local
+       , joined_to_node => JoinToNode
+       , intent         => Intent
+       }),
   classy_table:dirty_write(?tab, ?the_cluster, Cluster),
   classy_table:dirty_write(?tab, ?parent_site, Remote),
+  %% Journal the hook invocation, so that it can be replayed if the
+  %% node stops after the cluster state has been updated, but before
+  %% the hook had a chance to run. Note: pending hook is deleted by
+  %% the async hook worker, when it's done.
+  ok = classy_table:dirty_write(
+         ?tab,
+         ?pending_on_join_hook,
+         #{cluster => Cluster, join_to => JoinToNode, intent => Intent}),
   classy_table:flush(?tab),
   {ok, S#s{cluster = Cluster}}.
+
+-spec ensure_is_not_joining(#s{}) -> ok | {error, node_is_joining_other}.
+ensure_is_not_joining(#s{post_join = #post_join{}}) ->
+  {error, node_is_joining_other};
+ensure_is_not_joining(#s{}) ->
+  ok.
+
+-spec abort_post_join_hooks(#s{}) -> #s{}.
+abort_post_join_hooks(S = #s{post_join = undefined}) ->
+  S;
+abort_post_join_hooks(S = #s{post_join = #post_join{worker = Pid}}) ->
+  _ = classy_sup:terminate_dynamic_child(?post_join_child),
+  %% Flush link messages:
+  receive
+    {'EXIT', Pid, _} -> ok
+  after 0 ->
+      ok
+  end,
+  finalize_join({error, aborted}, S).
+
+-spec launch_post_join_child(
+        #s{},
+        gen_server:from() | undefined,
+        classy:cluster_id(),
+        classy:site(),
+        node() | undefined,
+        classy:join_intent()
+       ) ->
+        {ok, #s{}} | {error, _}.
+launch_post_join_child(S, From, Cluster, Local, JoinToNode, Intent) ->
+  IsReplay = From =:= undefined,
+  Spec = #{ id       => ?post_join_child
+          , start    => {?MODULE, start_link_post_join, [self(), IsReplay, Cluster, Local, JoinToNode, Intent]}
+          , restart  => temporary
+          , type     => worker
+          },
+  case classy_sup:ensure_dynamic_child(Spec) of
+    {ok, Pid} ->
+      PJ = #post_join{node = JoinToNode, worker = Pid, reply = From},
+      {ok, S#s{post_join = PJ}};
+    {error, Reason} = Err ->
+      logger:error("Failed to start the post-join hooks: ~p", [Reason]),
+      Err
+  end.
+
+%% Handle reply from the async post-join worker:
+-spec finalize_join(_Reason, #s{}) -> #s{}.
+finalize_join(Reason, S0 = #s{post_join = PJ}) ->
+  #post_join{node = Node, reply = From} = PJ,
+  Result = case Reason of
+             normal ->
+               ok;
+             {error, aborted} = Aborted ->
+               Aborted;
+             _ ->
+               ?tp(error, "Post-join hooks crashed",
+                   #{ reason => Reason
+                    , remote => Node
+                    }),
+               {error, post_join_failed}
+           end,
+  S = S0#s{post_join = undefined},
+  case From of
+    undefined ->
+      %% This is replay. No need to release locks, as the original
+      %% process that took them is dead:
+      S;
+    _ ->
+      gen_server:reply(From, Result),
+      unlock_join_remote(Node, self()),
+      S
+  end.
+
+-doc false.
+-spec start_link_post_join(
+        pid(),
+        boolean(),
+        classy:cluster_id(),
+        classy:site(),
+        node() | undefined,
+        classy:join_intent()
+       ) -> {ok, pid()}.
+start_link_post_join(Parent, IsReplay, Cluster, Local, JoinToNode, Intent) ->
+  proc_lib:start_link(
+    ?MODULE,
+    post_join_child,
+    [Parent, IsReplay, Cluster, Local, JoinToNode, Intent]).
+
+-spec post_join_child(
+        pid(),
+        boolean(),
+        classy:cluster_id(),
+        classy:site(),
+        node() | undefined,
+        classy:join_intent()
+       ) -> no_return().
+post_join_child(Parent, IsReplay, Cluster, Local, JoinToNode, Intent) ->
+  erlang:link(Parent),
+  proc_lib:init_ack({ok, self()}),
+  ?tp(notice, classy_post_join_hooks,
+      #{ phase   => start
+       , cluster => Cluster
+       , replay  => IsReplay
+       , intent  => Intent
+       }),
+  classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode, Intent]),
+  {ok, _} = classy_table:atomically(?tab, [{d, ?pending_on_join_hook}]),
+  ?tp(notice, classy_post_join_hooks,
+      #{ phase   => complete
+       , cluster => Cluster
+       , replay  => IsReplay
+       , intent  => Intent
+       }),
+  exit(normal).
+
+-spec maybe_replay_pending_on_join_hook(#s{}) -> {ok, #s{}}.
+maybe_replay_pending_on_join_hook(S0 = #s{site = Local}) ->
+  maybe
+    [#{ cluster := Cluster
+      , join_to := JoinToNode
+      , intent := Intent
+      }] ?= classy_table:lookup(?tab, ?pending_on_join_hook),
+    ?tp(warning, "Replaying pending post-join hooks",
+        #{ cluster => Cluster
+         , node    => JoinToNode
+         , intent  => Intent
+         }),
+    %% Re-notify the peers:
+    {ok, Clock} = classy_membership:set_member(Cluster, Local, Local, true),
+    classy_membership:flush(Cluster, Local),
+    ok = classy_table:write(?tab, ?joined_at, Clock),
+    {ok, S} ?= launch_post_join_child(S0, undefined, Cluster, Local, JoinToNode, Intent),
+    {ok, S}
+  else
+    _ -> {ok, S0}
+  end.
 
 %% Update node tracking information
 -spec update_sites_status(#s{}) -> #s{}.
@@ -936,10 +1156,9 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
            , local   => Local
            , remote  => Origin
            }),
-      case on_leave(S0, kicked) of
-        {ok, S}          -> {ok, S};
-        {error, _} = Err -> Err
-      end;
+      %% Abort the post-join hooks: the ongoing join has been
+      %% invalidated by the kick:
+      on_leave(S0, kicked);
     #{} ->
       maybe
         {ok, S} ?= import_deltas(true, Deltas, S0),
@@ -1166,8 +1385,9 @@ foreach_site_info(Fun) ->
         ?site_info),
   ok.
 
--spec do_lock_join(pid(), pos_integer(), #s{}) -> {{ok, boolean()}, #s{}}.
-do_lock_join(Pid, Timeout, S = #s{join_locks = JLs0}) ->
+-spec do_lock_join(pid(), #s{}) -> {{ok, boolean()}, #s{}}.
+do_lock_join(Pid, S = #s{join_locks = JLs0}) ->
+  Timeout = join_lock_autoclean(),
   case lists:keyfind(Pid, #jl.pid, JLs0) of
     false ->
       MRef = monitor(process, Pid),
@@ -1193,4 +1413,4 @@ do_unlock_join(Pid, S = #s{join_locks = JLs0}) ->
 
 -spec join_lock_autoclean() -> pos_integer().
 join_lock_autoclean() ->
-  application:get_env(classy, join_lock_autoclean, 15_000).
+  application:get_env(classy, join_lock_autoclean, 300_000).

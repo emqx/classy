@@ -121,15 +121,124 @@ t_020_join(_) ->
        RuntimeData
      end,
      [ fun initialization_hooks/2
-     , {"join hooks",
-        fun(Trace) ->
-            ?assert(
-               ?strict_causality(
-                  #{?snk_kind := classy_pre_join_node, cluster := _C},
-                  #{?snk_kind := classy_joined_cluster, cluster := _C},
-                  Trace))
-        end}
      , fun events_on_all_sites/1
+     ]).
+
+%% This testcase verifies the asynchronous post-join hook runner:
+%%
+%% - `join_node' doesn't return until the post-join hooks have
+%%   completed;
+%% - a concurrent join is refused while the hooks are running;
+%% - leave/kick (local or remote) abort the running hooks, and the
+%%   join caller receives `{error, aborted}';
+%% - a crash of the hook child is reported to the join caller;
+%% - if the node stops before the hooks complete, they are replayed on
+%%   the next startup.
+t_021_post_join_async(_) ->
+  S1 = <<"s1">>,
+  S2 = <<"s2">>,
+  ?check_trace(
+     #{timetrap => ?timetrap},
+     begin
+       N1 = create_start_site(S1, #{}),
+       _N2 = create_start_site(S2, #{}),
+       %%
+       %% 1. A crash of the hook child is reported to the join caller
+       %%    (crash is injected at the child's own trace point):
+       %%
+       ?tp(notice, test_phase1, #{}),
+       CrashRef = ?inject_crash(
+                     #{ ?snk_kind := classy_post_join_hooks
+                      , phase     := start
+                      , intent    := crash_me
+                      },
+                     snabbkaffe_nemesis:always_crash()),
+       ?assertMatch(
+          {error, post_join_failed},
+          ?ON(S2, classy:join_node(N1, crash_me))),
+       snabbkaffe_nemesis:fix_crash(CrashRef),
+       %% Return to status quo:
+       sync_kick(S2, S2, force, [S1, S2]),
+       %%
+       %% 2. The join doesn't return while the hook is blocked, and a
+       %%    concurrent join is refused:
+       %%
+       ?tp(notice, test_phase2, #{}),
+       delay_post_join(gate1, join1),
+       K1 = async_join(S2, N1, join1),
+       ?assertMatch(
+          {error, node_is_joining_other},
+          ?ON(S2, classy:join_node(N1, join))),
+       %% Release the gate; now the join should succeed:
+       ?tp(notice, gate1, #{}),
+       ?assertMatch(
+          {response, ok},
+          erpc:wait_response(K1, 10_000)),
+       ?assertSameSet([S1, S2], ?ON(S1, classy:sites())),
+       %% Return to status quo:
+       sync_kick(S2, S2, force, [S1, S2]),
+       %%
+       %% 3. Leave by self aborts the running hooks:
+       %%
+       delay_post_join(gate3, join3),
+       K2 = async_join(S2, N1, join3),
+       ?assertMatch(
+          ok,
+          ?ON(S2, classy:kick_site(S2, kick))),
+       ?assertMatch(
+          {response, {error, aborted}},
+          erpc:wait_response(K2, 5_000)),
+       ?assertEqual(
+          [S2],
+          ?ON(S2, classy:sites())),
+       %% Return to status quo:
+       sync_kick(S2, S2, force, [S1, S2]),
+       %%
+       %% 4. Remote kick aborts the running hooks:
+       %%
+       delay_post_join(gate4, join4),
+       K3 = async_join(S2, N1, join4),
+       timer:sleep(100),
+       ?assertMatch(
+          ok,
+          ?ON(S1, classy:kick_site(S2, force))),
+       ?assertMatch(
+          {response, {error, aborted}},
+          erpc:wait_response(K3, 5_000)),
+       ?assertEqual(
+          [S1],
+          ?ON(S1, classy:sites())),
+       %% Return to status quo:
+       sync_kick(S2, S2, force, [S1, S2]),
+       %%
+       %% 5. If the node stops before the hooks complete, they are
+       %%    replayed on the next startup:
+       %%
+       delay_post_join(gate5, join5),
+       K4 = async_join(S2, N1, join5),
+       timer:sleep(100),
+       %% Stop the site while the hooks are running. The join caller
+       %% receives an error:
+       ok = stop_site(S2),
+       _ = try erpc:wait_response(K4, 5_000) catch _:_ -> ok end,
+       ?tp(notice, gate5, #{}),
+       %% Restart the site: the hooks must be replayed:
+       ?wait_async_action(
+          restart_site(S2),
+          #{?snk_kind := classy_post_join_hooks
+           , phase    := complete
+           , replay   := true
+           }),
+       timer:sleep(100),
+       %% The journaling marker must be cleared:
+       ?assertEqual(
+          [],
+          ?ON(S2, classy_table:lookup(classy_node, pending_on_join_hook))),
+       %% The site has restored its membership in the cluster:
+       ?assertSameSet([S1, S2], ?ON(S1, classy:sites()))
+     end,
+     [ fun events_on_all_sites/1
+     , fun classy_ct:no_unexpected_events/1
      ]).
 
 %% This testcase verifies happy case of kicking node from the cluster:
@@ -855,7 +964,7 @@ t_085_extra_sync_targets(_) ->
      [ fun classy_ct:no_unexpected_events/1
      , {"no join leave hooks",
         fun(Trace) ->
-            Kinds = [classy_pre_join_node, classy_member_leave],
+            Kinds = [classy_member_leave],
             ?assertMatch(
                [],
                ?of_kind(Kinds, Trace))
@@ -2579,6 +2688,20 @@ post_vote(Result, Id, Ref) ->
 
 vote_on_fail(FailInfo, Ref) ->
   ?tp(classy_test_vote_on_fail, FailInfo#{test_ref => Ref}).
+
+async_join(Site, ToNode, Intent) ->
+  Node = familiar:which_node({get_cluster(), Site}),
+  {Req, {ok, _}} =
+    ?wait_async_action(
+       erpc:send_request(Node, classy, join_node, [ToNode, Intent]),
+       #{?snk_kind := classy_joined_cluster, local := Site},
+       5_000),
+  Req.
+
+delay_post_join(Gate, Intent) ->
+  ?force_ordering(
+     #{?snk_kind := Gate},
+     #{?snk_kind := classy_post_join, intent := Intent}).
 
 verify_no_votes(Nodes) ->
   %% TODO: using retry due to sporadic votes spawned by

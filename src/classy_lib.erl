@@ -119,8 +119,6 @@ safe_apply(Module, Function, Args) ->
 
 -doc """
 Apply a function in a separate process with a timeout.
-
-WARNING: aborting the calling process while running this function may leave the child process running.
 """.
 -spec safe_apply_with_timeout(callback(), timeout()) ->
         {ok, term()} |
@@ -128,21 +126,40 @@ WARNING: aborting the calling process while running this function may leave the 
         {error, {timeout, Info}} when
     Info :: list() | undefined.
 safe_apply_with_timeout(Callback, Timeout) ->
-  {Pid, MRef} = spawn_monitor(
-                  fun() ->
-                      exit(safe_apply(Callback))
-                  end),
-  put(?dict_worker_pid, Pid),
+  Parent = self(),
+  Ref = make_ref(),
+  %% Spawn a proxy process, linked to us. It is meant to terminate the
+  %% worker if parent exits:
+  _ = spawn_link(
+        fun() ->
+            process_flag(trap_exit, true),
+            %% Spawn worker process:
+            {Worker, MRef} = spawn_monitor(
+                               fun() ->
+                                   exit(safe_apply(Callback))
+                               end),
+            Parent ! {Ref, Worker},
+            receive
+              {'DOWN', MRef, process, Worker, Result} ->
+                unlink(Parent),
+                Parent ! {Ref, Result};
+              {'EXIT', Parent, _} ->
+                exit(Worker, kill)
+            after Timeout ->
+                Info = process_info(Worker, [current_stacktrace]),
+                exit(Worker, kill),
+                unlink(Parent),
+                Parent ! {Ref, {error, {timeout, Info}}}
+            end
+        end),
   receive
-    {'DOWN', MRef, process, Pid, Reason} ->
-      erase(?dict_worker_pid),
-      Reason
-  after Timeout ->
-      Info = process_info(Pid, [current_stacktrace]),
-      demonitor(MRef, [flush]),
-      exit(Pid, kill),
-      erase(?dict_worker_pid),
-      {error, {timeout, Info}}
+    {Ref, WorkerPid} ->
+      put(?dict_worker_pid, WorkerPid),
+      receive
+        {Ref, Result} ->
+          _ = erase(?dict_worker_pid),
+          Result
+      end
   end.
 
 -doc """
