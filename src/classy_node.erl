@@ -1405,4 +1405,4 @@ do_unlock_join(Pid, S = #s{join_locks = JLs0}) ->
 
 -spec join_lock_autoclean() -> pos_integer().
 join_lock_autoclean() ->
-  application:get_env(classy, join_lock_autoclean, 15_000).
+  application:get_env(classy, join_lock_autoclean, 300_000).

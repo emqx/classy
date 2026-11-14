@@ -353,7 +353,7 @@ The document was typeset with
       If set to @code{auto},
       then the value is calculated as majority @code{@ref{n_sites}}.
 
-    @defen{join_lock_autoclean, @code{pos_integer()}, 15s}
+    @defen{join_lock_autoclean, @code{pos_integer()}, 5m}
 
       @emph{Unit}: ms
 
