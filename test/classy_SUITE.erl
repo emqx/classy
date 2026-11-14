@@ -141,7 +141,7 @@ t_021_post_join_async(_) ->
      #{timetrap => ?timetrap},
      begin
        N1 = create_start_site(S1, #{}),
-       N2 = create_start_site(S2, #{}),
+       _N2 = create_start_site(S2, #{}),
        %%
        %% 1. A crash of the hook child is reported to the join caller
        %%    (crash is injected at the child's own trace point):
