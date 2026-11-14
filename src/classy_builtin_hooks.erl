@@ -73,11 +73,11 @@ log_pre_join(Cluster, Remote, Node, UserArg) ->
        }).
 
 log_post_join(Cluster, Local, JoinToNode, Intent) ->
-  ?tp(notice, classy_joined_cluster,
-      #{ cluster => Cluster
-       , local => Local
+  ?tp(info, classy_post_join,
+      #{ cluster        => Cluster
+       , local          => Local
        , joined_to_node => JoinToNode
-       , intent => Intent
+       , intent         => Intent
        }).
 
 log_membership_change(Cluster, Local, Remote, Member) ->
