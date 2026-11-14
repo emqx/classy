@@ -132,8 +132,8 @@ t_020_join(_) ->
 %% - leave/kick (local or remote) abort the running hooks, and the
 %%   join caller receives `{error, aborted}';
 %% - a crash of the hook child is reported to the join caller;
-%% - if the node stops before the hooks complete, they are replayed on
-%%   the next startup.
+%% - if the node stops before the hooks complete, it automatically
+%%   kicks itself from the cluster.
 t_021_post_join_async(_) ->
   S1 = <<"s1">>,
   S2 = <<"s2">>,
@@ -225,17 +225,18 @@ t_021_post_join_async(_) ->
        %% Restart the site: the hooks must be replayed:
        ?wait_async_action(
           restart_site(S2),
-          #{?snk_kind := classy_post_join_hooks
-           , phase    := complete
-           , replay   := true
+          #{ ?snk_kind    := classy_aborted_join
+           , join_to_node := N1
+           , cluster      := _
            }),
-       timer:sleep(100),
+       timer:sleep(1000),
        %% The journaling marker must be cleared:
        ?assertEqual(
           [],
           ?ON(S2, classy_table:lookup(classy_node, pending_on_join_hook))),
-       %% The site has restored its membership in the cluster:
-       ?assertSameSet([S1, S2], ?ON(S1, classy:sites()))
+       %% The site has aborted the join an kicked itself
+       ?assertMatch([S1], ?ON(S1, classy:sites())),
+       ?assertMatch([S2], ?ON(S2, classy:sites()))
      end,
      [ fun events_on_all_sites/1
      , fun classy_ct:no_unexpected_events/1

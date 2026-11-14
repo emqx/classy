@@ -780,12 +780,6 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
       %% Already in the same cluster with `Node'. Set our membership
       %% status and trigger re-sync (do we need to re-run hooks?):
       classy_membership:call_sync(Cluster, Local, MemData),
-      %% Journal the hook invocation, so that it can be replayed if
-      %% the node stops after the cluster state has been updated, but
-      %% before the hook had a chance to run:
-      ok = classy_table:dirty_write(
-             ?tab, ?pending_on_join_hook, {Cluster, Local, Node, JoinIntent}),
-      ok = classy_table:flush(?tab),
       {ok, Clock} = classy_membership:set_member(Cluster, Local, Local, true),
       classy_membership:flush(Cluster, Local),
       ok = classy_table:write(?tab, ?joined_at, Clock),
@@ -805,6 +799,7 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
       do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S)
   end.
 
+-spec on_leave(#s{}, classy:kick_intent()) -> {ok, #s{}}.
 on_leave(S0 = #s{cluster = Cluster, site = Local}, Intent) ->
   %% Abort pending post_join
   S = abort_post_join_hooks(S0),
@@ -857,6 +852,14 @@ join_cluster(Cluster, JoinToNode, Local, Remote, Intent, S = #s{}) ->
        }),
   classy_table:dirty_write(?tab, ?the_cluster, Cluster),
   classy_table:dirty_write(?tab, ?parent_site, Remote),
+  %% Journal the hook invocation, so that it can be replayed if the
+  %% node stops after the cluster state has been updated, but before
+  %% the hook had a chance to run. Note: pending hook is deleted by
+  %% the async hook worker, when it's done.
+  ok = classy_table:dirty_write(
+         ?tab,
+         ?pending_on_join_hook,
+         #{cluster => Cluster, join_to => JoinToNode, intent => Intent}),
   classy_table:flush(?tab),
   {ok, S#s{cluster = Cluster}}.
 
@@ -975,17 +978,37 @@ post_join_child(Parent, IsReplay, Cluster, Local, JoinToNode, Intent) ->
   exit(normal).
 
 -spec maybe_replay_pending_on_join_hook(#s{}) -> {ok, #s{}}.
-maybe_replay_pending_on_join_hook(S0) ->
+maybe_replay_pending_on_join_hook(S0 = #s{site = Local}) ->
   maybe
-    %% FIXME: make it a map:
-    [{Cluster, Local, JoinToNode, Intent}] ?= classy_table:lookup(?tab, ?pending_on_join_hook),
-    ?tp(warning, "Replaying pending post-join hooks",
-        #{ cluster => Cluster
-         , node => JoinToNode
-         , intent => Intent
+    [#{ cluster := Cluster
+      , join_to := JoinToNode
+      , intent  := Intent
+      }] ?= classy_table:lookup(?tab, ?pending_on_join_hook),
+    ?tp(critical, classy_aborted_join,
+        #{ cluster      => Cluster
+         , join_to_node => JoinToNode
+         , intent       => Intent
          }),
-    {ok, S} ?= launch_post_join_child(S0, undefined, Cluster, Local, JoinToNode, Intent),
-    {ok, S}
+    %% We cannot simply retry join due to various reasons:
+    %%
+    %% 1. We could be kicked while being down, retry will unexpectedly
+    %% resurrect us
+    %%
+    %% 2. The joinee could be kicked, in this case we'll run post-join
+    %% for an invalid member.
+    %%
+    %% 3. Cluster could be out-of-sync, previously discovered peers
+    %% could be down or unreachable, etc. In other words, we cannot
+    %% make the decision to rejoin based on the information obtained
+    %% by an immediate read of the cluster CRDT - that violates the
+    %% general design that join/kick decisions originate from some
+    %% authority (operator or liveness quorum)
+    %%
+    %% Since an aborted join is a relatively rare situation, we opt
+    %% out for the only safe route: kick ourselves from the cluster.
+    %% If this becomes a common problem, it will be addressed later.
+    classy_membership:set_member(Cluster, Local, Local, false),
+    on_leave(S0, aborted_join)
   else
     _ -> {ok, S0}
   end.
