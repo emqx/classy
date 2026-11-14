@@ -238,6 +238,7 @@ t_021_post_join_async(_) ->
        ?assertSameSet([S1, S2], ?ON(S1, classy:sites()))
      end,
      [ fun events_on_all_sites/1
+     , fun classy_ct:no_unexpected_events/1
      ]).
 
 %% This testcase verifies happy case of kicking node from the cluster:

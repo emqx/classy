@@ -373,8 +373,7 @@ handle_call(#call_join{} = Call, From, S) ->
   handle_join(S, From, Call);
 handle_call(#call_kick{site = Target, intent = Intent}, _From, S0) ->
   case handle_kick(Target, Intent, S0) of
-    {ok, S1} ->
-      S = abort_post_join_hooks(S1),
+    {ok, S} ->
       {reply, ok, S};
     {error, _} = Err ->
       {reply, Err, S0}
@@ -806,7 +805,9 @@ do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S0) ->
       do_join_node(Node, Cluster, Remote, MemData, JoinIntent, S)
   end.
 
-on_leave(S = #s{cluster = Cluster, site = Local}, Intent) ->
+on_leave(S0 = #s{cluster = Cluster, site = Local}, Intent) ->
+  %% Abort pending post_join
+  S = abort_post_join_hooks(S0),
   %% Trigger some of the events related to the old cluster:
   foreach_site_info(
     fun(Peer, _) ->
@@ -1149,8 +1150,7 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
            }),
       %% Abort the post-join hooks: the ongoing join has been
       %% invalidated by the kick:
-      S1 = abort_post_join_hooks(S0),
-      on_leave(S1, kicked);
+      on_leave(S0, kicked);
     #{} ->
       maybe
         {ok, S} ?= import_deltas(true, Deltas, S0),
