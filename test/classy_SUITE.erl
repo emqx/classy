@@ -963,7 +963,7 @@ t_085_extra_sync_targets(_) ->
      [ fun classy_ct:no_unexpected_events/1
      , {"no join leave hooks",
         fun(Trace) ->
-            Kinds = [classy_pre_join_node, classy_member_leave],
+            Kinds = [classy_member_leave],
             ?assertMatch(
                [],
                ?of_kind(Kinds, Trace))

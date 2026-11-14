@@ -9,7 +9,6 @@
         , enrich_site_info/1
         , log_create_site/1
         , log_create_cluster/2
-        , log_pre_join/4
         , log_post_join/4
         , log_membership_change/4
         , log_run_level/2
@@ -62,14 +61,6 @@ log_create_cluster(Cluster, Site) ->
   ?tp(info, classy_create_new_cluster,
       #{ cluster => Cluster
        , local => Site
-       }).
-
-log_pre_join(Cluster, Remote, Node, UserArg) ->
-  ?tp(debug, classy_pre_join_node,
-      #{ cluster => Cluster
-       , remote => Remote
-       , remote_node => Node
-       , user_arg => UserArg
        }).
 
 log_post_join(Cluster, Local, JoinToNode, Intent) ->
