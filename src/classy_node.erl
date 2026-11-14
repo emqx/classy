@@ -363,7 +363,7 @@ init(_) ->
   classy_hook:foreach(?on_node_init, []),
   case init_cluster() of
     {ok, S} ->
-      maybe_replay_pending_on_join_hook(S);
+      maybe_abort_pending_join(S);
     {error, Reason} ->
       {stop, Reason, undefined}
   end.
@@ -977,8 +977,8 @@ post_join_child(Parent, IsReplay, Cluster, Local, JoinToNode, Intent) ->
        }),
   exit(normal).
 
--spec maybe_replay_pending_on_join_hook(#s{}) -> {ok, #s{}}.
-maybe_replay_pending_on_join_hook(S0 = #s{site = Local}) ->
+-spec maybe_abort_pending_join(#s{}) -> {ok, #s{}}.
+maybe_abort_pending_join(S0 = #s{site = Local}) ->
   maybe
     [#{ cluster := Cluster
       , join_to := JoinToNode
@@ -1007,7 +1007,8 @@ maybe_replay_pending_on_join_hook(S0 = #s{site = Local}) ->
     %% Since an aborted join is a relatively rare situation, we opt
     %% out for the only safe route: kick ourselves from the cluster.
     %% If this becomes a common problem, it will be addressed later.
-    classy_membership:set_member(Cluster, Local, Local, false),
+    {ok, _Clock} = classy_membership:set_member(Cluster, Local, Local, false),
+    classy_membership:flush(Cluster, Local),
     on_leave(S0, aborted_join)
   else
     _ -> {ok, S0}
