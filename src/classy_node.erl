@@ -859,12 +859,6 @@ join_cluster(Cluster, JoinToNode, Local, Remote, Intent, S = #s{}) ->
   classy_table:flush(?tab),
   {ok, S#s{cluster = Cluster}}.
 
--spec run_post_join_hooks(classy:cluster_id(), classy:site(), node() | undefined, classy:join_intent()) -> ok.
-run_post_join_hooks(Cluster, Local, JoinToNode, Intent) ->
-  classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode, Intent]),
-  {ok, _} = classy_table:atomically(?tab, [{d, ?pending_on_join_hook}]),
-  ok.
-
 -spec ensure_is_not_joining(#s{}) -> ok | {error, node_is_joining_other}.
 ensure_is_not_joining(#s{post_join = #post_join{}}) ->
   {error, node_is_joining_other};
@@ -969,7 +963,8 @@ post_join_child(Parent, IsReplay, Cluster, Local, JoinToNode, Intent) ->
        , replay  => IsReplay
        , intent  => Intent
        }),
-  ok = run_post_join_hooks(Cluster, Local, JoinToNode, Intent),
+  classy_hook:foreach(?on_post_join, [Cluster, Local, JoinToNode, Intent]),
+  {ok, _} = classy_table:atomically(?tab, [{d, ?pending_on_join_hook}]),
   ?tp(notice, classy_post_join_hooks,
       #{ phase   => complete
        , cluster => Cluster
