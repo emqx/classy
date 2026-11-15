@@ -6,7 +6,7 @@
 @copying
 An application that helps manage a cluster of Erlang nodes.
 
-Copyright @copyright{} 2026 EMQ Technologies Co., Ltd
+Copyright @copyright{} 2026 EMQ Technologies Co., Ltd.
 
 The document was typeset with
 @uref{https://www.gnu.org/software/texinfo/, GNU Texinfo}.
@@ -38,17 +38,18 @@ The document was typeset with
   Peer information is propagated between the peers using gossip protocol.
 
   @item @emph{Persistent node identities}:
-  nodes are assigned persistent identities that survive host name changes.
+  nodes are assigned persistent identities that survive hostname changes.
 
   @item @emph{Service discovery}:
-  sites can automatically discover one another using one of cluster discovery strategies.
+  sites can automatically discover one another using one of the cluster discovery strategies.
 
-  @item @emph{Automatic clean up}:
-  sites that remain down for a long time are automatically removed.
+  @item @emph{Automatic cleanup}:
+  sites that remain down for longer than @ref{max_site_downtime} are automatically removed.
 
   @item @emph{Persistence layer}:
-  classy implements a standalone persistent table similar to mnesia `local_content` `disk_copies` table,
-  that can be used by 3rd party applications.
+  classy implements a standalone persistent table similar to mnesia @code{local_content} @code{disk_copies} table
+  that can be used by third-party applications:
+  @erlmodref{ref,classy_table}
 
   @item @emph{Unique ID generation}:
   @erlmodref{ref,classy_uid}
@@ -64,14 +65,15 @@ The document was typeset with
 @node Introduction
 @chapter Introduction
 
+  @node Concepts
   @section Concepts
   @cindex Site ID
   @anchor{Site ID}
-  @b{Site ID} is a random unique identifier of the node that persists between restarts and host name changes.
+  @b{Site ID} is a random unique identifier of the node that persists between restarts and hostname changes.
   Each node creates this identifier once and then never changes it.
 
   By default, classy initializes site with a random value.
-  Business applications can override this behavior by registering @erlfn{link,erlref,classy,on_node_init,2} hook
+  Business applications can override this behavior by registering a @erlfn{link,erlref,classy,on_node_init,2} hook
   containing a call to @erlfn{link,erlref,classy_node,maybe_init_the_site,1}:
 
   @example erlang
@@ -88,39 +90,57 @@ The document was typeset with
 
   Each site starts in its very own cluster with a random ID.
   When a site joins a remote node,
-  it inherits its cluster ID of the remote.
+  it inherits the cluster ID of the remote.
 
   @cindex Run level
   @anchor{Run level}
-  @b{Run level} is global system state derived from the configuration and the number of peers.
-  It indicates ``readiness'' of the local site.
+  @b{Run level} is a global system state that indicates ``readiness'' of the local site.
+  It is represented by an integer in the range @code{0..300}
+  and is derived from the configuration and the number of peers.
+
+  The run levels are split into the following ranges:
 
   @enumerate
-    @item @code{stopped}:
+    @item @code{stopped} (@code{0..9}):
     Classy application itself is not running or is not ready.
+    These run levels are reserved for classy's own initialization logic,
+    business applications must not use them.
 
-    @item @code{single}:
+    @item @code{single} (@code{10..99}):
     Classy application is ready to process cluster membership information,
-    but the number of known peers is less than @ref{n_sites}.
+    but the total number of @emph{known} sites (including the local site)
+    may be less than @ref{n_sites}.
+    These run levels correspond to initialization of a singleton node.
 
-    @item @code{cluster}:
-    the number of @emph{known} peers is >= @ref{n_sites},
-    but the number of @emph{connected} peers is less than @ref{quorum}.
+    @item @code{cluster} (@code{100..199}):
+    the total number of @emph{known} sites (including the local site) is at least @ref{n_sites},
+    but the number of @emph{connected} sites (including the local site) may be less than @ref{quorum}.
 
-    @item @code{quorum}:
-    the number of connected peers satisfies the configuration.
-    Site is fully connected and operational.
+    @item @code{quorum} (@code{200..299}):
+    the number of @emph{connected} sites (including the local site) satisfies the @ref{quorum} configuration.
+
+    @item @code{ready} (@code{300}):
+    final run level.
+    The site is fully connected and operational.
   @end enumerate
 
-  Unless the node is stopped abruptly
+  Unless the whole BEAM VM or the classy application is stopped abruptly
   (@code{erlang:halt}, @code{kill}, power loss),
-  run levels always advance and retard in sequence.
+  the run level is stepped in an increasing or decreasing arithmetic progression:
+  it always advances and regresses in sequence.
+  When @erlfn{ref,erlref,classy,start_system,0} is called for the first time,
+  the system starts at the @code{stopped} run level (@code{0})
+  and eventually progresses to the @code{ready} run level (@code{300}).
+  Effect of @erlfn{ref,erlref,classy,stop_system,0} is the opposite.
 
   Business applications can track the run level via @erlfn{link,erlref,classy,on_run_level,2} hook.
   This hook can, for example,
   activate or deactivate some business applications.
 
-  @node Network Partition
+  The boot sequence and @emph{barriers} that can pause the run level progression
+  are managed by the @erlmodref{ref,classy_boot} module.
+
+  @node Network Partitions
   @section Network Partitions
 
   Classy guarantees that all cluster members will eventually converge to the same state,
@@ -134,11 +154,11 @@ The document was typeset with
 
   @cindex Peer discovery
   Autocluster is a mechanism for automatic peer discovery.
-  Peer discovery is done with a help of several modules implementing
+  Peer discovery is done with the help of several modules implementing
   @erlmodref{link,classy_discovery_strategy} behavior.
 
   The strategy is configured via @ref{discovery_strategy} OTP application environment variable.
-  This variable has a form of 2-tuple with the following elements:
+  This variable has the form of a 2-tuple with the following elements:
 
   @enumerate
     @item Discovery method, such as @code{static}
@@ -147,7 +167,7 @@ The document was typeset with
 
   New methods can be registered using @erlfn{ref,erlref,classy_discovery_strategy,hook,2} function.
 
-  Additionally, there is a hook that allows to filter and prioritize discovered nodes:
+  Additionally, there is a hook that can be used to filter and prioritize discovered nodes:
   @erlfn{ref,erlref,classy,pre_autocluster,2}.
 
   Autocluster logic runs only on singleton sites.
@@ -155,9 +175,9 @@ The document was typeset with
 
   The following strategies are available:
 
-  @node manual autocluster
-  @section manual
-    `Manual'' strategy disables automatic peer discovery.
+  @node Manual
+  @section Manual
+    ``Manual'' strategy disables automatic peer discovery.
     When it is selected,
     the site simply waits until the operator manually calls @erlfn{ref,erlref,classy,join_node,2}.
 
@@ -167,101 +187,129 @@ The document was typeset with
     @{manual, []@}
     @end example
 
-  @node static autocluster
-  @section static
-     Join to one of the nodes explicitly pre-configured in the list.
+  @node Static
+  @section Static
+     Join one of the nodes explicitly pre-configured in the list.
 
      Example configuration:
 
      @example
-     @verbatim
-     {static, #{seeds => ['foo@example.com', 'bar@example.com']}}
-     @end verbatim
+     @{static, #@{seeds => ['foo@@example.com', 'bar@@example.com']@}@}
      @end example
 
-  @node dns autocluster
-  @section dns
+  @node DNS
+  @section DNS
     Discover peers via DNS query.
 
     Configuration parameters:
 
     @table @code
       @item name
-      Domain name (Required)
-      @item type
-      type of the DNS record (default: A).
+      Type: @code{string()} (Required).
 
-      Allowed values: @code{A}, @code{AAAA}, @code{SRV}.
+      Domain name.
+
+      @item type
+      Type: @code{a | aaaa | srv}, default: @code{a}.
+
+      DNS record type.
+
       @item app
-      Node name prefix (default: @erlfn{ref,erlref,classy_autocluster,app_name,0})
+      Type: @code{string() | atom()}, default: @erlfn{ref,erlref,classy_autocluster,app_name,0}.
+
+      Node name prefix.
     @end table
 
     Node names are derived using the following template @code{App@@Hostname},
     where @code{App} is the value of @code{app} configuration option,
     and @code{Hostname} is derived from the DNS response.
 
-    When @code{a} or @code{aaaa} type is used, host names become IP addresses.
-    It's recommended to use SRV records.
+    When @code{a} or @code{aaaa} record type is used, hostnames become IP addresses.
+    It is recommended to use @code{srv} records.
 
-  @node k8s autocluster
-  @section k8s
+  @node K8s
+  @section K8s
 
-    This discovery strategy relies on Kubernetes API server.
-    It queries the Kubernetes API endpoint @code{/api/v1/namespaces/@{namespace@}/endpoints/@{app@}}
+    This discovery strategy relies on the Kubernetes API server.
+    It queries the Kubernetes API endpoint @code{/api/v1/namespaces/@{namespace@}/endpoints/@{service_name@}}
     to retrieve the IP addresses or hostnames of all pods associated with that service,
     which are then converted into Erlang node names.
 
-    Configuration Parameters:
+    Configuration parameters:
     @table @code
       @item apiserver
-      Type: string (Required)
+      Type: @code{string()} (Required).
 
       The URL of the Kubernetes API server.
 
       @item service_name
-      Type: string (Required)
+      Type: @code{string()} (Required).
 
       The name of the Kubernetes Service used for discovery.
 
       @item app_name
-      Type: string, default: @erlfn{ref,erlref,classy_autocluster,app_name,0}.
+      Type: @code{string()}, default: @erlfn{ref,erlref,classy_autocluster,app_name,0}.
 
       The application name used as a prefix for the generated node names.
 
       @item address_type
-      Type: Atom, default: @code{ip}.
+      Type: @code{ip | hostname | dns}, default: @code{ip}.
 
       Determines the address extraction and node naming format.
-      Supported values: @code{ip}, @code{hostname}, @code{dns}.
 
       @item namespace
-      Type: string, default: @code{"default"}
+      Type: @code{string()}, default: @code{"default"}.
 
       The Kubernetes namespace where the service is located.
 
       @item suffix
-      Type: string, default: @code{""}
+      Type: @code{string()}, default: @code{""}.
 
       An optional DNS suffix appended to the node name.
+      Only used with the @code{hostname} and @code{dns} address types.
     @end table
 
-  @node etcd autocluster
+  @node etcd
   @section etcd
 
-    Discover peers by querying ETCD service.
+    Discover peers by querying etcd service.
 
     Configuration parameters:
 
     @table @code
-      @item endpoints
+      @item server
       Type: @code{[string()]} (Required).
 
-      List of etcd endpoints to connect to.
+      List of etcd server addresses to connect to.
 
       @item prefix
-      Type: String (Required).
+      Type: @code{string()} (Required).
 
-      Key prefix to use for service discovery
+      Key prefix to use for service discovery.
+
+      @item version
+      Type: @code{v2 | v3}, default: @code{v3}.
+
+      Version of the etcd API to use.
+
+      @item ssl_options
+      Type: @code{[proplists:property()]}, default: @code{[]}.
+
+      TLS options.
+      TLS is disabled when the list is empty,
+      or when it contains @code{@{enable, false@}}.
+
+      @item cluster_name
+      Type: @code{string()}.
+
+      Cluster name used as a part of the etcd key path.
+      Only used by the @code{v2} API version.
+
+      @item node_ttl
+      Type: @code{pos_integer()}.
+
+      TTL of the etcd key holding the node information, in seconds.
+      Only used by the @code{v2} API version.
     @end table
 
 @node Configuration
@@ -293,19 +341,24 @@ The document was typeset with
       Directory where persistent data is stored.
       It should be writable.
 
-    @defen{rpc_timeout, @code{timeout()}, 5000}
+    @defen{table_batch_size, @code{pos_integer()}, @code{100}}
+
+      Number of records processed in a single batch
+      when the persistence layer reads the write-ahead log or compacts a table.
+
+    @defen{rpc_timeout, @code{timeout()}, @code{5_000}}
 
       @emph{Unit}: ms
 
       Default timeout for remote procedure calls.
 
-    @defen{hook_timeout, @code{timeout()}, 30_000}
+    @defen{hook_timeout, @code{timeout()}, @code{30_000}}
 
       @emph{Unit}: ms
 
       Maximum run time for any hook.
 
-    @defen{rand_id_bytes, @code{pos_integer()}, 16}
+    @defen{rand_id_bytes, @code{pos_integer()}, @code{16}}
 
       Number of bytes used in random identifiers,
       such as site IDs and cluster IDs.
@@ -314,27 +367,28 @@ The document was typeset with
       Note that new cluster IDs are created every time a node leaves a cluster,
       so the number of unique random IDs is not limited to the number of sites.
 
-    @defen{boot_diagnostic_interval, @code{pos_integer()}, 15_000}
+    @defen{boot_diagnostic_interval, @code{pos_integer()}, @code{15_000}}
 
       @emph{Unit}: ms
 
-       @erlmodref{ref,classy_boot} module can print boot state of the node to help diagnose problems.
+       @erlmodref{ref,classy_boot} module can print the boot state of the node to help diagnose problems.
        This parameter specifies how often the diagnostics are printed.
 
        NOTE: the message is suppressed when the node is fully booted.
 
   @section Peer
 
-    @defen{sync_timeout, @code{non_neg_integer()}, 1000}
+    @defen{sync_timeout, @code{non_neg_integer()}, @code{1_000}}
 
       @emph{Unit}: ms
 
       Maximum interval of time that can pass between the membership CRDT server receiving an update
       and the moment it propagates it to the peers.
 
-    @defen{n_sites, @code{non_neg_integer()}, 1}
+    @defen{n_sites, @code{non_neg_integer()}, @code{1}}
 
-      Minimum number of known peers necessary to advance the run level from @code{single} to @code{cluster}.
+      Minimum total number of known sites (including the local site)
+      necessary to advance the run level from @code{single} to @code{cluster}.
 
     @defen{to_cluster_sets, @code{[classy:node_set_name()]}, @code{[]}}
 
@@ -346,32 +400,35 @@ The document was typeset with
       List of node set names used to additionally restrict when the node is considered having a quorum.
       Sets from the lists are combined using set intersection operation.
 
-    @defen{quorum, @code{non_neg_integer() | auto}, 1}
+    @defen{quorum, @code{non_neg_integer() | auto}, @code{1}}
 
-      Minimum number of known peers necessary to make quorum decisions and to advance the run level from @code{cluster} to @code{quorum}.
+      Minimum number of @emph{connected} sites (including the local site)
+      necessary to make quorum decisions and to advance the run level from @code{cluster} to @code{quorum}.
 
       If set to @code{auto},
-      then the value is calculated as majority @code{@ref{n_sites}}.
+      then the value is calculated as the majority of @ref{n_sites}.
 
     @defen{join_lock_autoclean, @code{pos_integer()}, 5m}
 
       @emph{Unit}: ms
 
-      When the node A joins to B, it prevents B from joining other nodes until the procedure is complete.
+      The default value is 5 minutes.
+
+      When node A joins B, it prevents B from joining other nodes until the procedure is complete.
       This mechanism is mostly used so the initial cluster formation (when multiple nodes join to each other) happens in an orderly fashion.
-      However, if the node A becomes unresponsive while holding the lock, the lock will automatically expire after set time.
-      Tuning this value may be necessary if the join procedure may take a very long time,
+      However, if node A becomes unresponsive while holding the lock, the lock will automatically expire after set time.
+      Tuning this value may be necessary if the join procedure can take a very long time,
       e.g. due to heavy work done in the hooks.
 
-    @defen{force_intents, @code{list()}, []}
+    @defen{force_intents, @code{list()}, @code{[]}}
 
-      List of @erltp{ref,erlref,classy,join_intent,0} atoms that allow to override join locks.
+      List of @erltp{ref,erlref,classy,join_intent,0} atoms that allow overriding join locks.
       When join command is issued with an intent that belongs in the list,
       the local node @emph{A} will proceed to join another node @emph{B}
       even if the third node @emph{C} is trying to join @emph{A}.
 
   @section Two-phase commit
-    @defen{vote_retry_interval, @code{pos_integer()}, 5000}
+    @defen{vote_retry_interval, @code{pos_integer()}, @code{5_000}}
 
       @emph{Unit}: ms
 
@@ -387,15 +444,17 @@ The document was typeset with
       Note: to prevent network-isolated nodes from kicking their peers,
       quorum among the running nodes is required to perform the act.
 
-    @defen{cleanup_check_interval, @code{pos_integer()}, 5_000}
+    @defen{cleanup_check_interval, @code{pos_integer()}, @code{5_000}}
 
       @emph{Unit}: ms.
 
       Autoclean check interval.
 
-    @defen{forget_after, @code{pos_integer()}, 1w}
+    @defen{forget_after, @code{pos_integer()}, @code{604_800}}
 
       @emph{Unit}: s
+
+      The default value is 1 week.
 
       Forget information about inactive (kicked) sites after this period of time.
 
@@ -414,7 +473,7 @@ The document was typeset with
       So @code{forget_after} should be set to a fairly large value to make sure it doesn't cover nodes that can go back online.
 
   @section Autocluster
-    @defen{discovery_interval, @code{pos_integer()}, 5_000}
+    @defen{discovery_interval, @code{pos_integer()}, @code{5_000}}
 
       @emph{Unit}: ms.
 
@@ -424,9 +483,11 @@ The document was typeset with
 
       Peer discovery method, @xref{Autocluster}.
 
+      @emph{Default}: @code{@{manual, []@}}
+
     @defen{discovery_complete_sets, @code{[classy:node_set_name()]}, @code{[]}}
 
-      Consider cluster discovery complete when intersection of the site sets specified by this parameter,
+      Consider cluster discovery complete when the intersection of the site sets specified by this parameter,
       with the local site subtracted,
       contains at least one item.
 
