@@ -727,6 +727,7 @@ handle_join(S, From, Call) ->
     handle_join1(S, From, Call)
   else
     {error, _} = Err ->
+      unlock_join_remote(Node, self()),
       {reply, Err, S}
   end.
 
@@ -738,6 +739,9 @@ handle_join1(S0, From, Call) ->
             } = Call,
   #s{site = Local} = S0,
   maybe
+    %% Double-check the local locks after grabbing one, to avoid a
+    %% deadlock via TOCTOU:
+    ok ?= check_join_locks(Intent, S0),
     %% Get second hello, now that the remote is locked:
     Hello = verify_hello(Node, ExpectedCluster, Intent),
     #{site := Remote, cluster := Cluster, mem_data := MemData} ?= Hello,
