@@ -186,17 +186,34 @@ An arbitrary ID of a node set.
 Predefined sets are:
 @table @code
 @item all
-names of all previously seen nodes that belong
+Names of all previously seen nodes that belong
 (or belonged, if the site is currently down)
 to the cluster members.
+
 @item up
+Nodes that are considered up per quorum decision.
+
+NOTE: not all of them can be @emph{connected}:
+in case of a network split,
+some nodes may appear in both @emph{up} and @emph{disconnected} sets.
 
 @item down
+Nodes that are considered down per quorum decision
+or report themselves down due a to graceful stop.
+
+NOTE: the quorum may set a node state to @emph{down}
+when it is running in a network isolation from all the quorum nodes.
+Once the quorum decision propagates to the node,
+it restarts itself to meet the expectations of the peers.
+Technically, there exists a short window
+when such a node may appear in both @emph{connected} and @emph{down} sets.
+
 @item connected
-there's an Erlang distribution connection to the node hosting the site.
+Erlang distribution is live between the local node and the node hosting the site.
+
 @item disconnected
-there's no Erlang distribution connection to the node hosting the site,
-but site is not considered down.
+Erlang distribution is down between the local node and the node hosting the site.
+
 @end table
 """.
 -type node_set_name() :: all | up | down | connected | disconnected | term().
@@ -405,28 +422,34 @@ join_node(Node, Intent) ->
 
 -doc """
 Remove a site from the cluster.
-Target site can be local or remote:
-it is allowed for a site to kick itself from the cluster.
+The target site can be local or remote:
+a site is allowed to kick itself from the cluster.
 
-The kicked site creates an entirely new cluster ID,
+The kicked site creates an entirely new cluster ID
 and joins it as a singleton member.
 
-Local site (one that initiates kick) runs the following hooks
+The @emph{local} site (i.e. the one that initiates kick) runs the following hooks
 with @code{Intent} equal to the value of the argument:
 @enumerate
 @item @erlfn{ref,erlref,classy,pre_kick,2}.
 It can decide that removing a site is unsafe and abort the command.
 
-@item @erlfn{ref,erlref,classy,on_leave,2}.
-This hook is executed after the target is successfully kicked.
+@item @erlfn{ref,erlref,classy,on_kick_decided,2}
+is called once the decision to kick is finalized.
 @end enumerate
 
-NOTE: the intent is not propagated across different sites.
-If the target site is not the same as the local site,
-then the target runs @erlfn{ref,erlref,classy,on_leave,2} with pre-defined intent @code{kicked}.
+The @emph{target} site executes the following hook before it leaves the cluster:
+@erlfn{ref,erlref,classy,on_leave,2}.
+Semantically, at this point it is still in the old cluster,
+and the old membership information is retained.
+Then it executes the hooks characteristic of the creation of a new cluster.
 
-NOTE: if the target site is in the process of joining the cluster,
-kick operation aborts the ongoing join.
+NOTE: The intent is not propagated across different sites.
+If the target site is not the same as the local site,
+then the target runs @erlfn{ref,erlref,classy,on_leave,2} with the predefined intent @code{kicked}.
+
+NOTE: If the target site is in the process of joining the cluster,
+the kick operation aborts the ongoing join.
 """.
 -spec kick_site(site(), kick_intent()) -> ok | {error, _}.
 kick_site(Site, Intent) ->
