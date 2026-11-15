@@ -331,7 +331,7 @@ info(_Hops, Nodes) ->
 -doc """
 Get cached site metadata for a remote site.
 
-NOTE: This function works even if the site is down.
+NOTE: This function works even if the target site is down.
 
 @erlmodref{ref,classy_site_metadata} module.
 """.
