@@ -94,37 +94,51 @@ The document was typeset with
 
   @cindex Run level
   @anchor{Run level}
-  @b{Run level} is a global system state derived from the configuration and the number of peers.
-  It indicates ``readiness'' of the local site.
+  @b{Run level} is a global system state that indicates ``readiness'' of the local site.
+  It is represented by an integer in the range @code{0..300}
+  and is derived from the configuration and the number of peers.
+
+  The run levels are split into the following ranges:
 
   @enumerate
-    @item @code{stopped}:
+    @item @code{stopped} (@code{0..9}):
     Classy application itself is not running or is not ready.
+    These run levels are reserved for classy's own initialization logic,
+    business applications must not use them.
 
-    @item @code{single}:
+    @item @code{single} (@code{10..99}):
     Classy application is ready to process cluster membership information,
     but the total number of @emph{known} sites (including the local site)
-    is less than @ref{n_sites}.
+    may be less than @ref{n_sites}.
+    These run levels correspond to initialization of a singleton node.
 
-    @item @code{cluster}:
+    @item @code{cluster} (@code{100..199}):
     the total number of @emph{known} sites (including the local site) is at least @ref{n_sites},
-    but the number of @emph{connected} sites (including the local site) is less than @ref{quorum}.
+    but the number of @emph{connected} sites (including the local site) may be less than @ref{quorum}.
 
-    @item @code{quorum}:
+    @item @code{quorum} (@code{200..299}):
     the number of @emph{connected} sites (including the local site) satisfies the @ref{quorum} configuration.
 
-    @item @code{ready}:
+    @item @code{ready} (@code{300}):
     final run level.
     The site is fully connected and operational.
   @end enumerate
 
-  Unless the node is stopped abruptly
+  Unless the whole BEAM VM or the classy application is stopped abruptly
   (@code{erlang:halt}, @code{kill}, power loss),
-  run levels always advance and regress in sequence.
+  the run level is stepped in an increasing or decreasing arithmetic progression:
+  it always advances and regresses in sequence.
+  When @erlfn{ref,erlref,classy,start_system,0} is called for the first time,
+  the system starts at the @code{stopped} run level (@code{0})
+  and eventually progresses to the @code{ready} run level (@code{300}).
+  Effect of @erlfn{ref,erlref,classy,stop_system,0} is the opposite.
 
   Business applications can track the run level via @erlfn{link,erlref,classy,on_run_level,2} hook.
   This hook can, for example,
   activate or deactivate some business applications.
+
+  The boot sequence and @emph{barriers} that can pause the run level progression
+  are managed by the @erlmodref{ref,classy_boot} module.
 
   @node Network Partitions
   @section Network Partitions

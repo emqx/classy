@@ -6,17 +6,8 @@
 This module controls the boot sequence of business applications managed by classy.
 It is based on a concept of @emph{run levels} and @emph{barriers}.
 
-@emph{Run level} is an integer in range @code{?classy_rl_stopped .. ?classy_rl_ready}
-(where @code{classy_rl_stopped = 0} and @code{classy_rl_ready = 300}),
-corresponding to the ``readiness state'' of the system.
-Run levels 0..9 are reserved for classy,
-which leaves business applications with 290 usable run levels.
-
-Unless the whole BEAM VM or classy application is abruptly stopped,
-the run level is stepped in an increasing or decreasing arithmetic progression.
-When @erlfn{ref,erlref,classy,start_system,0} function is called for the first time,
-the system starts at stopped run level (0) and eventually progresses to the ready run level (300).
-Effect of @erlfn{ref,erlref,classy,stop_system,0} is the opposite.
+@emph{Run level} is an integer corresponding to the ``readiness state'' of the system.
+@xref{Run level}.
 
 @emph{Barriers} can be set to temporarily limit the progression of the run level.
 When a barrier is set at run level @code{N},
@@ -34,27 +25,6 @@ Initialization hooks can set up barriers that are removed asynchronously
 (when some subsystem becomes ready).
 This approach allows to avoid blocking calls that wait for the readiness condition,
 which can be problematic when the system has to stop or restart before fully ready.
-
-The run levels are split into several ranges:
-
-@enumerate
-  @item @b{stopped} @code{0..9}.
-  These are reserved for classy's own initialization logic.
-  Business applications must not use them.
-
-  @item @b{single} @code{?classy_rl_single..99} where @code{?classy_rl_single = 10}.
-  These run levels correspond to initialization of a singleton node.
-
-  @item @b{cluster} @code{?classy_rl_cluster..199} where @code{?classy_rl_cluster = 100}.
-  Boot sequence progresses to this stage when the number of known peers (up or down) is @code{>= @ref{n_sites}}.
-
-  @item @b{quorum} @code{?classy_rl_quorum..299} where @code{?classy_rl_quorum = 200}.
-  Boot sequence progresses to this stage when the number of known @emph{connected} peers is @code{>= @ref{quorum}}.
-
-  @item @b{ready} @code{?classy_rl_ready = 300}.
-  Final run level.
-  The system is fully operational.
-@end enumerate
 
 WARNING: classy @b{doesn't check} that the boot dependency graph is acyclic and that mapping to run levels is valid,
 leaving this responsibility to the system designer.
