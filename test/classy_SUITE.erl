@@ -1871,7 +1871,12 @@ t_412_commit_action_crash(_) ->
      [ fun classy_ct:no_unexpected_events/1
      , fun events_on_all_sites/1
      , {"coordinator history",
-        fun({[N1, _N2], _ID}, Trace) ->
+        fun({[N1, _N2], ID}, Trace) ->
+            %% Filter events:
+            L = [I || #{?snk_kind := Kind, id := ID1, ?snk_meta := #{node := Node}} = I <- Trace,
+                      ID =:= ID1,
+                      Node =:= N1,
+                      Kind =:= ?classy_vote_coord_stage orelse Kind =:= classy_test_post_vote orelse Kind =:= classy_test_vote_on_fail],
             ?assertMatch(
                [ #{from := 0, to := 0} %% Enter vote
                , #{from := 0, to := 10} %% Enter commit
@@ -1880,13 +1885,7 @@ t_412_commit_action_crash(_) ->
                , #{from := 10, to := 10} %% Re-enter commit
                , #{?snk_kind := classy_test_post_vote, ref := Ref1}
                ],
-               ?of_node(N1,
-                        ?of_kind(
-                           [ ?classy_vote_coord_stage
-                           , classy_test_post_vote
-                           , classy_test_vote_on_fail
-                           ],
-                           Trace)))
+               L)
         end}
      , {"participant history",
         fun({[_N1, N2], ID}, Trace0) ->

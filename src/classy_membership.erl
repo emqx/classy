@@ -742,7 +742,7 @@ local_command(C, #call_set{k = K, v = V}, S = #s{site = Local}) ->
   %% and in the latter case we can't lose,
   %% so merge result can be ignored:
   _ = merge(C, Op, S),
-  need_sync(S).
+  need_sync(0, S).
 
 -spec handle_sync_in(#cast_sync{}, #s{}) -> #s{}.
 handle_sync_in(Req, S0) ->
