@@ -36,7 +36,7 @@ Management of the local site and node.
         , start_link_post_join/6
         , post_join_child/6
         , on_ptab_update/2
-        , notify_mem_deltas/2
+        , notify_mem_deltas/3
         , lock_join_remote/1
         , unlock_join_remote/2
         ]).
@@ -81,6 +81,7 @@ Management of the local site and node.
 -record(cast_mem_deltas,
         { cluster :: classy:cluster_id()
         , data :: #{classy:site() => classy_membership:update()}
+        , local_replies :: classy_membership:local_setters()
         , reserved
         }).
 -record(call_lock_join,
@@ -497,14 +498,19 @@ on_ptab_update(_, Op) ->
   end.
 
 -doc false.
--spec notify_mem_deltas(classy:cluster_id(), #{classy:site() => classy_membership:update()}) -> ok.
-notify_mem_deltas(Cluster, Deltas) ->
+-spec notify_mem_deltas(
+        classy:cluster_id(),
+        [{gen_server:from(), classy_membership:clock()}],
+        #{classy:site() => classy_membership:update()}
+       ) -> ok.
+notify_mem_deltas(Cluster, WaitingLocalSetters, Deltas) ->
   case whereis(?SERVER) of
     undefined ->
       ok;
     Pid when is_pid(Pid) ->
-      Pid ! #cast_mem_deltas{ cluster = Cluster
-                            , data    = Deltas
+      Pid ! #cast_mem_deltas{ cluster       = Cluster
+                            , local_replies = WaitingLocalSetters
+                            , data          = Deltas
                             },
       ok
   end.
@@ -668,8 +674,9 @@ flush_mem_deltas() ->
   end.
 
 handle_membership_change_event(
-  #cast_mem_deltas{ cluster = Cluster
-                  , data = Deltas
+  #cast_mem_deltas{ cluster       = Cluster
+                  , data          = Deltas
+                  , local_replies = LocalSetters
                   },
   S0 = #s{cluster = ThisCluster, site = Local}
  ) ->
@@ -679,7 +686,7 @@ handle_membership_change_event(
        , data => Deltas
        }),
   if Cluster =:= ThisCluster ->
-      case apply_deltas_with_effects(Deltas, S0) of
+      case apply_deltas_with_effects(Deltas, LocalSetters, S0) of
         {ok, S}      -> {noreply, S};
         {error, Err} -> {stop, Err, undefined}
       end;
@@ -1151,8 +1158,12 @@ the_site() ->
       undefined
   end.
 
--spec apply_deltas_with_effects(#{classy:site() => classy_membership:update()}, #s{}) -> {ok, #s{}} | {error, _}.
-apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
+-spec apply_deltas_with_effects(
+        #{classy:site() => classy_membership:update()},
+        classy_membership:local_setters(),
+        #s{}
+       ) -> {ok, #s{}} | {error, _}.
+apply_deltas_with_effects(Deltas, LocalSetters, S0 = #s{cluster = Cluster, site = Local}) ->
   case n_restarts() of
     {ok, MyNR} ->
       ok;
@@ -1164,7 +1175,8 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
   end,
   [JoinedAt] = classy_table:lookup(?tab, ?joined_at),
   case Deltas of
-    #{Local := #{mem := false, clock := Clock, origin := Origin}} when is_integer(Clock), Clock > JoinedAt->
+    #{Local := #{mem := false, clock := Clock, origin := Origin}} when is_integer(Clock), Clock > JoinedAt ->
+      classy_membership:reply_local_setters(LocalSetters),
       %% We got kicked remotely. In this case we don't bother
       %% importing the data and running the hooks, and go straight to
       %% `on_leave'.
@@ -1180,16 +1192,18 @@ apply_deltas_with_effects(Deltas, S0 = #s{cluster = Cluster, site = Local}) ->
       %% invalidated by the kick:
       on_leave(S0, kicked);
     #{} ->
-      maybe
-        {ok, S} ?= import_deltas(true, Deltas, S0),
-        case Deltas of
-          #{Local := #{mem := true, liveness := {NR, false, false}}} when NR >= MyNR ->
-            on_remote_restart(S);
-          _ ->
-            %% Nothing happened:
-            {ok, S}
-        end
-      end
+      Result = maybe
+                 {ok, S} ?= import_deltas(true, Deltas, S0),
+                 case Deltas of
+                   #{Local := #{mem := true, liveness := {NR, false, false}}} when NR >= MyNR ->
+                     on_remote_restart(S);
+                   _ ->
+                     %% Nothing happened:
+                     {ok, S}
+                 end
+               end,
+      classy_membership:reply_local_setters(LocalSetters),
+      Result
   end.
 
 -spec on_remote_restart(#s{}) -> {ok, #s{}}.
