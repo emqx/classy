@@ -1872,6 +1872,13 @@ t_412_commit_action_crash(_) ->
      , fun events_on_all_sites/1
      , {"coordinator history",
         fun({[N1, _N2], _ID}, Trace) ->
+            L = ?of_node(N1,
+                        ?of_kind(
+                           [ ?classy_vote_coord_stage
+                           , classy_test_post_vote
+                           , classy_test_vote_on_fail
+                           ],
+                           Trace)),
             ?assertMatch(
                [ #{from := 0, to := 0} %% Enter vote
                , #{from := 0, to := 10} %% Enter commit
@@ -1880,13 +1887,7 @@ t_412_commit_action_crash(_) ->
                , #{from := 10, to := 10} %% Re-enter commit
                , #{?snk_kind := classy_test_post_vote, ref := Ref1}
                ],
-               ?of_node(N1,
-                        ?of_kind(
-                           [ ?classy_vote_coord_stage
-                           , classy_test_post_vote
-                           , classy_test_vote_on_fail
-                           ],
-                           Trace)))
+               [maps:remove('~meta', I) || I <- L])
         end}
      , {"participant history",
         fun({[_N1, N2], ID}, Trace0) ->
@@ -2219,6 +2220,43 @@ t_510_metadata_classify(_) ->
                 ?assertEqual([], ?ON(S2, classy:sites(foo))),
                 ?assertEqual([], ?ON(S2, classy:sites(bar)))
               end)
+     end,
+     [fun classy_ct:no_unexpected_events/1]).
+
+%% This testcase verifies setting cluster metadata during run level
+%% change. Properties checked:
+%% 1. There's no deadlock in `classy_node'
+%% 2. Site sets are updated immediately
+t_511_set_meta_on_run_level(_) ->
+  S1 = ~"s1",
+  ?check_trace(
+     #{timetrap => ?timetrap},
+     begin
+       %% Prepare:
+       N1 = create_start_site(S1, #{}),
+       OnRunLevel = fun(enter, 42) ->
+                        classy_site_metadata:c_set(foo, bar),
+                        %% Nodes sets are updated immediately:
+                        ?assertMatch([N1], classy:nodes(foobar));
+                       (_, _) ->
+                        ok
+                    end,
+       OnClassify = fun(#{foo := bar}) -> [foobar];
+                       (_)             -> []
+                    end,
+       ?ON(S1, classy:on_run_level(OnRunLevel, 0)),
+       ?ON(S1, classy:on_node_classify(OnClassify, 0)),
+       %% Cycle run level:
+       ?assertEqual(ok, ?ON(S1, classy_boot:set_barrier(test, 30, []))),
+       ?assertEqual(ok, ?ON(S1, classy_boot:rm_barrier(test))),
+       timer:sleep(1000),
+       %% The system should boot again:
+       ?assertEqual(
+          ?classy_rl_ready,
+          ?ON(S1, classy:run_level())),
+       ?assertMatch(
+          {ok, #{foo := bar}},
+          ?ON(S1, classy_site_metadata:c_get_all()))
      end,
      [fun classy_ct:no_unexpected_events/1]).
 
