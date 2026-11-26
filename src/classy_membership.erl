@@ -684,7 +684,8 @@ handle_info(Info, S) ->
   {noreply, S}.
 
 -doc false.
-terminate(Reason, #s{cluster = Cluster, site = Site}) ->
+terminate(Reason, #s{cluster = Cluster, site = Site, local_setters = LS}) ->
+  reply_local_setters(LS),
   classy_lib:is_normal_exit(Reason) orelse
     ?tp(warning, ?classy_abnormal_exit,
         #{ server => ?MODULE
