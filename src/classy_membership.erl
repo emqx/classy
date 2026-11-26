@@ -926,7 +926,7 @@ notify(#s{ cluster = Cluster
     0 -> ok;
     _ -> classy_node:notify_mem_deltas(Cluster, LocalSetters, Deltas)
   end,
-  S#s{events_since = C}.
+  S#s{events_since = C, local_setters = []}.
 
 -spec peer_to_update(classy:cluster_id(), classy:site(), classy:site()) -> update().
 peer_to_update(Cluster, Local, Site) ->
