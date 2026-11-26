@@ -36,13 +36,13 @@ Business code should not use it directly.
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% internal exports:
--export([open_migrate_table/0, start_link/2, cast_sync/3, call_sync/3, mem_data_fallback/3]).
+-export([open_migrate_table/0, start_link/2, cast_sync/3, call_sync/3, mem_data_fallback/3, reply_local_setters/1]).
 
 -ifdef(TEST).
 -export([reset_acked_out/4]).
 -endif.
 
--export_type([start_args/0, op/0, ord/0, clock/0, sync_data/0, pk_last/0, pv_last/0, update/0]).
+-export_type([start_args/0, op/0, ord/0, clock/0, sync_data/0, pk_last/0, pv_last/0, update/0, local_setters/0]).
 
 -include("classy_internal.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
@@ -128,11 +128,17 @@ Business code should not use it directly.
 %% Timeout message triggering syncing out state
 -record(to_sync_out, {}).
 
--record(call_set, {k :: key(), v :: term()}).
+-record(call_set,
+        { k :: key()
+        , v :: term()
+        , sync_effects = false :: boolean()
+        }).
 -record(call_cleanup, {forget_after :: pos_integer()}).
 -record(call_flush, {}).
 -record(call_get_data, {since :: clock(), acked :: clock()}).
 -record(call_wipe, {stop :: boolean()}).
+
+-type local_setters() :: [{gen_server:from(), clock()}].
 
 -record(s,
         { %% Cluster ID:
@@ -144,6 +150,8 @@ Business code should not use it directly.
         , clock :: clock()
           %% Logical clock of the last update sent to `classy_node' worker
         , events_since = 0
+          %% Synchronization for local set commands
+        , local_setters = [] :: local_setters()
         }).
 
 %% Persistent table keys:
@@ -224,7 +232,7 @@ set_info(Cluster, Local, Info) ->
   try
     gen_server:call(
       ?via(Cluster, Local),
-      #call_set{k = #info{s = Local}, v = Info},
+      #call_set{k = #info{s = Local}, v = Info, sync_effects = true},
       ?call_timeout)
   catch
     EC:Err -> {error, {EC, Err}}
@@ -517,6 +525,15 @@ mem_data_fallback(Local, Cluster, FallbackData) ->
                    }}
   end.
 
+-doc false.
+-spec reply_local_setters(local_setters()) -> ok.
+reply_local_setters(LS) ->
+  lists:foreach(
+    fun({From, Clock}) ->
+        gen_server:reply(From, {ok, Clock})
+    end,
+    LS).
+
 -doc "Get membership data".
 -spec get_data(classy:cluster_id(), classy:site(), clock(), clock()) -> {ok, sync_data()} | {error, _}.
 get_data(Cluster, Local, Since, Acked) ->
@@ -609,9 +626,14 @@ init(#{cluster := Cluster, site := Site}) when is_binary(Site), is_binary(Cluste
   {ok, need_sync(0, S)}.
 
 -doc false.
-handle_call(#call_set{} = CMD, _From, S0) ->
+handle_call(#call_set{sync_effects = Sync} = CMD, From, S0) ->
   {Clock, S} = local_command(CMD, S0),
-  {reply, {ok, Clock}, S};
+  case Sync of
+    true ->
+      {noreply, S#s{local_setters = [{From, Clock} | S#s.local_setters]}};
+    false ->
+      {reply, {ok, Clock}, S}
+  end;
 handle_call(#call_get_data{since = Since, acked = Acked}, _From, S) ->
   Reply = {ok, get_sync_data(Since, Acked, S)},
   {reply, Reply, S};
@@ -662,7 +684,8 @@ handle_info(Info, S) ->
   {noreply, S}.
 
 -doc false.
-terminate(Reason, #s{cluster = Cluster, site = Site}) ->
+terminate(Reason, #s{cluster = Cluster, site = Site, local_setters = LS}) ->
+  reply_local_setters(LS),
   classy_lib:is_normal_exit(Reason) orelse
     ?tp(warning, ?classy_abnormal_exit,
         #{ server => ?MODULE
@@ -718,7 +741,7 @@ local_command(Cmd, S0) ->
   {C, local_command(C, Cmd, S)}.
 
 -spec local_command(clock(), #call_set{}, #s{}) -> #s{}.
-local_command(C, #call_set{k = K, v = V}, S = #s{site = Local}) ->
+local_command(C, #call_set{k = K, v = V, sync_effects = Sync}, S = #s{site = Local}) ->
   ?tp(classy_local_command,
       #{ key => K
        , val => V
@@ -742,7 +765,10 @@ local_command(C, #call_set{k = K, v = V}, S = #s{site = Local}) ->
   %% and in the latter case we can't lose,
   %% so merge result can be ignored:
   _ = merge(C, Op, S),
-  need_sync(S).
+  case Sync of
+    true  -> need_sync(0, S);
+    false -> need_sync(S)
+  end.
 
 -spec handle_sync_in(#cast_sync{}, #s{}) -> #s{}.
 handle_sync_in(Req, S0) ->
@@ -873,7 +899,12 @@ merge(LTime, Op, S) ->
   end.
 
 %% Find updated sites and send actual state of the CRDT for these sites to `classy_node' server:
-notify(S = #s{cluster = Cluster, site = Local, clock = C, events_since = EventsSince}) ->
+notify(#s{ cluster = Cluster
+         , site = Local
+         , clock = C
+         , events_since = EventsSince
+         , local_setters = LocalSetters
+         } = S) ->
   %% Find out what changed:
   UpdatedEntries = memtab_since(EventsSince + 1, S),
   UpdatedSites = lists:foldl(
@@ -893,9 +924,9 @@ notify(S = #s{cluster = Cluster, site = Local, clock = C, events_since = EventsS
   Deltas = #{Peer => peer_to_update(Cluster, Local, Peer) || Peer := _ <- UpdatedSites},
   case maps:size(Deltas) of
     0 -> ok;
-    _ -> classy_node:notify_mem_deltas(Cluster, Deltas)
+    _ -> classy_node:notify_mem_deltas(Cluster, LocalSetters, Deltas)
   end,
-  S#s{events_since = C}.
+  S#s{events_since = C, local_setters = []}.
 
 -spec peer_to_update(classy:cluster_id(), classy:site(), classy:site()) -> update().
 peer_to_update(Cluster, Local, Site) ->
