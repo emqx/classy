@@ -63,6 +63,9 @@ classy:get_meta(Site) ->
 
 -doc """
 Update cluster metadata value associated with a key.
+
+WARNING: currently if this function causes node set update as an effect,
+it is not immediately visiable even on the local node.
 """.
 -spec c_set(_Key, _Value) -> ok | {error, _}.
 c_set(Key, Val) ->
